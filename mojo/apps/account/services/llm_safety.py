@@ -4,6 +4,7 @@ import hashlib
 import json
 import re
 import secrets
+import threading
 import time
 
 from django.db import models, transaction
@@ -22,6 +23,12 @@ BEDROCK_MODELS = frozenset(
 AWS_REGION_PATTERN = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-[1-9][0-9]*$")
 REASONING_EFFORTS = frozenset({"off", "low", "medium"})
 BEDROCK_CREDENTIAL_IDENTITY = "installation-aws-chain"
+BEDROCK_CAPABILITIES = ({"text"}, {"text", "tools"}, {"text", "images"},
+                        {"text", "tools", "images"})
+# A Bedrock tool loop may answer this many tool rounds unless the caller
+# passes its own max_tool_rounds (1-32).
+BEDROCK_MAX_TOOL_ROUNDS = 8
+MAX_TOOL_ROUNDS = 32
 BEDROCK_HEALTH_FAILURES = frozenset({
     "provider_authentication", "provider_rate_limited", "provider_timeout",
     "provider_unavailable",
@@ -35,6 +42,9 @@ BREAKER_KEYS = frozenset({
     "auth_failures", "rate_failures", "server_failures", "open_seconds",
 })
 WINDOWS = (("minute", 60), ("hour", 3600), ("day", 86400))
+COUNT_TIMEOUT_SECONDS = 3
+ESTIMATE_MARGIN_PERCENT = 10  # integer math: a float 1.10 rounds 50 x 1.10 up to 56
+ESTIMATE_PAD_TOKENS = 64
 EXPECTED_POLICY_HASH_KEY = "LLM_SAFETY_POLICY_EXPECTED_HASH"
 AUTONOMOUS_TRIAGE_KEY = "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED"
 AUTONOMOUS_TRIAGE_WATERMARK_KEY = "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT"
@@ -48,7 +58,10 @@ SAFE_CODES = frozenset({
     "provider_authentication", "provider_billing_exhausted", "provider_failed",
     "provider_rate_limited", "provider_rejected", "provider_timeout",
     "provider_unavailable", "provider_unsupported", "route_missing",
-    "safety_unavailable", "triage_incomplete",
+    "safety_unavailable", "triage_incomplete", "credential_mismatch",
+    "catalogue_unavailable", "catalogue_incomplete", "no_compatible_model",
+    "refresh_in_progress", "refresh_throttled", "request_exceeds_budget",
+    "cancelled",
 })
 
 
@@ -96,7 +109,8 @@ def _record_burn(provider, feature, reserved_tokens, shared, limits):
 def _signal(provider, feature, code):
     if code not in {
             "breaker_open", "breaker_half_open", "budget_exhausted",
-            "concurrency_exhausted", "policy_mixed", "permit_unavailable"}:
+            "concurrency_exhausted", "policy_mixed", "permit_unavailable",
+            "request_exceeds_budget"}:
         return
     try:
         from mojo.apps.incident import report_event_suppressed
@@ -175,6 +189,10 @@ def parse_policy(raw=None):
             _deny("provider_unsupported")
         if not isinstance(route["model"], str) or not route["model"].strip():
             _deny("policy_invalid")
+        if route["model"].startswith("auto:") and not (
+                route["model"] == "auto:sonnet" and feature == "assistant"
+                and provider == "anthropic"):
+            _deny("policy_invalid")
         capabilities = route["capabilities"]
         if not isinstance(capabilities, list) or not capabilities \
                 or any(not isinstance(item, str) for item in capabilities) \
@@ -185,7 +203,7 @@ def parse_policy(raw=None):
         if provider == "bedrock":
             efforts = route["reasoning_efforts"]
             if route["credential"] != "aws" \
-                    or set(capabilities) not in ({"text"}, {"text", "images"}) \
+                    or set(capabilities) not in BEDROCK_CAPABILITIES \
                     or route["model"] not in BEDROCK_MODELS \
                     or not isinstance(route["region"], str) \
                     or not AWS_REGION_PATTERN.fullmatch(route["region"]) \
@@ -287,33 +305,136 @@ def autonomous_triage_state():
         return False, None
 
 
-def route_state(feature):
-    """Safe effective route/readiness data without credential material."""
+def delegates_model(route):
+    return route.get("provider") == "anthropic" and route.get("model") == "auto:sonnet"
+
+
+def assistant_pin():
+    """Authoritative primary pin read; malformed/duplicate active controls deny."""
+    from mojo.apps.account.models import Setting
+    rows = list(Setting.objects.using("default").filter(
+        key="LLM_ADMIN_MODEL", group=None).order_by("pk")[:2])
+    if len(rows) > 1:
+        _deny("control_state_unknown")
+    stored = rows[0].get_value() if rows else None
+    deployed = settings.get_static("LLM_ADMIN_MODEL", None)
+    for value, source in ((stored, "admin"), (deployed, "deployment")):
+        if value in (None, ""):
+            continue
+        from mojo.helpers.llm_catalogue import model_id
+        if not model_id(value) or value.startswith("auto:"):
+            _deny("control_state_unknown")
+        return value, source
+    return "", "automatic"
+
+
+def model_selection_state(policy=None, *, refresh=False, credential=None, redis=None,
+                          loader=None):
+    """Passive by default. This is the same selector the invocation snapshots."""
+    from mojo.helpers import llm
+    from mojo.helpers.llm_catalogue import select_sonnet
+    result = {
+        "selected": "", "effective": "", "source": "policy", "choices": [],
+        "mode": "fixed", "editable": False, "policy_model": "",
+        "restriction": "policy_unavailable",
+        "discovery": {"status": "not_applicable", "fetched_at": None,
+                      "attempted_at": None, "expires_at": None,
+                      "max_stale_at": None, "error_code": ""},
+        "refresh": {"attempted": False, "ok": None, "code": ""},
+    }
+    # Preserve the legacy echo even when policy is temporarily unavailable.
+    # This value has no runtime authority on any nondelegating route.
+    try:
+        from mojo.apps.account.services.assistant_setup import _stored_value
+        legacy = _stored_value("LLM_ADMIN_MODEL")
+        if not isinstance(legacy, str) or not legacy.strip():
+            legacy = settings.get_static("LLM_ADMIN_MODEL", None)
+        result["selected"] = legacy.strip() if isinstance(legacy, str) else ""
+    except Exception:
+        pass
+    try:
+        policy = policy or parse_policy()
+        route = policy["routes"].get("assistant")
+        if route is None:
+            _deny("route_missing")
+        result.update(policy_model=route["model"], effective=route["model"],
+                      restriction="fixed_policy" if route["provider"] == "anthropic"
+                      else "provider_unsupported")
+        if delegates_model(route):
+            result.update(selected="", effective="", editable=True, mode="auto",
+                          source="automatic", restriction="")
+            pin, source = assistant_pin()
+            if pin:
+                result.update(selected=pin, effective=pin, mode="pinned", source=source,
+                              restriction="deployment_pin"
+                              if settings.get_static("LLM_ADMIN_MODEL", None) else "")
+            else:
+                catalogue = llm.catalogue_state(
+                    policy=policy, credential=credential or _credential(route),
+                    redis=redis, refresh=refresh, force=False, loader=loader)
+                result.update(discovery=catalogue["discovery"], refresh=catalogue["refresh"])
+                result["effective"] = select_sonnet(
+                    catalogue["models"], min(policy["shared"]["max_output_tokens"],
+                        policy["features"]["assistant"]["max_output_tokens"]),
+                    images="images" in route["capabilities"])
+                if not result["effective"] and not result["discovery"]["error_code"]:
+                    result["discovery"]["error_code"] = (
+                        "no_compatible_model" if result["discovery"]["status"] in {"fresh", "stale"}
+                        else "catalogue_unavailable")
+                result["choices"] = [{"id": row["id"],
+                                      "label": row["display_name"] or row["id"]}
+                                     for row in catalogue["models"][:40]]
+        return result
+    except LLMSafetyError as error:
+        result["discovery"]["error_code"] = error.code
+        if result["editable"]:
+            result["discovery"]["status"] = "unavailable"
+        return result
+    except Exception:
+        result["effective"] = "" if result["editable"] else result["effective"]
+        result["discovery"]["error_code"] = "control_state_unknown"
+        if result["editable"]:
+            result["discovery"]["status"] = "unavailable"
+        return result
+
+
+def route_state(feature, selection=None):
+    """Passive resolved readiness and admission to the guarded invocation path.
+
+    An automatic route can admit a turn while its catalogue is cold/expired.
+    Only the invocation guard may refresh and prove a usable runtime model.
+    """
+    result = {"feature": feature, "provider": "", "model": "", "credential": "",
+              "credential_configured": False, "ready": False, "can_invoke": False,
+              "error": ""}
     try:
         policy = parse_policy()
         route = policy["routes"].get(feature)
         if route is None:
             _deny("route_missing")
+        effective = route["model"]
+        if feature == "assistant":
+            selection = selection or model_selection_state(policy)
+            effective = selection["effective"]
+        result.update(provider=route["provider"], model=effective,
+                      credential=route["credential"])
         _policy_agreement(policy)
-        configured = bool(_credential(route))
-        stopped = emergency_stopped()
-        return {
-            "feature": feature, "provider": route["provider"],
-            "model": route["model"], "credential": route["credential"],
-            "credential_configured": configured, "ready": configured and not stopped,
-            "error": "emergency_stopped" if stopped else "",
-        }
+        result["credential_configured"] = bool(_credential(route))
+        if emergency_stopped():
+            _deny("emergency_stopped")
+        # Invocation admission deliberately precedes resolved-model readiness:
+        # a cold automatic route must reach _execute to populate its catalogue.
+        # No discovery, permit or provider request happens on this passive read.
+        result["can_invoke"] = result["credential_configured"]
+        if not effective:
+            code = (selection or {}).get("discovery", {}).get("error_code")
+            _deny(code or "catalogue_unavailable")
+        result["ready"] = result["credential_configured"]
     except LLMSafetyError as err:
-        return {
-            "feature": feature, "provider": "", "model": "", "credential": "",
-            "credential_configured": False, "ready": False, "error": err.code,
-        }
+        result["error"] = err.code
     except Exception:
-        return {
-            "feature": feature, "provider": "", "model": "", "credential": "",
-            "credential_configured": False, "ready": False,
-            "error": "safety_unavailable",
-        }
+        result["error"] = "safety_unavailable"
+    return result
 
 
 def _credential(route):
@@ -339,7 +460,7 @@ for i=3,#KEYS do
   local current = tonumber(redis.call('GET', KEYS[i]) or '0')
   local offset = 6 + ((i - 3) * 3)
   if current + tonumber(ARGV[offset]) > tonumber(ARGV[offset + 1]) then
-    return {0, 'budget'}
+    return {0, 'budget', i}
   end
 end
 redis.call('ZADD', KEYS[1], tonumber(ARGV[3]), ARGV[1])
@@ -364,6 +485,14 @@ if excess > 0 then
     if string.find(KEYS[i], ':tokens:') then
       local current = tonumber(redis.call('GET', KEYS[i]) or '0')
       redis.call('SET', KEYS[i], math.max(0, current - excess), 'KEEPTTL')
+    end
+  end
+elseif excess < 0 then
+  -- Usage above the reservation is charged to the windows still live; an
+  -- expired window is never recreated without a TTL.
+  for i=3,#KEYS do
+    if string.find(KEYS[i], ':tokens:') and redis.call('EXISTS', KEYS[i]) == 1 then
+      redis.call('INCRBY', KEYS[i], -excess)
     end
   end
 end
@@ -392,6 +521,10 @@ def _permit_keys(provider, fingerprint, feature, now):
 def acquire_permit(redis, provider, fingerprint, feature, shared, limits,
                    reserved_tokens, owner=None, now=None):
     now = int(now or time.time())
+    if reserved_tokens > min(shared["tokens_minute"], limits["tokens_minute"]):
+        # It can never fit, whatever the windows hold: refuse permanently,
+        # before any lease or budget key is written.
+        _deny("request_exceeds_budget")
     owner = owner or secrets.token_hex(16)
     timeout = min(shared["timeout_seconds"], limits["timeout_seconds"])
     keys = _permit_keys(provider, fingerprint, feature, now)
@@ -409,8 +542,24 @@ def acquire_permit(redis, provider, fingerprint, feature, shared, limits,
         _deny("permit_unavailable")
     code = result[1].decode("utf-8") if isinstance(result[1], bytes) else result[1]
     if int(result[0]) != 1:
-        _deny("budget_exhausted" if code == "budget" else "concurrency_exhausted")
+        if code != "budget":
+            _deny("concurrency_exhausted")
+        _deny("budget_exhausted", retry_after=_retry_after(result, now))
     return {"keys": keys, "owner": owner, "reserved_tokens": reserved_tokens}
+
+
+def _retry_after(result, now):
+    """Seconds until the first refusing window rolls over, or None."""
+    try:
+        index = int(result[2])
+    except (IndexError, TypeError, ValueError):
+        return None
+    if index < 3:
+        return None
+    # Key order is _permit_keys': two leases, then per scope and kind the
+    # minute, hour and day windows.
+    ttl = WINDOWS[(index - 3) % len(WINDOWS)][1]
+    return ttl - (now % ttl)
 
 
 def release_permit(redis, permit, actual_tokens=0):
@@ -532,6 +681,57 @@ def _contains_image(value):
     return False
 
 
+def _input_estimate(adapter, provider_name, messages, system, tools,
+                    resolved_model, serialized):
+    """Return (reserved_input, estimated_input, source) for one call.
+
+    Anthropic text and tool calls reserve the provider's own count plus a
+    margin, never more than the byte length. Everything else, and any count
+    that fails, reserves the byte length exactly as before.
+    """
+    fallback = (len(serialized), 0, "bytes")
+    if provider_name != "anthropic" or _contains_image(messages):
+        return fallback
+    try:
+        count = adapter.count_input_tokens(
+            messages, resolved_model, system=system, tools=tools,
+            timeout=COUNT_TIMEOUT_SECONDS)
+    except Exception:
+        return fallback
+    if isinstance(count, bool) or not isinstance(count, int) or count <= 0:
+        return fallback
+    margin = -(-count * (100 + ESTIMATE_MARGIN_PERCENT) // 100) + ESTIMATE_PAD_TOKENS
+    return min(len(serialized), margin), count, "count"
+
+
+def _tool_blocks(message):
+    """The tool_use/tool_result block types one message carries."""
+    content = message.get("content") if isinstance(message, dict) else None
+    if not isinstance(content, list):
+        return set()
+    return {block.get("type") for block in content if isinstance(block, dict)
+            and block.get("type") in ("tool_use", "tool_result")}
+
+
+def _tool_rounds(messages):
+    """Completed tool rounds: user turns that answer a tool request."""
+    if not isinstance(messages, list):
+        return 0
+    return sum(1 for message in messages if isinstance(message, dict)
+               and message.get("role") == "user"
+               and "tool_result" in _tool_blocks(message))
+
+
+def _tool_round_limit(provider_name, max_tool_rounds):
+    """Bedrock always has a limit; Anthropic only when the caller sets one."""
+    if max_tool_rounds is None:
+        return BEDROCK_MAX_TOOL_ROUNDS if provider_name == "bedrock" else None
+    if isinstance(max_tool_rounds, bool) or not isinstance(max_tool_rounds, int) \
+            or not 1 <= max_tool_rounds <= MAX_TOOL_ROUNDS:
+        _deny("loop_limit")
+    return max_tool_rounds
+
+
 def _required_capabilities(messages, tools, cache_enabled):
     required = {"text"}
     if tools:
@@ -552,12 +752,17 @@ def _candidate_envelopes(policy):
     return shared, limits
 
 
-def _execute(messages, system, tools, model, max_tokens, feature, operation,
-             context, reasoning_effort="off", provider_factory=None, redis=None,
-             policy_raw=None):
+def _admit(messages, system, tools, model, max_tokens, feature, operation,
+           context, reasoning_effort="off", provider_factory=None, redis=None,
+           policy_raw=None, stream=False, max_tool_rounds=None):
+    """Every pre-dispatch guard, the permit and the started ledger, in order.
+
+    Returns the admission a dispatch settles. Nothing here touches an SDK
+    client or the network beyond Anthropic's free input count.
+    """
     from mojo.apps.account.models import LLMRequest
     from mojo.helpers.llm_providers import get_provider
-    from mojo.helpers.llm_providers.base import ProviderError, validated_usage
+    from mojo.helpers.llm_providers.base import ProviderError
 
     policy = parse_policy(policy_raw)
     route = policy["routes"].get(feature)
@@ -569,7 +774,7 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         _policy_agreement(policy)
         if emergency_stopped():
             _deny("emergency_stopped")
-        if model is not None and model != route["model"]:
+        if not delegates_model(route) and model is not None and model != route["model"]:
             _deny("model_mismatch")
         if not isinstance(reasoning_effort, str) \
                 or reasoning_effort not in REASONING_EFFORTS \
@@ -623,14 +828,63 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         if not required.issubset(set(route["capabilities"])) \
                 or any(not adapter.supports(item) for item in required):
             _deny("capability_unsupported")
+        if stream and not adapter.supports("stream"):
+            _deny("capability_unsupported")
+        # Converse refuses tool turns without a tool configuration; refuse
+        # them here, before any reservation, instead of after dispatch.
+        if provider_name == "bedrock" and not tools and isinstance(messages, list) \
+                and any(_tool_blocks(message) for message in messages):
+            _deny("capability_unsupported")
+        round_limit = _tool_round_limit(provider_name, max_tool_rounds)
+        if round_limit is not None and _tool_rounds(messages) > round_limit:
+            _deny("loop_limit")
+        # A transcript can be trimmed; the operation counter cannot. A Bedrock
+        # tool loop must share one operation id so max_loop_calls binds it.
+        if provider_name == "bedrock" and tools and not context.get("operation_id"):
+            _deny("operation_invalid")
+        # Refuse a malformed request before it reserves anything or touches
+        # the circuit; only the Bedrock adapter offers this check.
+        check_request = getattr(adapter, "check_request", None)
+        if provider_name == "bedrock" and check_request is not None:
+            try:
+                check_request(
+                    messages=messages, model=route["model"], max_tokens=max_tokens,
+                    system=system, tools=tools, reasoning_effort=reasoning_effort,
+                    timeout=min(policy["shared"]["timeout_seconds"],
+                                limits["timeout_seconds"]))
+            except ProviderError:
+                _deny("provider_rejected")
         redis = redis or get_connection()
+        resolved_model = route["model"]
+        if delegates_model(route):
+            selection = model_selection_state(
+                policy, refresh=True, credential=credential, redis=redis,
+                loader=lambda: discover_models(
+                    expected_policy_hash=policy["hash"],
+                    expected_fingerprint=fingerprint,
+                    provider_factory=factory, redis=redis, policy_raw=policy_raw))
+            resolved_model = selection["effective"]
+            if not resolved_model:
+                _deny(selection["discovery"]["error_code"] or "catalogue_unavailable")
+            # Discovery may span several requests; prove current controls again
+            # before the actual inference permit and durable message ledger.
+            _policy_agreement(policy)
+            if emergency_stopped():
+                _deny("emergency_stopped")
+            if _credential(route) != credential:
+                _deny("credential_mismatch")
+        if model is not None and model != resolved_model:
+            _deny("model_mismatch")
         operation_id = context.get("operation_id") or secrets.token_hex(16)
         _count_operation(
             redis, provider_name, fingerprint, feature, operation_id,
             policy["shared"], limits)
         generation, breaker_owner = _breaker_lease(
             provider_name, fingerprint, policy)
-        reserved_tokens = len(serialized) + max_tokens
+        reserved_input, estimated_input, estimate_source = _input_estimate(
+            adapter, provider_name, messages, system, tools, resolved_model,
+            serialized)
+        reserved_tokens = reserved_input + max_tokens
         if image_count:
             from mojo.helpers.llm_images import IMAGE_RESERVED_TOKENS
             reserved_tokens += image_count * IMAGE_RESERVED_TOKENS
@@ -646,97 +900,148 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
     try:
         ledger = LLMRequest.objects.create(
             feature=feature, operation=str(operation)[:64], provider=provider_name,
-            model=route["model"], credential_fingerprint=fingerprint,
+            model=resolved_model, credential_fingerprint=fingerprint,
             policy_hash=policy["hash"], reserved_tokens=reserved_tokens,
+            estimated_input_tokens=estimated_input, estimate_source=estimate_source,
             **scalar_context)
     except Exception:
         release_permit(redis, permit)
         _blocked(provider_name, feature, "ledger_unavailable")
+    call_kwargs = dict(
+        messages=messages, system=system, tools=tools, model=resolved_model,
+        max_tokens=max_tokens, cache_enabled=cache_enabled,
+        timeout=min(policy["shared"]["timeout_seconds"], limits["timeout_seconds"]))
+    if provider_name == "bedrock":
+        call_kwargs["reasoning_effort"] = reasoning_effort
+    return {
+        "policy": policy, "feature": feature, "provider": provider_name,
+        "fingerprint": fingerprint, "adapter": adapter, "redis": redis,
+        "resolved_model": resolved_model, "generation": generation,
+        "breaker_owner": breaker_owner, "reserved_tokens": reserved_tokens,
+        "permit": permit, "ledger": ledger, "started": started,
+        "call_kwargs": call_kwargs,
+    }
+
+
+def _elapsed_ms(admission):
+    return int((time.monotonic() - admission["started"]) * 1000)
+
+
+def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None,
+                    breaker="health"):
+    """Settle a dispatched Bedrock failure, then raise its safe code.
+
+    Validated usage reconciles the reservation; unknown spend keeps all of it.
+    Only provider health failures count toward the circuit. ``breaker`` is
+    "success" or "skip" when the failure says nothing about AWS's health.
+    """
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_providers.base import validated_usage
+
+    provider_name = admission["provider"]
+    if not isinstance(code, str) or code not in SAFE_CODES \
+            or not code.startswith("provider_"):
+        code = "provider_failed"
+    failed_usage = validated_usage(usage)
+    actual_tokens = sum(failed_usage.values()) if failed_usage is not None \
+        else admission["reserved_tokens"]
+    fields = dict(
+        status="failed", error_code=code,
+        provider_request_id=str(request_id or "")[:128],
+        duration_ms=_elapsed_ms(admission), finished_at=timezone.now())
+    if failed_usage is not None:
+        fields.update(failed_usage)
     try:
-        call_kwargs = dict(
-            messages=messages, system=system, tools=tools, model=route["model"],
-            max_tokens=max_tokens, cache_enabled=cache_enabled,
-            timeout=min(policy["shared"]["timeout_seconds"], limits["timeout_seconds"]))
-        if provider_name == "bedrock":
-            call_kwargs["reasoning_effort"] = reasoning_effort
-        response = adapter.call(**call_kwargs)
-        if provider_name == "bedrock" and (
-                not isinstance(response, dict) or
-                validated_usage(response.get("usage")) is None):
-            raise ProviderError("provider_rejected")
-    except ProviderError as err:
-        elapsed = int((time.monotonic() - started) * 1000)
-        if provider_name == "bedrock":
-            code = err.code
-            if not isinstance(code, str) or code not in SAFE_CODES \
-                    or not code.startswith("provider_"):
-                code = "provider_failed"
-            failed_usage = validated_usage(getattr(err, "usage", None))
-            actual_tokens = sum(failed_usage.values()) if failed_usage is not None \
-                else reserved_tokens
-            fields = dict(
-                status="failed", error_code=code,
-                provider_request_id=str(err.request_id or "")[:128], duration_ms=elapsed,
-                finished_at=timezone.now())
-            if failed_usage is not None:
-                fields.update(failed_usage)
-            try:
-                if code in BEDROCK_HEALTH_FAILURES:
-                    _breaker_failure(
-                        provider_name, fingerprint, generation, breaker_owner, code, policy)
-                else:
-                    _breaker_success(provider_name, fingerprint, generation, breaker_owner)
-                LLMRequest.objects.filter(pk=ledger.pk).update(**fields)
-            except Exception:
-                _deny("provider_failed")
-            finally:
-                release_permit(redis, permit, actual_tokens=actual_tokens)
-            _record_metrics(provider_name, feature, "failed",
-                            sum(failed_usage.values()) if failed_usage is not None else 0)
-            _deny(code, retry_after=getattr(err, "retry_after", None))
-        _breaker_failure(
-            provider_name, fingerprint, generation, breaker_owner, err.code, policy)
-        LLMRequest.objects.filter(pk=ledger.pk).update(
-            status="failed", error_code=err.code,
-            provider_request_id=err.request_id[:128], duration_ms=elapsed,
-            finished_at=timezone.now())
-        release_permit(redis, permit)
-        _record_metrics(provider_name, feature, "failed")
-        _deny(err.code, retry_after=getattr(err, "retry_after", None))
-    except Exception:
-        if provider_name == "bedrock":
-            try:
-                LLMRequest.objects.filter(pk=ledger.pk).update(
-                    status="failed", error_code="provider_failed", finished_at=timezone.now())
-                _breaker_success(provider_name, fingerprint, generation, breaker_owner)
-            except Exception:
-                _deny("provider_failed")
-            finally:
-                release_permit(redis, permit, actual_tokens=reserved_tokens)
-        else:
-            LLMRequest.objects.filter(pk=ledger.pk).update(
-                status="failed", error_code="provider_failed", finished_at=timezone.now())
-            release_permit(redis, permit)
+        if breaker == "health" and code in BEDROCK_HEALTH_FAILURES:
             _breaker_failure(
-                provider_name, fingerprint, generation, breaker_owner,
-                "provider_failed", policy)
-        _record_metrics(provider_name, feature, "failed")
+                provider_name, admission["fingerprint"], admission["generation"],
+                admission["breaker_owner"], code, admission["policy"])
+        elif breaker != "skip":
+            _breaker_success(provider_name, admission["fingerprint"],
+                             admission["generation"], admission["breaker_owner"])
+        LLMRequest.objects.filter(pk=admission["ledger"].pk).update(**fields)
+    except Exception:
         _deny("provider_failed")
+    finally:
+        release_permit(admission["redis"], admission["permit"], actual_tokens=actual_tokens)
+    _record_metrics(provider_name, admission["feature"], "failed",
+                    sum(failed_usage.values()) if failed_usage is not None else 0)
+    _deny(code, retry_after=retry_after)
+
+
+def _bedrock_unexpected(admission):
+    """An unclassified post-dispatch failure: unknown spend, not a health signal."""
+    from mojo.apps.account.models import LLMRequest
+
+    try:
+        LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
+            status="failed", error_code="provider_failed", finished_at=timezone.now())
+        _breaker_success(admission["provider"], admission["fingerprint"],
+                         admission["generation"], admission["breaker_owner"])
+    except Exception:
+        _deny("provider_failed")
+    finally:
+        release_permit(admission["redis"], admission["permit"],
+                       actual_tokens=admission["reserved_tokens"])
+    _record_metrics(admission["provider"], admission["feature"], "failed")
+    _deny("provider_failed")
+
+
+def _bedrock_cancelled(admission, usage=None, request_id="", healthy=False):
+    """The caller stopped a dispatched stream. Never raises.
+
+    Only a stream that already delivered provider events releases the
+    circuit as healthy; a cancel cannot hide a provider that accepts and then
+    hangs. Spend seen in the final metadata reconciles; otherwise the
+    reservation stays.
+    """
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_providers.base import validated_usage
+
+    seen = validated_usage(usage)
+    actual_tokens = sum(seen.values()) if seen is not None else admission["reserved_tokens"]
+    fields = dict(
+        status="failed", error_code="cancelled",
+        provider_request_id=str(request_id or "")[:128],
+        duration_ms=_elapsed_ms(admission), finished_at=timezone.now())
+    if seen is not None:
+        fields.update(seen)
+    try:
+        if healthy:
+            _breaker_success(admission["provider"], admission["fingerprint"],
+                             admission["generation"], admission["breaker_owner"])
+        LLMRequest.objects.filter(pk=admission["ledger"].pk, status="started").update(
+            **fields)
+    except Exception:
+        pass
+    finally:
+        release_permit(admission["redis"], admission["permit"], actual_tokens=actual_tokens)
+    _record_metrics(admission["provider"], admission["feature"], "cancelled",
+                    sum(seen.values()) if seen is not None else 0)
+
+
+def _settle_success(admission, response):
+    """Reconcile actual usage, close the circuit lease, finish the ledger."""
+    from mojo.apps.account.models import LLMRequest
+
+    provider_name = admission["provider"]
     usage = response.get("usage") or {}
     actual_tokens = sum(max(0, int(usage.get(key, 0) or 0)) for key in (
         "input_tokens", "output_tokens", "cache_read_input_tokens",
         "cache_creation_input_tokens"))
-    release_permit(redis, permit, actual_tokens=actual_tokens)
+    release_permit(admission["redis"], admission["permit"], actual_tokens=actual_tokens)
     try:
-        _breaker_success(provider_name, fingerprint, generation, breaker_owner)
+        _breaker_success(provider_name, admission["fingerprint"],
+                         admission["generation"], admission["breaker_owner"])
     except Exception:
         if provider_name == "bedrock":
             _deny("provider_failed")
         raise
-    elapsed = int((time.monotonic() - started) * 1000)
     try:
-        updated = LLMRequest.objects.filter(pk=ledger.pk, status="started").update(
-            status="succeeded", finished_at=timezone.now(), duration_ms=elapsed,
+        updated = LLMRequest.objects.filter(
+                pk=admission["ledger"].pk, status="started").update(
+            status="succeeded", finished_at=timezone.now(),
+            duration_ms=_elapsed_ms(admission),
             provider_request_id=str(response.get("id") or "")[:128],
             input_tokens=max(0, int(usage.get("input_tokens", 0) or 0)),
             output_tokens=max(0, int(usage.get("output_tokens", 0) or 0)),
@@ -748,29 +1053,246 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             _deny("provider_failed")
         raise
     if updated != 1:
-        _blocked(provider_name, feature, "provider_failed" if provider_name == "bedrock"
+        _blocked(provider_name, admission["feature"],
+                 "provider_failed" if provider_name == "bedrock"
                  else "ledger_persistence_unknown")
-    _record_metrics(provider_name, feature, "succeeded", actual_tokens)
+    _record_metrics(provider_name, admission["feature"], "succeeded", actual_tokens)
+    response["model"] = admission["resolved_model"]
     return response
 
 
+def _execute(messages, system, tools, model, max_tokens, feature, operation,
+             context, reasoning_effort="off", provider_factory=None, redis=None,
+             policy_raw=None, max_tool_rounds=None):
+    from mojo.apps.account.models import LLMRequest
+    from mojo.helpers.llm_providers.base import ProviderError, validated_usage
+
+    admission = _admit(
+        messages, system, tools, model, max_tokens, feature, operation, context,
+        reasoning_effort=reasoning_effort, provider_factory=provider_factory,
+        redis=redis, policy_raw=policy_raw, max_tool_rounds=max_tool_rounds)
+    provider_name = admission["provider"]
+    try:
+        response = admission["adapter"].call(**admission["call_kwargs"])
+        if provider_name == "bedrock" and (
+                not isinstance(response, dict) or
+                validated_usage(response.get("usage")) is None):
+            raise ProviderError("provider_rejected")
+    except ProviderError as err:
+        if provider_name == "bedrock":
+            _bedrock_failed(admission, err.code, err.request_id,
+                            getattr(err, "usage", None),
+                            getattr(err, "retry_after", None))
+        _breaker_failure(
+            provider_name, admission["fingerprint"], admission["generation"],
+            admission["breaker_owner"], err.code, admission["policy"])
+        LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
+            status="failed", error_code=err.code,
+            provider_request_id=err.request_id[:128],
+            duration_ms=_elapsed_ms(admission), finished_at=timezone.now())
+        release_permit(admission["redis"], admission["permit"])
+        _record_metrics(provider_name, feature, "failed")
+        _deny(err.code, retry_after=getattr(err, "retry_after", None))
+    except Exception:
+        if provider_name == "bedrock":
+            _bedrock_unexpected(admission)
+        LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
+            status="failed", error_code="provider_failed", finished_at=timezone.now())
+        release_permit(admission["redis"], admission["permit"])
+        _breaker_failure(
+            provider_name, admission["fingerprint"], admission["generation"],
+            admission["breaker_owner"], "provider_failed", admission["policy"])
+        _record_metrics(provider_name, feature, "failed")
+        _deny("provider_failed")
+    return _settle_success(admission, response)
+
+
+def _in_event_loop():
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
+class GuardedStream:
+    """A dispatched provider stream that settles its admission exactly once.
+
+    Settlement happens on the final event (actual usage), on a provider
+    failure, or on cancel. The reading thread does the settling. close()
+    from another thread only flags the cancel and interrupts the blocked
+    read, so it never waits on the socket and never touches the database;
+    close() with no read in progress settles the cancel itself.
+    """
+
+    def __init__(self, admission, provider_stream):
+        self._admission = admission
+        self._stream = provider_stream
+        self._lock = threading.Lock()
+        self._settled = False
+        self._cancelled = False
+        self._reading = False
+        self.response = None
+
+    def __iter__(self):
+        return self
+
+    def _claim(self):
+        with self._lock:
+            if self._settled:
+                return False
+            self._settled = True
+            return True
+
+    def _settle_cancel(self):
+        if not self._claim():
+            return
+        try:
+            self._stream.close()
+        except Exception:
+            pass
+        _bedrock_cancelled(self._admission, getattr(self._stream, "usage", None),
+                           getattr(self._stream, "request_id", ""),
+                           healthy=bool(getattr(self._stream, "events_seen", 0)))
+
+    def __next__(self):
+        from mojo.helpers.llm_providers.base import ProviderError, validated_usage
+
+        with self._lock:
+            if self._settled:
+                raise StopIteration
+            self._reading = not self._cancelled
+        if self._cancelled:
+            self._settle_cancel()
+            raise StopIteration
+        error = None
+        try:
+            event = next(self._stream)
+        except Exception as err:
+            event, error = None, err
+        with self._lock:
+            self._reading = False
+        if self._cancelled:
+            self._settle_cancel()
+            raise StopIteration
+        if error is None and (not isinstance(event, dict) or event.get("type") != "final"):
+            return event
+        if not self._claim():
+            raise StopIteration
+        request_id = getattr(self._stream, "request_id", "")
+        if isinstance(error, StopIteration):
+            # A provider stream ends only through its final event.
+            _bedrock_failed(self._admission, "provider_rejected", request_id,
+                            getattr(self._stream, "usage", None))
+        if isinstance(error, ProviderError):
+            breaker = "health"
+            if getattr(error, "caller_stalled", False):
+                # The deadline passed while the caller held the stream, not
+                # while AWS was answering a read.
+                breaker = "success" if getattr(self._stream, "events_seen", 0) else "skip"
+            _bedrock_failed(self._admission, error.code, error.request_id or request_id,
+                            getattr(error, "usage", None),
+                            getattr(error, "retry_after", None), breaker=breaker)
+        if error is not None:
+            try:
+                self._stream.close()
+            except Exception:
+                pass
+            _bedrock_unexpected(self._admission)
+        response = event.get("response")
+        if not isinstance(response, dict) or \
+                validated_usage(response.get("usage")) is None:
+            _bedrock_failed(self._admission, "provider_rejected", request_id)
+        self.response = _settle_success(self._admission, response)
+        return {"type": "final", "response": self.response}
+
+    def close(self):
+        """Cancel. Idempotent and never raises.
+
+        With a read in progress on another thread, or when called from an
+        event loop, this only interrupts the read and the iterating thread
+        settles on its next step. Otherwise it settles here (it writes the
+        ledger, so that path is synchronous code).
+        """
+        with self._lock:
+            if self._settled or self._cancelled:
+                return
+            self._cancelled = True
+            reading = self._reading
+        if reading or _in_event_loop():
+            interrupt = getattr(self._stream, "interrupt", None)
+            if interrupt is not None:
+                try:
+                    interrupt()
+                except Exception:
+                    pass
+            return
+        try:
+            self._settle_cancel()
+        except Exception:
+            pass
+
+
+def _execute_stream(messages, system, tools, model, max_tokens, feature, operation,
+                    context, reasoning_effort="off", provider_factory=None, redis=None,
+                    policy_raw=None, max_tool_rounds=None):
+    """Admit, then dispatch; a refusal or pre-stream failure raises here."""
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    admission = _admit(
+        messages, system, tools, model, max_tokens, feature, operation, context,
+        reasoning_effort=reasoning_effort, provider_factory=provider_factory,
+        redis=redis, policy_raw=policy_raw, stream=True,
+        max_tool_rounds=max_tool_rounds)
+    try:
+        provider_stream = admission["adapter"].stream(**admission["call_kwargs"])
+    except ProviderError as err:
+        _bedrock_failed(admission, err.code, err.request_id,
+                        getattr(err, "usage", None), getattr(err, "retry_after", None))
+    except Exception:
+        _bedrock_unexpected(admission)
+    return GuardedStream(admission, provider_stream)
+
+
 def invoke(messages, system=None, tools=None, model=None, max_tokens=4096, *,
-           feature, operation, context=None, reasoning_effort="off"):
+           feature, operation, context=None, reasoning_effort="off",
+           max_tool_rounds=None):
     """The only production message execution entry point."""
     return _execute(
         messages, system, tools, model, max_tokens, feature, operation, context,
-        reasoning_effort=reasoning_effort)
+        reasoning_effort=reasoning_effort, max_tool_rounds=max_tool_rounds)
+
+
+def invoke_stream(messages, system=None, tools=None, model=None, max_tokens=4096, *,
+                  feature, operation, context=None, reasoning_effort="off",
+                  max_tool_rounds=None):
+    """The only production streamed execution entry point."""
+    return _execute_stream(
+        messages, system, tools, model, max_tokens, feature, operation, context,
+        reasoning_effort=reasoning_effort, max_tool_rounds=max_tool_rounds)
 
 
 def execute_guarded_for_test(messages, *, feature, operation="test", context=None,
                              system=None, tools=None, model=None, max_tokens=4,
-                             reasoning_effort="off", provider_factory, redis,
-                             policy_raw):
+                             reasoning_effort="off", max_tool_rounds=None,
+                             provider_factory, redis, policy_raw):
     """Explicit test-only injection; every production guard still executes."""
     return _execute(
         messages, system, tools, model, max_tokens, feature, operation, context,
         reasoning_effort=reasoning_effort, provider_factory=provider_factory,
-        redis=redis, policy_raw=policy_raw)
+        redis=redis, policy_raw=policy_raw, max_tool_rounds=max_tool_rounds)
+
+
+def stream_guarded_for_test(messages, *, feature, operation="test", context=None,
+                            system=None, tools=None, model=None, max_tokens=4,
+                            reasoning_effort="off", max_tool_rounds=None,
+                            provider_factory, redis, policy_raw):
+    """Streamed twin of execute_guarded_for_test; every guard still executes."""
+    return _execute_stream(
+        messages, system, tools, model, max_tokens, feature, operation, context,
+        reasoning_effort=reasoning_effort, provider_factory=provider_factory,
+        redis=redis, policy_raw=policy_raw, max_tool_rounds=max_tool_rounds)
 
 
 def _fixed_configuration_probe_core(actor, credential, identity, operation):
@@ -948,13 +1470,15 @@ def verify_stored_key(target="admin"):
         None, credential, fingerprint, f"stored_{target}_key_probe")
 
 
-def discover_models():
-    """One guarded, bounded provider catalogue request."""
+def _discover_models_page(*, after_id, operation_id, deadline,
+                          expected_policy_hash=None, expected_fingerprint=None,
+                          provider_factory=None, redis=None, policy_raw=None):
+    """Each page independently proves policy, stop, credential, budget and ledger."""
     from mojo.apps.account.models import LLMRequest
     from mojo.helpers.llm_providers import get_provider
     from mojo.helpers.llm_providers.base import ProviderError
 
-    policy = parse_policy()
+    policy = parse_policy(policy_raw)
     feature = "model_discovery"
     route = policy["routes"].get(feature)
     limits = policy["features"].get(feature)
@@ -964,19 +1488,26 @@ def discover_models():
             _deny("route_missing")
         if provider != "anthropic":
             _deny("provider_unsupported")
+        if expected_policy_hash is not None and policy["hash"] != expected_policy_hash:
+            _deny("policy_mixed")
         _policy_agreement(policy)
         if emergency_stopped():
             _deny("emergency_stopped")
         credential = _credential(route)
         fingerprint = credential_fingerprint(provider, credential)
-        adapter = get_provider(provider, api_key=credential)
+        if expected_fingerprint is not None and fingerprint != expected_fingerprint:
+            _deny("credential_mismatch")
+        adapter = (provider_factory or get_provider)(provider, api_key=credential)
         if adapter is None or "models" not in route["capabilities"] \
                 or not adapter.supports("models"):
             _deny("capability_unsupported")
-        redis = get_connection()
+        redis = redis or get_connection()
         _count_operation(
-            redis, provider, fingerprint, feature, secrets.token_hex(16),
+            redis, provider, fingerprint, feature, operation_id,
             policy["shared"], limits)
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            _deny("provider_timeout")
         generation, owner = _breaker_lease(provider, fingerprint, policy)
         permit = acquire_permit(
             redis, provider, fingerprint, feature, policy["shared"], limits, 1)
@@ -987,14 +1518,15 @@ def discover_models():
         ledger = LLMRequest.objects.create(
             feature=feature, operation="model_discovery", provider=provider,
             model=route["model"], credential_fingerprint=fingerprint,
-            policy_hash=policy["hash"], reserved_tokens=1)
+            policy_hash=policy["hash"], reserved_tokens=1, job_id=operation_id)
     except Exception:
         release_permit(redis, permit)
         _blocked(provider, feature, "ledger_unavailable")
     started = time.monotonic()
     try:
-        models = adapter.list_models(timeout=min(
-            policy["shared"]["timeout_seconds"], limits["timeout_seconds"]))
+        models = adapter.list_models_page(after_id=after_id, timeout=min(
+            deadline - time.monotonic(), policy["shared"]["timeout_seconds"],
+            limits["timeout_seconds"]))
     except ProviderError as err:
         _breaker_failure(provider, fingerprint, generation, owner, err.code, policy)
         LLMRequest.objects.filter(pk=ledger.pk).update(
@@ -1010,11 +1542,52 @@ def discover_models():
         _deny("provider_failed")
     release_permit(redis, permit)
     _breaker_success(provider, fingerprint, generation, owner)
-    LLMRequest.objects.filter(pk=ledger.pk).update(
+    updated = LLMRequest.objects.filter(pk=ledger.pk, status="started").update(
         status="succeeded", finished_at=timezone.now(),
         duration_ms=int((time.monotonic() - started) * 1000))
+    if updated != 1:
+        _deny("ledger_persistence_unknown")
     _record_metrics(provider, feature, "succeeded")
     return models
+
+
+def discover_models(*, expected_policy_hash=None, expected_fingerprint=None,
+                    provider_factory=None, redis=None, policy_raw=None):
+    """Complete catalogue, at most five separately guarded pages in 20 seconds."""
+    policy = parse_policy(policy_raw)
+    limits = policy["features"].get("model_discovery")
+    route = policy["routes"].get("model_discovery")
+    if limits is None or route is None:
+        _deny("route_missing")
+    if route["provider"] != "anthropic":
+        _deny("provider_unsupported")
+    if expected_fingerprint is None:
+        expected_fingerprint = credential_fingerprint("anthropic", _credential(route))
+    deadline = time.monotonic() + min(
+        20, policy["shared"]["timeout_seconds"], limits["timeout_seconds"])
+    operation_id = secrets.token_hex(16)
+    rows, seen, after_id = [], set(), None
+    from mojo.helpers.llm_catalogue import model_id
+    for page_number in range(5):
+        page = _discover_models_page(
+            after_id=after_id, operation_id=operation_id, deadline=deadline,
+            expected_policy_hash=expected_policy_hash or policy["hash"],
+            expected_fingerprint=expected_fingerprint, provider_factory=provider_factory,
+            redis=redis, policy_raw=policy_raw)
+        if time.monotonic() > deadline:
+            _deny("provider_timeout")
+        if not isinstance(page, dict) or not isinstance(page.get("data"), list) \
+                or len(page["data"]) > 100 or type(page.get("has_more")) is not bool:
+            _deny("catalogue_incomplete")
+        rows.extend(page["data"])
+        if not page["has_more"]:
+            return rows
+        cursor = page.get("last_id")
+        if not page["data"] or not model_id(cursor) or cursor in seen:
+            _deny("catalogue_incomplete")
+        seen.add(cursor)
+        after_id = cursor
+    _deny("catalogue_incomplete")
 
 
 def repair_started(max_age_seconds=300, limit=100):

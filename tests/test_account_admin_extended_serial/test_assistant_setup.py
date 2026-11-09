@@ -392,8 +392,9 @@ def test_enable_disable_round_trip(opts):
             state = assistant_setup.save(_admin(opts), enabled=True, model="")
         assert settings.get("LLM_ADMIN_MODEL", None) in (None, ""), \
             "choosing Automatic did not remove the model pin"
-        assert state["model"]["source"] == "automatic", \
-            f"an unpinned model is not reported as automatic: {state['model']!r}"
+        assert state["model"]["source"] == "policy" \
+            and state["model"]["restriction"] == "policy_unavailable", \
+            f"missing policy must not imply an automatic runtime route: {state['model']!r}"
     finally:
         _wipe()
 
@@ -1202,5 +1203,162 @@ def test_discovery_check_verdicts(opts):
         assert response.json["data"]["mcp"]["discovery"]["code"] == "disabled", \
             f"the self-check reported something other than switched off: " \
             f"{response.json['data']['mcp']['discovery']!r}"
+    finally:
+        _wipe()
+
+
+def _selection_policy():
+    limits = dict(requests_minute=60, requests_hour=120, requests_day=240,
+                  tokens_minute=1000000, tokens_hour=2000000, tokens_day=4000000,
+                  concurrency=2, max_input_bytes=4096, max_output_tokens=128,
+                  timeout_seconds=10, max_loop_calls=5)
+    return dict(version=1, routes={
+        'assistant': dict(provider='anthropic', model='auto:sonnet', credential='admin',
+                          capabilities=['text', 'tools', 'prompt_cache']),
+        'model_discovery': dict(provider='anthropic', model='catalogue', credential='admin',
+                                capabilities=['models'])},
+        shared=limits, features={'assistant': dict(limits), 'model_discovery': dict(limits)},
+        breaker=dict(auth_failures=2, rate_failures=2, server_failures=2, open_seconds=60))
+
+
+def _selection_settings(deployed_pin=None, raw=None):
+    from mojo.apps.account.services import assistant_setup
+    raw = raw or _selection_policy()
+    original = assistant_setup.settings.get_static
+
+    def get(name, default=None, **kwargs):
+        if name == 'LLM_SAFETY_POLICY':
+            return raw
+        if name == 'LLM_ADMIN_MODEL':
+            return deployed_pin
+        return original(name, default, **kwargs)
+    return mock.patch.object(assistant_setup.settings, 'get_static', side_effect=get)
+
+
+@th.django_unit_test()
+def test_model_selection_pin_clear_offline_and_legacy_echo_preserves_active_pin(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.services import assistant_setup
+    from mojo.helpers import llm
+    _wipe()
+    try:
+        with _selection_settings(), mock.patch.object(llm, 'get_models') as network:
+            state = assistant_setup.set_model_selection(
+                _admin(opts), mode='pinned', model='opaque-owner-model')
+            assert state['model']['mode'] == 'pinned' \
+                and state['model']['effective'] == 'opaque-owner-model', \
+                'explicit pin must become the exact active delegated model'
+            assert state['model']['source'] == 'admin' and state['model']['editable'], \
+                'owner pin provenance and policy editability must be represented'
+            assistant_setup.save(_admin(opts), enabled=True)
+            assistant_setup.save(_admin(opts), enabled=True, model='opaque-owner-model')
+            assert assistant_setup.state()['model']['selected'] == 'opaque-owner-model', \
+                'omitted model and equal old-client echoes must preserve the active pin'
+            with th.assert_raises(merrors.ValueException):
+                assistant_setup.save(_admin(opts), enabled=False, model='stale-client-model')
+            assert assistant_setup.state()['enabled'] is True, \
+                'a rejected stale model echo must atomically reject unrelated edits too'
+            assert assistant_setup.state()['model']['selected'] == 'opaque-owner-model', \
+                'a stale generic save must not replace an active owner pin'
+            cleared = assistant_setup.set_model_selection(_admin(opts), mode='auto')
+            assert cleared['model']['mode'] == 'auto' and cleared['model']['selected'] == '', \
+                'clear action must restore automatic selection on a delegating deployment'
+            assert network.call_count == 0, 'pin/clear/save/state must not validate by provider discovery'
+    finally:
+        _wipe()
+
+
+@th.django_unit_test()
+def test_deployment_pin_restriction_survives_owner_override_and_refuses_auto(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.services import assistant_setup
+    _wipe()
+    try:
+        with _selection_settings(deployed_pin='deployment-pin'):
+            initial = assistant_setup.state()['model']
+            assert initial['selected'] == 'deployment-pin' \
+                and initial['restriction'] == 'deployment_pin', \
+                'deployment pin must be surfaced as a restriction on returning to automatic mode'
+            override = assistant_setup.set_model_selection(
+                _admin(opts), mode='pinned', model='owner-override')['model']
+            assert override['source'] == 'admin' and override['effective'] == 'owner-override' \
+                and override['restriction'] == 'deployment_pin' and override['editable'], \
+                'owner override remains editable but the underlying deployment pin still prevents Auto'
+            with th.assert_raises(merrors.ValueException):
+                assistant_setup.set_model_selection(_admin(opts), mode='auto')
+            assert assistant_setup.state()['model']['selected'] == 'owner-override', \
+                'failed Auto must not delete the owner pin and silently reinstate a deployment pin'
+    finally:
+        _wipe()
+
+
+@th.django_unit_test()
+def test_model_selection_rejects_fixed_policy_bad_modes_ids_and_nonowner(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import assistant_setup
+    _wipe()
+    try:
+        with _selection_settings():
+            for mode, model in (('unknown', None), ('pinned', ''), ('pinned', 'invalid id'),
+                                ('pinned', 'auto:sonnet'), ('auto', 'forbidden')):
+                with th.assert_raises(merrors.ValueException):
+                    assistant_setup.set_model_selection(_admin(opts), mode=mode, model=model)
+            nonowner = User.objects.get(pk=opts.assistant_regular_id)
+            with th.assert_raises(merrors.PermissionDeniedException):
+                assistant_setup.set_model_selection(nonowner, mode='pinned', model='valid-model')
+        raw = _selection_policy()
+        raw['routes']['assistant']['model'] = 'fixed-by-policy'
+        with _selection_settings(raw=raw):
+            with th.assert_raises(merrors.ValueException):
+                assistant_setup.set_model_selection(_admin(opts), mode='pinned', model='owner-model')
+            state = assistant_setup.save(_admin(opts), enabled=True, model='legacy-inert')
+            assert state['model']['effective'] == 'fixed-by-policy' \
+                and state['model']['selected'] == 'legacy-inert' and state['model']['mode'] == 'fixed' \
+                and state['model']['restriction'] == 'fixed_policy', \
+                'fixed policy must keep legacy saves inert and report accurate mode/selection'
+            echo = assistant_setup.save(_admin(opts), enabled=False,
+                                        model=state['model']['selected'])
+            assert echo['model']['selected'] == 'legacy-inert' \
+                and echo['model']['effective'] == 'fixed-by-policy', \
+                'an old fixed-route client echo must preserve the inert legacy pin on unrelated Save'
+        with _selection_settings(), mock.patch.object(
+                assistant_setup.settings, 'get_static', return_value=None):
+            unavailable = assistant_setup.state()['model']
+            assert unavailable['restriction'] == 'policy_unavailable' \
+                and unavailable['selected'] == 'legacy-inert', \
+                'temporarily unavailable policy must retain the inert legacy echo'
+            echoed = assistant_setup.save(_admin(opts), enabled=True,
+                                          model=unavailable['selected'])
+            assert echoed['model']['selected'] == 'legacy-inert', \
+                'old clients must not erase a latent legacy pin while policy is unavailable'
+    finally:
+        _wipe()
+
+
+@th.django_unit_test()
+def test_explicit_refresh_failure_reports_failure_with_passive_stale_model(opts):
+    from mojo.apps.account.services import assistant_setup, llm_safety
+    from mojo.helpers import llm
+    _wipe()
+    stale = {'status': 'stale', 'fetched_at': '2026-10-18T00:00:00Z',
+             'attempted_at': '2026-10-19T00:00:00Z', 'expires_at': '2026-10-19T00:00:00Z',
+             'max_stale_at': '2026-10-25T00:00:00Z', 'error_code': 'provider_timeout'}
+    catalogue = {'models': [dict(id='cached-sonnet', display_name='Cached', line='sonnet',
+                                lifecycle='active', created_at='2026-10-17T00:00:00Z',
+                                max_tokens=128, capabilities={})], 'discovery': stale,
+                 'refresh': {'attempted': True, 'ok': False, 'code': 'provider_timeout'}}
+    try:
+        with _selection_settings(), \
+                mock.patch.object(llm_safety, '_credential', return_value='stored-only-key'), \
+                mock.patch.object(llm, 'catalogue_state', return_value=catalogue) as read:
+            state = assistant_setup.state(refresh=True)
+            assert state['model']['refresh']['ok'] is False \
+                and state['model']['effective'] == state['route']['model'] == 'cached-sonnet', \
+                'failed explicit refresh must remain failure while preserving a bounded usable model'
+            assert state['model']['discovery']['status'] == 'stale', \
+                'a usable last-good model must retain truthful discovery age'
+            assert read.call_args_list[0].kwargs['force'] is True, \
+                'the explicit owner refresh may bypass freshness, while still obeying cooldown/lock'
     finally:
         _wipe()

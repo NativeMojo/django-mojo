@@ -165,10 +165,14 @@ def trigger(data):
 
 
 class _UnixHTTPConnection(http.client.HTTPConnection):
+    def __init__(self, *args, socket_path=SOCKET_PATH, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.socket_path = socket_path
+
     def connect(self):
         self.sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
         self.sock.settimeout(self.timeout)
-        self.sock.connect(SOCKET_PATH)
+        self.sock.connect(self.socket_path)
 
 
 def _proof_destination():
@@ -226,19 +230,27 @@ def current_digest(target=TARGET):
             os.close(descriptor)
 
 
-def _serving_proof(revision):
+def _serving_proof(revision, profile="opt_api_asgi_v1", *, socket_paths=None,
+                   destination=None):
     from django.core import signing
 
+    from mojo.deploy.fleet_config_role import REQUEST_PROFILES
+    if type(profile) is not str or profile not in REQUEST_PROFILES:
+        return {"error_code": "request_service_profile_unknown"}
+    # Only an explicit local test caller can remap these fixed production paths.
+    socket_path = (socket_paths or REQUEST_PROFILES).get(profile)
+    if not socket_path:
+        return {"error_code": "request_service_profile_unknown"}
     node = socket.gethostname().lower()
     nonce = uuid.uuid4().hex
     challenge = {"revision": revision, "nonce": nonce, "node": node}
     token = signing.dumps(challenge, salt=PROOF_SALT)
-    destination = _proof_destination()
+    destination = destination or _proof_destination()
     if destination is None:
         return {"error_code": "proof_origin_unconfigured"}
     path, headers = destination
     headers["X-Mojo-Fleet-Proof"] = token
-    connection = _UnixHTTPConnection("localhost", timeout=3)
+    connection = _UnixHTTPConnection("localhost", timeout=3, socket_path=socket_path)
     try:
         connection.request("GET", path, headers=headers)
         response = connection.getresponse()
@@ -330,6 +342,23 @@ def _jobs_proof(revision, installed_at):
     return result
 
 
+def loaded_topic_identity():
+    """The actual loaded credential; absence of DNSMan is explicitly disabled."""
+    from django.apps import apps
+    from mojo.deploy.config_override import normalize_allowed
+    from mojo.helpers.settings import settings
+    keys = ("DNSMAN_ACME_HUB_PROFILE_ID", "DNSMAN_ACME_HUB_URL", "DNSMAN_ACME_HUB_API_KEY")
+    delegated = normalize_allowed(settings.get_static("ADMIN_FLEET_CONFIG_ALLOWED_KEYS", []))
+    if (not apps.is_installed("mojo.apps.dnsman") or not set(keys) <= delegated
+            or not settings.get_static(keys[0], "")):
+        # Unmanaged/undelegated and explicitly disabled DNS topics never turn a
+        # legacy GeoIP apply into a hub dependency or contact its old static URL.
+        return {"state": "disabled", "profile_id": None, "observed_project_uuid": None,
+                "checked_at": None, "error_code": None, "sharing_ready": False}
+    from mojo.apps.dnsman.services.connection_config import loaded_identity
+    return loaded_identity(proof=True)
+
+
 def report(data):
     """Prove every local configuration consumer before declaring convergence."""
     revision = _revision(data)
@@ -374,12 +403,24 @@ def report(data):
         if state.get("started_at", 0) < installed_at:
             result["error_code"] = "service_restart_pending"
             return result
-        proof = _serving_proof(revision)
+        proof = _serving_proof(revision, authority.get("request_service_profile", "opt_api_asgi_v1"))
         if not proof or proof.get("error_code"):
             result["error_code"] = proof.get("error_code") if proof else "proof_unavailable"
             return result
         if proof.get("healthy") is not True:
             result["error_code"] = "dependency_health_failed"
+            return result
+    topic = loaded_topic_identity()
+    result["shared_validation"] = topic
+    if topic.get("state") not in ("disabled", "verified"):
+        result["error_code"] = topic.get("error_code") or "hub_identity_unavailable"
+        return result
+    if authority["request_service_required"] and topic.get("state") != "disabled":
+        request_topic = proof.get("shared_validation")
+        if (not isinstance(request_topic, dict)
+                or any(request_topic.get(key) != topic.get(key)
+                       for key in ("state", "profile_id", "observed_project_uuid"))):
+            result["error_code"] = "serving_hub_identity_mismatch"
             return result
     jobs = _jobs_proof(revision, installed_at)
     result["restarted"] = jobs.get("restarted") is True

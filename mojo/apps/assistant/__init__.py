@@ -42,6 +42,7 @@ DOMAIN_DESCRIPTIONS = {
     "skills": "Save, find, and manage learned multi-step procedures",
     "cloud": "Cloud and fleet operations: platform/dashboard health, fleet and capacity state, managed-engine upgrades, framework version, recorded drift, CloudWatch metrics, and System Setup readiness (read-only). Mutating tools mirror the built-in Admin's deploy recovery, framework update, engine upgrade and capacity controls behind the same gates plus an operator approval.",
     "webapp": "Set up, inspect, troubleshoot and operate web apps: guided setup, addresses and certificates, serving and routes, deployment history and evidence, rollback, take offline and delete. Deploy-key creation, domain purchase and build upload are Admin-only handoffs.",
+    "dns": "Inspect shared wildcard validation readiness, prepare a public connection request for an existing allocation, connect after controller trust, verify the unchanged CNAME and request a local apex-plus-wildcard certificate. Changes require operator approval; hub trust and credentials remain deployment/controller operations.",
 }
 
 
@@ -49,7 +50,8 @@ def register_tool(name, description, input_schema, handler,
                   permission, mutates=False, domain="custom", core=False,
                   fresh_auth_seconds=None, requires_superuser=False,
                   requires_managed_infrastructure=False, summarize=None,
-                  preview=None, owner_state=None, authorize=None):
+                  preview=None, owner_state=None, authorize=None,
+                  requires_operator_approval=False):
     """
     Register a tool that the LLM assistant can call.
 
@@ -64,7 +66,9 @@ def register_tool(name, description, input_schema, handler,
                       on the model's call — it produces a PendingAction the
                       operator must approve (see ``services/approvals.py``) —
                       unless it declares ``owner_state`` and that predicate
-                      returns exactly True for the call.
+                      returns exactly True for the call. A separately consented
+                      MCP execution grant can also run ordinary tools directly;
+                      protected tool contracts retain per-action approval.
         domain:       Logical grouping (security, jobs, users, groups, metrics, custom).
         core:         If True, tool is always sent to the LLM. If False,
                       tool is only sent when its domain is loaded.
@@ -100,6 +104,11 @@ def register_tool(name, description, input_schema, handler,
                       ``requires_managed_infrastructure`` or ``preview``, which
                       are enforced only inside the approval path a direct
                       execution skips.
+        requires_operator_approval: Keep a genuine per-action operator approval,
+                      including for an MCP execution grant. Use this when an
+                      extension's handler depends on interactive confirmation.
+                      Fresh-auth, preview and approval-argument handlers already
+                      retain that requirement automatically.
 
     authorize:        ``(user) -> bool``, allowed on ANY tool (mutating or not).
                       Evaluated in ADDITION to ``user.has_permission(permission)``
@@ -119,6 +128,7 @@ def register_tool(name, description, input_schema, handler,
         "summarize": summarize,
         "preview": preview,
         "owner_state": owner_state,
+        "requires_operator_approval": requires_operator_approval,
     }
     if not mutates:
         declared = [key for key, value in gates.items() if value]
@@ -147,7 +157,8 @@ def register_tool(name, description, input_schema, handler,
         # These three run only inside propose()/resolve(). A tool that both
         # skipped the card AND declared one of them would silently lose the
         # gate, so refuse the combination at import instead.
-        for key in ("fresh_auth_seconds", "requires_managed_infrastructure", "preview"):
+        for key in ("fresh_auth_seconds", "requires_managed_infrastructure", "preview",
+                    "requires_operator_approval"):
             if gates[key]:
                 raise ValueError(
                     f"Assistant tool '{name}': owner_state cannot be combined with "
@@ -174,6 +185,7 @@ def register_tool(name, description, input_schema, handler,
         "preview": preview,
         "owner_state": owner_state,
         "authorize": authorize,
+        "requires_operator_approval": bool(requires_operator_approval),
     }
 
 
@@ -186,7 +198,8 @@ def register_tools(tools):
 def tool(name, domain, permission, input_schema, description,
          mutates=False, core=False, fresh_auth_seconds=None,
          requires_superuser=False, requires_managed_infrastructure=False,
-         summarize=None, preview=None, owner_state=None, authorize=None):
+         summarize=None, preview=None, owner_state=None, authorize=None,
+         requires_operator_approval=False):
     """
     Decorator that registers a function as an assistant tool.
 
@@ -226,6 +239,7 @@ def tool(name, domain, permission, input_schema, description,
             preview=preview,
             owner_state=owner_state,
             authorize=authorize,
+            requires_operator_approval=requires_operator_approval,
         )
         return func
     return decorator

@@ -72,6 +72,28 @@ full contract, including the MFA-branch check in `on_user_login` and the
 token-proven-action behavior (password reset / email verify / invite accept
 apply their mutation before the session is withheld).
 
+### Disabled accounts
+
+No sign-in route issues a session, or an `mfa_token`, to an account whose
+`is_active` is false. Which answer the client gets depends on what the person
+proved:
+
+- **A secret they typed** — password, TOTP code, SMS code, reset code — gets
+  that step's wrong-secret or unknown-account answer, so the endpoint confirms
+  neither the secret nor the account's state. Password login answers
+  `401 "Invalid username or password"`, byte-identical to a wrong password,
+  and only after the hash, so the timing matches too; it records a
+  `login:inactive` incident for operators. Reset by code answers
+  `"Invalid code"` and sets no password.
+- **A link the server sent** — magic link, email-change link, and the
+  existing invite, reset link, email verify and handoff — answers
+  `403 "Account is disabled"`. The holder already proved the mailbox, so the
+  reason is given.
+
+`jwt_login` itself refuses a disabled account first
+(`401 "Invalid credentials"`), so a new caller that forgets the check still
+mints nothing; every route above refuses earlier with its own answer.
+
 ---
 
 ## MFA Challenge (Login with MFA enabled)
@@ -891,7 +913,7 @@ of the parent gets no token for a child group).
 | `auth_key` rotation | every token for one user | `POST /api/user/me {"revoke_sessions": true}`, a password reset or change, or `user.end_sessions(reason)` |
 | Membership removal | that user in that group | delete the `GroupMember` row |
 | Group (or ancestor) deactivation | every token for the subtree | `group.is_active = False` |
-| User deactivation | every token for that user | `user.is_active = False` |
+| User deactivation | every token for that user | the `disable` action or an admin `{"is_active": false}` save; turning the user off or back on replaces `auth_key` |
 
 The epoch lives in `group.metadata["protected"]["group_token_epoch"]` — no
 migration. The `protected` root key is REST-guarded by

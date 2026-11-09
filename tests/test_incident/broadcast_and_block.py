@@ -325,9 +325,9 @@ def test_block_idempotency_skips_reblock(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
     # Clean up
-    GeoLocatedIP.objects.filter(ip_address="10.99.99.1").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.115.1").delete()
 
-    geo = GeoLocatedIP.objects.create(ip_address="10.99.99.1")
+    geo = GeoLocatedIP.objects.create(ip_address="203.0.115.1")
 
     # First block should succeed and set block_count=1
     with mock.patch(
@@ -360,8 +360,8 @@ def test_block_reblocks_after_expiry(opts):
     from mojo.helpers import dates
     from datetime import timedelta
 
-    GeoLocatedIP.objects.filter(ip_address="10.99.99.2").delete()
-    geo = GeoLocatedIP.objects.create(ip_address="10.99.99.2")
+    GeoLocatedIP.objects.filter(ip_address="203.0.115.2").delete()
+    geo = GeoLocatedIP.objects.create(ip_address="203.0.115.2")
 
     # First block with short TTL
     with mock.patch(
@@ -418,7 +418,7 @@ def test_block_handler_includes_incident_event_in_reason(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
     # Clean up
-    GeoLocatedIP.objects.filter(ip_address="10.99.99.10").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.115.10").delete()
     Event.objects.filter(category="test:block_reason").delete()
     Incident.objects.filter(category="test:block_reason").delete()
 
@@ -433,7 +433,7 @@ def test_block_handler_includes_incident_event_in_reason(opts):
         title="Test event",
         category="test:block_reason",
         level=10,
-        source_ip="10.99.99.10",
+        source_ip="203.0.115.10",
         incident=incident,
     )
 
@@ -446,7 +446,7 @@ def test_block_handler_includes_incident_event_in_reason(opts):
 
     assert result is True, "BlockHandler should succeed"
 
-    geo = GeoLocatedIP.objects.filter(ip_address="10.99.99.10").first()
+    geo = GeoLocatedIP.objects.filter(ip_address="203.0.115.10").first()
     assert geo is not None, "GeoLocatedIP should exist after block"
     assert geo.is_blocked is True, "IP should be blocked"
     assert f"incident:{incident.pk}" in geo.blocked_reason, \
@@ -463,7 +463,7 @@ def test_block_handler_resolves_incident(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
     # Clean up
-    GeoLocatedIP.objects.filter(ip_address="10.99.99.11").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.115.11").delete()
     Event.objects.filter(category="test:block_resolve").delete()
     Incident.objects.filter(category="test:block_resolve").delete()
 
@@ -477,7 +477,7 @@ def test_block_handler_resolves_incident(opts):
         title="Test event",
         category="test:block_resolve",
         level=10,
-        source_ip="10.99.99.11",
+        source_ip="203.0.115.11",
         incident=incident,
     )
 
@@ -533,7 +533,7 @@ def test_block_handler_skips_resolve_if_already_resolved(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
     # Clean up
-    GeoLocatedIP.objects.filter(ip_address="10.99.99.12").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.115.12").delete()
     Event.objects.filter(category="test:block_skip_resolve").delete()
     Incident.objects.filter(category="test:block_skip_resolve").delete()
 
@@ -547,7 +547,7 @@ def test_block_handler_skips_resolve_if_already_resolved(opts):
         title="Test event",
         category="test:block_skip_resolve",
         level=10,
-        source_ip="10.99.99.12",
+        source_ip="203.0.115.12",
         incident=incident,
     )
 

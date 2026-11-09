@@ -32,6 +32,7 @@ def on_vault_file_upload(request):
     group = request.group
     if not group:
         raise me.ValueException("Group required")
+    vault_service.require_group_writer(request, group)
 
     vault_file = vault_service.upload_file(
         file_obj=uploaded,

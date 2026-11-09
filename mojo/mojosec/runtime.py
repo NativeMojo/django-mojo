@@ -10,18 +10,31 @@ from .collectors import (
 from .output import emit, emit_error, write_status, runtime_identity, publish_identity
 from .profiles import profile_identity, resolve_profile
 from .sender import Sender
-from .store import Store
+from .store import FimBaselineMoved, Store
+
+
+# The status file is for operators and check_node (which tolerates 600 s of
+# age); a write per 5 s poll was five COUNT(*)s, a profile-health read, a
+# change-journal read and two fsyncs for nothing. Health transitions still
+# publish at once.
+STATUS_INTERVAL_SECONDS = 60
+# Tiers that scan at least this often keep their baseline in memory between
+# scans instead of decoding it from SQLite each time; the six-hour tiers hold
+# 30-64k entries and reload twice a day, which is free.
+BASELINE_CACHE_MAX_INTERVAL_SECONDS = 600
 
 
 class Runtime:
     def __init__(self, config, store=None, sender=None, identity=None):
         self.config = config
         self.identity = dict(identity if identity is not None else runtime_identity())
+        collectors = config["collectors"]
         self.store = store or Store(
             config["state_dir"], config["sensor_id"],
             config["aggregation"], config["delivery"],
+            expected_app_uid=(collectors["journal"].get("app_uid")
+                              if collectors["journal"]["enabled"] else None),
         )
-        collectors = config["collectors"]
         self.journal = JournalCollector(collectors["journal"]) if collectors["journal"]["enabled"] else None
         self.nginx = NginxCollector(collectors["nginx"]) if collectors["nginx"]["enabled"] else None
         self.profile = resolve_profile(config.get("profile"))
@@ -32,7 +45,11 @@ class Runtime:
                 self.integrity_collectors[tier] = FimCollector(
                     tier_config, config["expected_changes_path"], self.profile_identity, tier)
             self.integrity_collectors["rpm"] = SystemPythonCollector(
-                collectors["rpm"], self.profile_identity, config["expected_changes_path"])
+                collectors["rpm"], self.profile_identity, config["expected_changes_path"],
+                covered_roots=tuple(
+                    target["path"]
+                    for tier in ("fast", "slow") if tier in collectors["fim"]["tiers"]
+                    for target in collectors["fim"]["tiers"][tier]["targets"]))
             self.fim = None
         else:
             self.fim = (FimCollector(collectors["fim"], config["expected_changes_path"])
@@ -49,6 +66,9 @@ class Runtime:
         self.last_fim = 0
         self.last_integrity = {}
         self.integrity_scans = {}
+        self.baselines = {}
+        self.last_status_at = 0
+        self.last_status_signature = None
         self.running = True
         self.stop_event = threading.Event()
         self.diagnostic_stream = None
@@ -75,50 +95,13 @@ class Runtime:
         try:
             cursor = self.store.get_meta(f"cursor:{collector.name}")
             if collector.name == "journal":
-                from mojo.deploy.audit import read_health, validate_health
-                previous_health = self.store.get_meta("audit_health")
-                pre_health = read_health()
-                pre_result = (validate_health(
-                    pre_health, previous=previous_health)
-                    if pre_health is not None else
-                    {"healthy": False, "reason": "sidecar_unavailable"})
                 result = collector.poll(
-                    cursor, ssh_sessions=self.store.load_ssh_sessions(),
-                    audit_fragments=self.store.load_audit_fragments())
-                post_health = read_health()
-                post_result = (validate_health(post_health, previous=pre_health)
-                               if post_health is not None and pre_health is not None else
-                               {"healthy": False, "reason": "post_poll_sidecar_unavailable"})
-                bracket = bool(
-                    pre_result["healthy"] and post_result["healthy"] and
-                    not result.get("malformed") and
-                    pre_health["boot_id"] == post_health["boot_id"] and
-                    pre_health["generation"] == post_health["generation"] and
-                    pre_health["rules_sha256"] == post_health["rules_sha256"] and
-                    post_health["lost"] == pre_health["lost"])
-                health_source = post_health
-                if result.get("malformed") and health_source is None:
-                    # Parser loss is explicit negative authority even when
-                    # the current sidecar is unavailable; never preserve an
-                    # older healthy epoch for this observation's later proof.
-                    health_source = pre_health or previous_health
-                health_value = (dict(
-                    health_source, healthy=bracket,
-                    reason=("journal_parser_loss" if result.get("malformed") else
-                            "" if bracket else post_result.get("reason", "poll_health_changed")))
-                    if health_source is not None else None)
+                    cursor, ssh_sessions=self.store.load_ssh_sessions())
             else:
-                health_value = None
                 result = collector.poll(cursor)
             self.store.ingest(
                 result["observations"], cursor_key=collector.name, cursor=result["cursor"],
                 ssh_sessions=result.get("ssh_sessions"),
-                audit_fragments=result.get("audit_fragments"),
-                audit_uncertainty=result.get("audit_uncertainty"),
-                process_nodes=result.get("process_nodes"),
-                audit_health=health_value,
-                firewall_receipts=result.get("firewall_receipts"),
-                crond_launches=result.get("crond_launches"),
             )
             self._collector_ok(collector.name, result.get("malformed", 0))
         except Exception as err:
@@ -131,21 +114,63 @@ class Runtime:
         if self.last_fim and time.monotonic() - self.last_fim < interval:
             return
         self.last_fim = time.monotonic()
+        cacheable = interval <= BASELINE_CACHE_MAX_INTERVAL_SECONDS
         try:
             scan = self.fim.scan()
-            initialized = self.store.fim_initialized(scan["profile"])
-            baseline = self.store.load_fim_baseline(scan["profile"]) if initialized else {}
-            if scan["complete"]:
-                observations = self.fim.diff(baseline, scan) if initialized else []
-            else:
-                observations = [item for item in self.fim.diff({}, scan)
-                                if item["kind"] == "fim.overflow"]
-            self.store.record_fim_scan(
-                scan["profile"], scan["snapshot"], observations, scan["complete"]
-            )
+            for attempt in range(2):
+                cached = self._cached_baseline(scan["profile"]) if cacheable else None
+                if cached is None:
+                    cached = self.store.load_fim_baseline_generation(scan["profile"])
+                baseline, read_stamp = cached
+                initialized = self.store.fim_initialized(scan["profile"])
+                if not initialized:
+                    baseline = {}
+                if scan["complete"]:
+                    observations = self.fim.diff(baseline, scan) if initialized else []
+                else:
+                    observations = [item for item in self.fim.diff({}, scan)
+                                    if item["kind"] == "fim.overflow"]
+                try:
+                    stamp = self.store.record_fim_scan(
+                        scan["profile"], scan["snapshot"], observations, scan["complete"],
+                        baseline=baseline if initialized else None,
+                        expected_stamp=read_stamp,
+                    )
+                    break
+                except FimBaselineMoved:
+                    # Re-seeded between our read and our write: diff again
+                    # against what the other process committed.
+                    self.baselines.pop(scan["profile"], None)
+                    if attempt:
+                        raise
+            if scan["complete"] and cacheable:
+                self._cache_baseline(scan["profile"], scan["snapshot"], stamp)
             self._collector_ok("fim")
         except Exception as err:
             self._collector_error("fim", err)
+
+    def _cached_baseline(self, key):
+        """The in-memory baseline for ``key``, unless another writer moved it.
+
+        The baseline CLI (``baseline-initialize``, ``baseline-rollback``, a
+        content re-enrollment) runs in its own process and re-seeds the
+        baseline under the daemon; every such write stamps ``fim_scan:<key>``,
+        so a cache built under an older stamp is simply dropped.
+        """
+        cached = self.baselines.get(key)
+        if cached is None:
+            return None
+        snapshot, stamp = cached
+        current = self.store.get_meta(f"fim_scan:{key}", {}) or {}
+        if current.get("at") != stamp:
+            del self.baselines[key]
+            return None
+        return snapshot, stamp
+
+    def _cache_baseline(self, key, snapshot, stamp):
+        # ``stamp`` is the one our own commit wrote. Re-reading it here would
+        # adopt a re-seed committed in between and keep our stale snapshot.
+        self.baselines[key] = (snapshot, stamp)
 
     def integrity_roster(self):
         """Every configured tier in stable scan order, preserving legacy order."""
@@ -199,12 +224,14 @@ class Runtime:
     def initialize_integrity_tier(self, tier, scan, reason="re-enrollment"):
         if not self.profile:
             raise ValueError("legacy custom FIM has no profile activation ceremony")
+        self.baselines.clear()
         return self.store.initialize_fim_tier(
             self.profile_identity, tier, scan, reason=reason)
 
     def initialize_integrity(self, scans, reason="initialize"):
         if not self.profile:
             raise ValueError("legacy custom FIM initializes on its historical first scan")
+        self.baselines.clear()
         self.store.activate_fim_profile(self.profile_identity, scans, reason=reason)
 
     def _poll_integrity(self):
@@ -222,14 +249,33 @@ class Runtime:
             if self.last_integrity.get(tier) and now - self.last_integrity[tier] < interval:
                 continue
             self.last_integrity[tier] = now
+            cacheable = interval <= BASELINE_CACHE_MAX_INTERVAL_SECONDS
             try:
-                baseline = self.store.load_fim_baseline(collector.baseline_key)
-                started = time.monotonic()
-                scan = collector.scan(baseline)
-                scan["duration"] = round(time.monotonic() - started, 6)
-                observations = collector.diff(baseline, scan)
-                self.store.record_fim_scan(
-                    collector.baseline_key, scan["snapshot"], observations, scan["complete"])
+                for attempt in range(2):
+                    cached = self._cached_baseline(collector.baseline_key) if cacheable else None
+                    if cached is None:
+                        cached = self.store.load_fim_baseline_generation(collector.baseline_key)
+                    baseline, read_stamp = cached
+                    started = time.monotonic()
+                    scan = collector.scan(baseline)
+                    scan["duration"] = round(time.monotonic() - started, 6)
+                    observations = collector.diff(baseline, scan)
+                    try:
+                        stamp = self.store.record_fim_scan(
+                            collector.baseline_key, scan["snapshot"], observations,
+                            scan["complete"], baseline=baseline, expected_stamp=read_stamp)
+                        break
+                    except FimBaselineMoved:
+                        # Re-seeded between our read and our write: scan and
+                        # diff again against what the other process committed.
+                        self.baselines.pop(collector.baseline_key, None)
+                        if attempt:
+                            raise
+                # Only after the commit: a rolled-back write must leave the
+                # cache equal to what SQLite still holds, or the next scan
+                # would diff against the new snapshot and never raise it.
+                if scan["complete"] and cacheable:
+                    self._cache_baseline(collector.baseline_key, scan["snapshot"], stamp)
                 self.integrity_scans[tier] = {
                     "ok": scan["complete"], "last_success": time.time(),
                     "complete": scan["complete"], "entries": len(scan["snapshot"]),
@@ -253,7 +299,26 @@ class Runtime:
             "tiers": self.integrity_scans,
         }
 
-    def _publish_status(self):
+    def _status_signature(self):
+        """What a status write is for: health transitions, never timestamps."""
+        return (
+            self.running,
+            tuple(sorted(
+                (name, bool(status.get("ok")), str(status.get("error", "")))
+                for name, status in self.collector_status.items())),
+            tuple(sorted(
+                (tier, bool(scan.get("ok"))) for tier, scan in self.integrity_scans.items())),
+            bool(self.last_delivery.get("error")),
+            bool(self.last_delivery.get("retry")),
+        )
+
+    def _publish_status(self, force=False):
+        now = time.monotonic()
+        signature = self._status_signature()
+        if (not force and self.last_status_at and
+                now - self.last_status_at < STATUS_INTERVAL_SECONDS and
+                signature == self.last_status_signature):
+            return False
         status = {
             "schema": "mojosec.status", "version": 1,
             "sensor_id": self.config["sensor_id"],
@@ -277,6 +342,9 @@ class Runtime:
         status.update(self.identity)
         status["running"] = self.running
         write_status(self.config["status_path"], status)
+        self.last_status_at = now
+        self.last_status_signature = signature
+        return True
 
     def run_once(self):
         self._poll_stream(self.journal)
@@ -284,20 +352,19 @@ class Runtime:
         self._poll_fim()
         self._poll_integrity()
         try:
-            expected_path = self.config.get("expected_changes_path", "")
-            active_paths = ()
-            if expected_path == "/etc/mojosec/expected_changes.json":
-                from mojo.deploy.mojosec_changes import ChangeJournal
-                active_paths = ChangeJournal().active_paths()
-            self.store.annotate_pending_fim(
-                expected_path, active_paths=active_paths,
-                directory_metadata_roots=self.content_roots)
+            # Nothing to annotate is the steady state; the manifest and the
+            # change journal are not opened at all on such a poll.
+            if self.store.has_pending_annotations():
+                expected_path = self.config.get("expected_changes_path", "")
+                active_paths = ()
+                if expected_path == "/etc/mojosec/expected_changes.json":
+                    from mojo.deploy.mojosec_changes import ChangeJournal
+                    active_paths = ChangeJournal().active_paths()
+                self.store.annotate_pending_fim(
+                    expected_path, active_paths=active_paths,
+                    directory_metadata_roots=self.content_roots)
         except Exception as err:
             self._collector_error("expected_changes", err)
-        try:
-            self.store.reconcile_pending_firewall()
-        except Exception as err:
-            self._collector_error("firewall_reconciliation", err)
         try:
             self.last_delivery = self.sender.send_once()
         except Exception as err:
@@ -322,6 +389,6 @@ class Runtime:
             remaining = self.config["poll_seconds"] - (time.monotonic() - started)
             if remaining > 0 and self.running:
                 self.stop_event.wait(remaining)
-        self._publish_status()
+        self._publish_status(force=True)
         self.store.close()
         emit("info", "MojoSec sensor stopped", sensor_id=self.config["sensor_id"])

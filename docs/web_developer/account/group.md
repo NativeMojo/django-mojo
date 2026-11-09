@@ -127,6 +127,28 @@ GET /api/group?kind=organization&sort=name
 
 ## Group Membership
 
+### What a Member Row Shows About Its User
+
+Every member row (`/api/group/member` list and single row, the invite
+response) nests its `user`. Who sees how much of it (#8648):
+
+- **Your own row, and every row for a global `view_users`, `manage_users` or
+  `users` holder or a superuser:** the full user, as before.
+- **Everyone else** (`view_members`, `manage_group`, member-level grants of any
+  kind, API keys): the same user without `permissions`, `is_superuser`,
+  `requires_mfa`, `requires_password_change`, `has_password`, `has_passkey`
+  and `metadata`. Those keys are absent, not null. Email, names, phone,
+  activity and verification fields are unchanged.
+- The member row's own `permissions` and `metadata` (the member's group role)
+  are not affected.
+- Filters on `user__is_superuser`, `user__requires_mfa`,
+  `user__requires_password_change`, `user__passkeys` and `user__totp` are
+  ignored for those viewers (`?user__requires_mfa=True` returns the
+  unfiltered list). Email and name filters and search still work.
+
+The same rule applies to a user nested in any other row (devices, docit
+pages, a consumer app's own models).
+
 ### Get My Membership
 
 **GET** `/api/group/<id>/member`
@@ -190,10 +212,18 @@ Use [category permissions](admin_portal.md#category-permissions-use-these-in-you
 }
 ```
 
-If an application's required member-save cleanup fails, that individual save
-is rolled back and the request fails. Refresh the member before retrying:
-a request changing several permissions can contain multiple saves, and earlier
-successful saves may remain committed.
+A request's permission changes are saved together, in one save: if any one of
+them is refused (`403`) or an application's required member-save cleanup
+fails, none of them is saved and the request fails. Refresh the member before
+retrying.
+
+Every request that really changes the member's permissions writes one audit
+record (kind `member:permissions_changed`) holding who made the change, what
+was added and removed, and the permission names before and after. Resending
+the stored values unchanged writes nothing. Read it at
+`GET /api/logs?kind=member:permissions_changed&model_id=<member id>`, which
+needs the global `manage_logs`, `view_logs`, `security` or `admin`
+permission; group managers cannot read it.
 
 ### Guest Members (view-only)
 
@@ -254,6 +284,63 @@ needs the same grant on that parent. Three details:
 
 Posting the `parent` a group already has is not a move and is never refused,
 so a form that sends every field on save keeps working.
+
+### Creating sub-groups as an organization's administrator
+
+Creating a group (`POST /api/group`) normally needs a global group permission.
+If the platform has opted an organization in, its own administrators can
+create groups directly under it without one:
+
+```
+POST /api/group
+{"name": "North Region", "kind": "region", "parent": 42}
+```
+
+This works when all of these hold:
+
+- Group `42` carries `metadata.protected.allow_member_subgroups: true`. Only the
+  platform sets this, with the switch below. The organization's own
+  administrators cannot change it.
+- The caller is signed in as a person (a session, or their own per-user API
+  key) and holds `manage_group` (or `manage_groups`/`groups`) **as a member** of
+  group `42` or of a group above it.
+- Group `42` and every group above it are active.
+
+Otherwise the create returns `403` and nothing is created, as before. Some
+details:
+
+- The new group goes **directly** under the opted-in parent. The setting does
+  not pass down, so creating under the new group needs the platform to opt it
+  in too, and the new group cannot be created with the setting already on.
+- Send the parent once, as `parent` or `parent_id`. Two values that disagree,
+  or a parent that is not an id, are refused. A `?group=` parameter does not
+  stand in for the parent.
+- A group API key or group token cannot create groups this way.
+- The Assistant's generic model-create tool does not use this setting; use the
+  Group API.
+
+#### Turning it on or off (system admins)
+
+```
+POST /api/group/42
+{"allow_member_subgroups": true}
+```
+
+Response: `{"status": true, "allow_member_subgroups": true}`. Send `false` to
+turn it off. The current state is `metadata.protected.allow_member_subgroups`
+in the group's `default` graph: `true` means on, anything else means off.
+
+- Only a signed-in person whose own account holds the global `manage_groups`
+  or `groups` permission (or a superuser) may call it, the same as Disable and
+  Reactivate. An organization's administrators, group API keys and group
+  tokens get `403`; signed out gets `401`.
+- The value must be `true` or `false`. A string or number is refused with
+  `400`.
+- Sending the current value changes nothing. Turning it off does not touch
+  groups that were already created under it.
+- If it is sent together with other changes in the same request, and the
+  caller may not switch or the value is not a boolean, the whole request is
+  refused and nothing is saved.
 
 ---
 

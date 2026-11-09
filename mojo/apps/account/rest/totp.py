@@ -164,7 +164,7 @@ def on_totp_verify(request):
         raise merrors.PermissionDeniedException("Invalid or expired MFA token", 401, 401)
 
     user = User.objects.filter(pk=token_data["uid"]).first()
-    if not user:
+    if not user or not user.is_active:
         raise merrors.PermissionDeniedException()
 
     totp = UserTOTP.objects.filter(user=user, is_enabled=True).first()
@@ -239,7 +239,8 @@ def on_totp_login(request):
     username = request.DATA.get("username", "").lower().strip()
     user = User.objects.filter(Q(username=username) | Q(email=username)).first()
 
-    if not user:
+    # A disabled account is answered like an unknown one (#9463).
+    if not user or not user.is_active:
         User.class_report_incident(
             f"TOTP login attempt with unknown username: {username}",
             event_type="totp:login_unknown",

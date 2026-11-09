@@ -33,7 +33,7 @@ def on_user(request, pk=None):
 @md.URL('account/user/me')
 @md.requires_auth()
 def on_user_me(request):
-    if not hasattr(request.user, "is_request_user"):
+    if not request_helpers.is_signed_in_user(request.user):
         raise merrors.PermissionDeniedException("not valid user", 401, 401)
     return User.on_rest_request(request, request.user.pk)
 
@@ -219,6 +219,16 @@ def on_user_login(request):
         user.report_incident(
             f"{user.username} enter an invalid password",
             "invalid_password",
+            level=5)
+        raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
+
+    # A disabled account gets the wrong-password answer, byte for byte, after
+    # the hash: the endpoint must confirm neither the password nor the
+    # account's state (#9463, the #5103 rule). Its counter is not cleared.
+    if not user.is_active:
+        user.report_incident(
+            f"{user.username} login refused: account disabled",
+            "login:inactive",
             level=5)
         raise merrors.PermissionDeniedException("Invalid username or password", 401, 401)
 
@@ -1004,7 +1014,13 @@ def jwt_login(request, user, legacy=False, source=None, extra=None, is_new_user=
     last_login / UserLoginEvent / USER_LOGIN_HANDLER — so a blocked login
     records no success side effects. Evaluated with the verified `user`, so
     `bypass_geofence` holders pass and block evidence carries the user.
+
+    A disabled account is refused before anything else (#9463). Every sign-in
+    route refuses it earlier with its own answer; this is the fail-closed
+    backstop for a caller that forgets.
     """
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Invalid credentials", 401, 401)
     if source not in GEOFENCE_EXEMPT_JWT_SOURCES:
         from mojo.apps.account.services.geofence import enforcement
         blocked = enforcement.enforce(request, scope="auth", user=user)
@@ -1307,7 +1323,7 @@ def on_user_forgot(request, *, send_sms=None, send_email=None):
                     sender = send_sms if send_sms is not None else phonehub.send_sms
                     sender(
                         user.phone_number,
-                        f"Your password reset code is: {code}")
+                        f"Your password reset code is: {code}", secret=code)
                 except Exception as exc:
                     user.report_incident(
                         f"SMS reset code send failed: {exc}",
@@ -1342,7 +1358,9 @@ def on_user_password_reset_code(request):
     new_password = request.DATA.get("new_password")
     code_ttl = settings.get("PASSWORD_RESET_CODE_TTL", 600, kind="int")
     user = User.lookup_from_request(request, phone_as_username=True)
-    if user is None:
+    # A disabled account is answered exactly like an unknown one: no password
+    # is set and nothing tells the two apart (#9463).
+    if user is None or not user.is_active:
         User.class_report_incident(
             f"invalid reset password code with details {request.DATA.username} - {request.DATA.email} - {request.DATA.phone_number}",
             event_type="reset:unknown",
@@ -1558,7 +1576,7 @@ def on_magic_login_send(request, *, send=None):
                 # incident write must not 500 the endpoint either, because that
                 # would restore exactly the differential this closes.
                 try:
-                    sms = sender(normalized, f"Your login link: {login_url}")
+                    sms = sender(normalized, f"Your login link: {login_url}", secret=login_url)
                     if not sms_delivery.was_accepted(sms):
                         user.report_incident(
                             "magic login SMS send failed",
@@ -1581,6 +1599,10 @@ def on_magic_login_complete(request):
     """Exchange a magic login token for a JWT — logs the user in."""
     token = request.DATA.get("token")
     user, channel = tokens.verify_magic_login_token(token)
+    # The link holder proved the mailbox, so the reason is given, as for
+    # invite, reset link and email verify (#9463). Nothing is written first.
+    if not user.is_active:
+        raise merrors.PermissionDeniedException("Account is disabled", 403, 403)
     if channel == "sms" and not user.is_phone_verified:
         user.is_phone_verified = True
         user.save(update_fields=["is_phone_verified", "modified"])
@@ -2376,7 +2398,7 @@ def on_phone_change_request(request, *, send=None):
     session_token, otp = tok_utils.generate_phone_change_token(user, normalized)
 
     try:
-        sms = sender(normalized, f"Your phone change verification code is: {otp}")
+        sms = sender(normalized, f"Your phone change verification code is: {otp}", secret=otp)
     except Exception:
         logit.exception(f"phone change SMS transport raised for user {user.pk}")
         sms = None
@@ -2774,7 +2796,9 @@ def on_account_security_events(request):
             del params[key]
     request.GET = params
 
-    qs = Event.objects.filter(q, uid=request.user.pk)
+    # A submitted event (#4125, metadata.reporter) is something a caller
+    # reported, not something that happened to this account: never history.
+    qs = Event.objects.filter(q, uid=request.user.pk).exclude(metadata__has_key="reporter")
     if group is not None:
         # Triple-guarded so nothing sneaks into the account exception: the
         # category prefix keeps login/sessions rows out, the null FK keeps

@@ -218,8 +218,32 @@ def test_register_github_default_on(opts):
     html = _render('account/register.html', group=None)
     assert_true(
         'id="btn-github"' in html,
-        "github is in REGISTRATION_METHODS, so the default config must render "
+        "github is in DEFAULT_REGISTRATION_METHODS, so the default config must render "
         "the GitHub button on the hosted register page")
+
+
+@th.django_unit_test("register.html offers Microsoft only when the group enables it")
+def test_register_microsoft_button(opts):
+    html = _render('account/register.html', group=None)
+    assert_true(
+        'id="btn-microsoft"' not in html,
+        "microsoft is not a default registration method, so the default "
+        "register page must not render the Microsoft button")
+    opts.group.metadata = {"auth_config": {
+        "registration": {"methods": ["password", "microsoft"]}}}
+    opts.group.save(update_fields=["metadata"])
+    try:
+        html = _render('account/register.html', group=opts.group)
+        assert_true(
+            'id="btn-microsoft"' in html,
+            "a group whose registration.methods include microsoft must render "
+            "the Microsoft button on the register page")
+        assert_true(
+            'startMicrosoftLogin' in html,
+            "the register page must wire the Microsoft button to MojoAuth.startMicrosoftLogin")
+    finally:
+        opts.group.metadata = {}
+        opts.group.save(update_fields=["metadata"])
 
 
 @th.django_unit_test("register.html omits the GitHub button when the group disables github registration")
@@ -1172,10 +1196,10 @@ _STYLE_INTERPOLATIONS_REVIEWED = {
     # deliberate (the value IS CSS) and it is admin-set group config, not
     # visitor input — the same trust level as uploading a .css file.
     ("auth_base.html", "custom_css|safe"),
-    # _serve_challenge runs the tenant accent through normalize_accent_color:
-    # only a six-digit hex colour is returned, with a fixed hex fallback.
-    # A visitor/config value cannot contribute CSS metacharacters here.
-    ("bouncer_challenge.html", "accent_color|default:'#6384ff'"),
+    # The bot-check page loads the same tenant stylesheet the same way
+    # (#9132): theme.custom_css is admin-set group config, never visitor
+    # input, and the challenge is the tenant's own page.
+    ("bouncer_challenge.html", "custom_css|safe"),
     # _auth_context normalizes the decoy accent to six-digit hex too.
     ("bouncer_decoy.html", "accent_color"),
 }

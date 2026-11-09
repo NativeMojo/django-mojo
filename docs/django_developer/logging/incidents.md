@@ -307,8 +307,11 @@ never receipt metadata strings, samples, notes, or an LLM — and each is
 validated fail-closed: canonicalized, refused when non-global
 (private/loopback/link-local/multicast/reserved), whitelisted, or inside
 `MOJOSEC_PROTECTED_CIDRS` / `MOJOSEC_TRUSTED_PROXY_CIDRS` (a malformed CIDR
-list refuses **every** target — uncertainty stops enforcement). Protected
-targets are recorded as skipped rows, never silently dropped.
+list refuses **every** target — uncertainty stops enforcement). Both settings
+take a list or a comma-separated string of IPv4 CIDRs. Protected
+targets are recorded as skipped rows, never silently dropped. The same check
+guards every other block path and is re-run at execution; see
+[Target safety](../deploy/firewall.md#target-safety).
 
 The lifecycle is `proposed → approved|auto_approved → executing →
 executed|failed → expired|reversed` (+ `rejected`), with one open
@@ -698,6 +701,12 @@ action rejects them and `sync()` no-ops for them even if the flag is
 force-set, so the entire Tor exit list / blocklist.de list can never be
 pushed into the fleet-wide firewall.
 
+Cache-only refreshes store the IPv4 subset of a mixed-family feed and report
+the number of well-formed IPv6 entries dropped in the job log. Malformed lines
+still fail the refresh atomically, preserving the prior cache snapshot. A feed
+with IPv6 entries but no IPv4 entries is also refused and keeps the prior list.
+Kernel-bound IPSets remain strictly IPv4-only and reject IPv6 data.
+
 ### Async Jobs
 
 | Job | Type | Description |
@@ -1022,6 +1031,69 @@ Every permission denial issued by `MojoModel`'s permission system is automatical
 
 No extra code required — the dispatcher handles this automatically for all framework 401/403 paths. The 401/403 rows the dispatcher files are written by a job a moment after the response — see [Deferred reporting](#deferred-reporting--defertrue-routine-4xx); `fk_attach_denied`, `batch_row_denied` and per-row `feature_disabled` are reported directly and stay inline.
 
+### Browser reports — `POST /api/incident/event/client`
+
+Public crash and debug reports from web apps (maestro #4125), handled by
+`mojo/apps/incident/services/client_report.py`. It never raises: every
+refusal is a returned `400` / `413`, so a bad report cannot file an error
+event about itself.
+
+- **Category** must be `frontend:` plus `[a-z0-9_.:-]`, at most 64.
+- **Scope** is forced to `web`.
+- **Level** is clamped to `1..min(6, INCIDENT_LEVEL_THRESHOLD - 1)`
+  (`client_report.normalize_level`); a differing sent value is kept as
+  `claimed_level`. A crash report therefore never opens an incident by level
+  and never reaches the default LLM triage.
+- **Metadata** is allowlisted and bounded (`stack_trace`, `component_stack`,
+  `app`, `environment`, `build`, `reference`, `page_path`, `filename`,
+  `lineno`, `colno`); paths lose their query string and fragment.
+- **Identity** (`uid`, `source_ip`, `http_*`, `user_*`, `metadata.reporter`)
+  comes from the request. The group is `event_intake.trusted_group(request)`;
+  an untrusted `?group=` is kept as `claimed_group_id`.
+- **Filing** is one `report_event_suppressed(..., scope="web", window=300,
+  fail_open=False)` call: suppression key sha256(category | message[:200] |
+  first stack line | uid-or-ip). Redis down means the report is dropped.
+- **Limits:** `strict_rate_limit("incident_client_report", ip_limit=60,
+  muid_limit=20)` and a 64 KB `CONTENT_LENGTH` cap.
+
+No shipped RuleSet with a handler matches `web` / `frontend:*`, so crash
+reports land on the catch-all, which has no handler. **To be paged on crash
+reports, write a RuleSet** for category `web` (all crash reports) or a
+specific `frontend:*` category, with the handler you want.
+
+### Submitted events — `POST /api/incident/event`
+
+Any signed-in user, API key or group token may submit an event
+(`CREATE_PERMS = ["all"]`; anonymous is `401`). `Event.on_rest_handle_create`
+replaces the generic field loop for creates only (reads, the operator `pk`
+save and delete are unchanged) and calls `event_intake.submit(request)`:
+
+- **Trusted columns** are the server's: `uid` is the signed-in person or the
+  API key's linked member (`_resolve_stamp_actor`; an unlinked key files no
+  uid), `source_ip` is `request.ip`, `group` is `trusted_group(request)` (a
+  confined credential's own group, or a group the person belongs to or
+  operates as `manage_security`/`security`).
+- **Claims** are flat metadata keys: a sent `uid`, `source_ip`,
+  `country_code` or `incident` becomes `claimed_uid`, `claimed_source_ip`,
+  `claimed_country_code`, `claimed_incident_id`; an untrusted `?group=`
+  becomes `claimed_group_id`; a client metadata key the server owns
+  (`event_intake.RESERVED_METADATA_KEYS`) becomes `claimed_<key>`.
+- **`metadata.reporter`** is `safe_actor_context(request)` — the credential
+  kind and user/key ids. Account security history
+  (`GET /api/account/security-events`) excludes every row that carries it.
+- **Publication** is `event.publish(allow_default_llm=False)`, inline. The
+  claimed `level` is kept and RuleSets judge it, but a claim never spends
+  autonomous LLM triage; write a RuleSet with an LLM handler for that.
+- **Receipt** is `{"status": true, "data": {"id": n}}` — never the row,
+  whose default graph nests the shared incident.
+- **Rules** may match the claims: `claimed_uid` (int), `claimed_source_ip`
+  (str) and `claimed_group_id` (int) are in the governed writer's
+  `FIELD_SCHEMAS`; legacy rules read any flat metadata key.
+
+Any signed-in member can still submit an event that a shipped RuleSet reacts
+to (a notification, a ticket, a block). It now names the real sender and a
+`block://` handler acts only on the sender's own address.
+
 ---
 
 ## Event Fields
@@ -1033,7 +1105,7 @@ No extra code required — the dispatcher handles this automatically for all fra
 | `category` | Dot-namespaced event type: `"auth:failed"`, `"permission_denied"` |
 | `source_ip` | IP address of the originating request. `CharField(max_length=45)`, nullable — holds a full IPv6 address or `None` |
 | `hostname` | Server hostname (auto-populated from `socket.gethostname()`) |
-| `uid` | User ID associated with this event |
+| `uid` | The attributed person: the signed-in user, or an API key's linked member; `None` for an unlinked reference-mode key. Never the key's own id. A key request also stores `metadata.api_key_id` and `metadata.api_key_name` |
 | `country_code` | ISO 3166-1 alpha-2 country code (auto-populated via GeoIP) |
 | `title` | Short human-readable summary |
 | `details` | Full description, stack trace, or structured message |

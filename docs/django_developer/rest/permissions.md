@@ -14,7 +14,8 @@ on_rest_request(request, pk)
   │    DELETE  → on_rest_handle_delete(request, instance) → checks CAN_DELETE, then DELETE_PERMS → SAVE_PERMS → VIEW_PERMS on instance
   │
   └─ no pk:
-       GET    → on_rest_handle_list(request)             → checks VIEW_PERMS (system-level first, then owner/group fallback)
+       GET    → on_rest_handle_list(request)             → step 0: LIST_REQUIRES_GROUP check (400 "group required");
+                                                           then VIEW_PERMS (system-level first, then owner/group fallback)
        POST   → on_rest_handle_create(request)           → checks SAVE_PERMS → VIEW_PERMS
        POST with `batched` list (CAN_BATCH=True)
               → on_rest_handle_batch(request)            → class-level SAVE_PERMS → VIEW_PERMS gate, then a per-row
@@ -35,6 +36,7 @@ on_rest_request(request, pk)
 | `NO_REST` | `False` | Blocks all REST operations. |
 | `OWNER_FIELD` | `"user"` | FK field name pointing to the owning user. Used with `"owner"` perm. |
 | `GROUP_FIELD` | `"group"` | FK field name pointing to the owning group. May be a related path (e.g. `"original_file__group"`, `"agent__project"`). Governs detail + list + `?group=` scoping and create-time auto-assign — see [Group-Scoped Permissions](#group-scoped-permissions). |
+| `LIST_REQUIRES_GROUP` | `False` | Opt-in. A non-platform caller who lists without a resolved group gets 400 `"group required"` instead of the union of their groups. Covers count, `_stats` and downloads. For group-scoped models only. See [Requiring a group on lists](#requiring-a-group-on-lists-list_requires_group). |
 | `CREATED_BY_OWNER_FIELD` | `"user"` | FK field auto-stamped with `request.user` on create when the body omits it. Set to `None` to disable auto-stamping entirely. See "Create-time owner stamping" below. |
 | `UPDATED_BY_OWNER_FIELD` | `"modified_by"` | FK field set to `request.user` on every update. Unlike `CREATED_BY_OWNER_FIELD`, the update-path stamp always overwrites — "who last modified" is an actor fact, not a body fact. Both are skipped entirely when there is no real actor; see "When there is no real actor" below. |
 | `DENY_AI` | `False` | Shorthand — denies all assistant model access, including context attachment, regardless of verb. |
@@ -307,6 +309,72 @@ Notes:
 - A model scoped only via `GROUP_FIELD` (no direct `group` attribute) is still
   correctly confined for `ApiKey` callers; a *truly* groupless model (no `group`
   FK and no `GROUP_FIELD`) denies keys by default (see `ALLOW_API_KEY_GLOBAL`).
+
+### Requiring a group on lists (`LIST_REQUIRES_GROUP`)
+
+With no group named, a member's list is the union of every group where they
+hold the view grant, plus those groups' children; an owner list is their rows
+in every group. A model that must only ever be listed one tenant at a time opts
+out of that union:
+
+```python
+class GroupMember(models.Model, MojoModel):
+    class RestMeta:
+        LIST_REQUIRES_GROUP = True
+```
+
+For a model you don't own (a framework model such as `account.GroupMember`),
+list its label in the site setting instead — the effect is identical:
+
+```python
+REST_LIST_REQUIRES_GROUP = ["account.GroupMember"]
+```
+
+The check is **step 0** of `on_rest_handle_list`, before any permission branch,
+so the plain list, `_mode=count` and every aggregate, `_stats` and
+`download_format` all share it. It only narrows: it never sets `request.group`
+and never grants anything. A request it lets through meets exactly the
+permission checks it met before. In order:
+
+1. Flag off (no RestMeta flag, label not in the setting) → unchanged.
+2. A group is resolved (`?group=` / `?group_uuid=`, or the caller's API key)
+   → unchanged: membership, tenant and field checks run as before. Naming a
+   group never authorizes it.
+3. An ApiKey or group token → unchanged. Its group is always set; `None` means
+   its tenant is suspended, which already answers 403 with no rows.
+4. Unauthenticated → unchanged (401).
+5. A **platform caller** → unchanged (see below).
+6. Otherwise → `ValueException("group required")`: HTTP 400, no rows, no count.
+   It is a client error, not a security incident — the same request with a
+   group may be allowed. Like every 400 it still records a level-5
+   `mojo_rest_error` event.
+
+**Platform caller** mirrors `@md.requires_global_perms`: a real user, not
+key-backed and not a group token, who is a superuser or holds one of the
+model's `VIEW_PERMS` in their **global** `User.permissions`. `all`,
+`authenticated`, `owner` and `member` never count, and no GroupMember grant
+ever makes a caller platform. Session, JWT, OAuth-grant and per-user API key
+sessions act as the person and qualify; an ApiKey, a group token or a custom
+bearer identity never does. The predicate is
+`Model.rest_is_platform_list_caller(request)`.
+
+Consequences to know before turning it on:
+
+- **Parent-group admins lose the subtree view.** A member of a parent group
+  lists each child with `?group=<child>` (allowed through parent membership)
+  instead of one parent-plus-children list.
+- **Owner lists need a group too**, and with one they return the caller's own
+  rows in that group.
+- `?group=<inactive or unknown id>` resolves to no group, so it gets the same
+  400 — the two cannot be told apart.
+- **Only for group-scoped models.** The flag on a model with no `group` FK and
+  no `GROUP_FIELD` fails closed: every non-platform list is refused, and the
+  framework logs the misconfiguration once.
+- **Custom list endpoints** that build their own querysets are not covered.
+  They can call `Model.rest_check_list_group(request)` themselves.
+- The assistant's `query_model`, `aggregate_model` and `export_data` take no
+  group, so they refuse a flagged model for a non-platform caller rather than
+  return the union.
 
 ## Delete Gating
 

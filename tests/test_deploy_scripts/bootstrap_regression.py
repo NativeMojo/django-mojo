@@ -6,12 +6,15 @@ then deliberately locates the post-deploy body from that candidate version.
 """
 
 import os
+import json
 import shutil
 import stat
 import subprocess
 import sys
 import tempfile
 import time
+import uuid
+import hashlib
 
 from testit import helpers as th
 
@@ -66,14 +69,19 @@ def test_project_scripts_export_without_django_bootstrap(opts):
                                "the transaction must never need Django to report or roll back")
 
 
-@th.django_unit_test()
-def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
-    import mojo
+class ApiActivation:
+    """A stubbed API-node activation of the packaged post_deploy.sh.
 
-    repo = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
-    source = os.path.join(
-        repo, "mojo", "deploy", "project_scripts", "post_deploy.sh")
-    with tempfile.TemporaryDirectory() as root:
+    Fake /etc trees, a command log written by every stubbed binary (python3,
+    systemctl, curl, sudo, ...), and the root transaction state. Tests seed
+    extra files under `cron_etc` etc. before calling `run()`."""
+
+    def __init__(self, root):
+        import mojo
+
+        repo = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
+        source = os.path.join(
+            repo, "mojo", "deploy", "project_scripts", "post_deploy.sh")
         project = os.path.join(root, "project")
         stubs = os.path.join(root, "bin")
         nginx_etc = os.path.join(root, "nginx")
@@ -189,8 +197,47 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
                 ("started_at", "1")):
             with open(os.path.join(active, name), "w") as handle:
                 handle.write(value + "\n")
-        argv = ["bash", os.path.join(project, "aws", "post_deploy.sh"),
-                "--activate", "--node-type", "api", "--state", active]
+        self.root = root
+        self.project = project
+        self.stubs = stubs
+        self.nginx_etc = nginx_etc
+        self.systemd_etc = systemd_etc
+        self.cron_etc = cron_etc
+        self.command_log = command_log
+        self.environment = environment
+        self.active = active
+        self.sentinel = sentinel
+        self.jobman_wrapper = jobman_wrapper
+
+    def argv(self, action="--activate"):
+        return ["bash", os.path.join(self.project, "aws", "post_deploy.sh"),
+                action, "--node-type", "api", "--state", self.active]
+
+    def run(self, action="--activate", env=None):
+        return subprocess.run(
+            self.argv(action), env=env or self.environment,
+            capture_output=True, text=True, timeout=30)
+
+    def commands(self):
+        if not os.path.exists(self.command_log):
+            return ""
+        with open(self.command_log) as handle:
+            return handle.read()
+
+    def clear_commands(self):
+        with open(self.command_log, "w"):
+            pass
+
+
+@th.django_unit_test()
+def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
+    with tempfile.TemporaryDirectory() as root:
+        h = ApiActivation(root)
+        project, stubs, nginx_etc, cron_etc = (
+            h.project, h.stubs, h.nginx_etc, h.cron_etc)
+        command_log, environment, active, sentinel, jobman_wrapper = (
+            h.command_log, h.environment, h.active, h.sentinel, h.jobman_wrapper)
+        argv = h.argv()
         done = subprocess.run(
             argv, env=environment, capture_output=True, text=True, timeout=30)
         th.assert_eq(done.returncode, 0, done.stderr)
@@ -270,6 +317,81 @@ def test_post_deploy_has_only_nginx_and_exact_200_release_gates(opts):
             argv, env=redirect_env, capture_output=True, text=True, timeout=30)
         th.assert_true(redirect.returncode != 0,
                        "a redirect must not pass as a live candidate API")
+
+
+@th.django_unit_test()
+def test_post_deploy_retires_stale_project_cron_and_restores_on_rollback(opts):
+    """#9757: a /etc/cron.d file that names the project path but is not in
+    the rendered contract (the retired 2_mojo_cron) is swept on activation,
+    with rollback; unrelated, prefix-only and symlinked entries survive; and
+    the running scheduler is stopped only after the probe accepted the API."""
+    with tempfile.TemporaryDirectory() as root:
+        h = ApiActivation(root)
+        stale = os.path.join(h.cron_etc, "2_mojo_cron")
+        stale_body = ("SHELL=/bin/bash\n* * * * * www %s/bin/cron.py --run 2>/dev/null\n"
+                      % h.project)
+        survivors = {
+            "0hourly": "1 * * * * root run-parts /etc/cron.hourly\n",
+            "other_project": "* * * * * root %s-admin/bin/x\n" % h.project,
+            "other_tree": "* * * * * root %s2/bin/cron.py --run\n" % h.project,
+        }
+        with open(stale, "w") as handle:
+            handle.write(stale_body)
+        for name, body in survivors.items():
+            with open(os.path.join(h.cron_etc, name), "w") as handle:
+                handle.write(body)
+        linked = os.path.join(h.cron_etc, "linked")
+        os.symlink(stale, linked)
+
+        done = h.run()
+        th.assert_eq(done.returncode, 0, done.stderr)
+        th.assert_true(not os.path.exists(stale),
+                       "the retired per-minute cron naming the project path must be swept")
+        th.assert_in("retired stale project cron 2_mojo_cron", done.stdout,
+                     "the sweep must say what it removed")
+        th.assert_true("bin/cron.py" not in done.stdout,
+                       "the sweep logs the file name only — a cron line may carry a credential")
+        for name, body in survivors.items():
+            path = os.path.join(h.cron_etc, name)
+            th.assert_true(os.path.isfile(path), f"{name} must survive the sweep")
+            with open(path) as handle:
+                th.assert_eq(handle.read(), body, f"{name} must be untouched")
+        th.assert_true(os.path.islink(linked),
+                       "symlinks are never swept — only regular files it can snapshot")
+        th.assert_true(os.path.isfile(os.path.join(h.cron_etc, "mojo")),
+                       "the rendered contract file is installed, not swept")
+
+        commands = h.commands()
+        stop = ("python3 -E -P -m mojo.deploy.jobman --root %s stop scheduler --grace 2"
+                % h.project)
+        th.assert_in(stop, commands,
+                     "activation must retire the running scheduler so the ticking "
+                     "replacement starts on the next jobs cron tick")
+        th.assert_true(commands.index("curl -ksS") < commands.index(stop),
+                       "the scheduler is retired only after the API probe passed")
+        th.assert_true(commands.rstrip().splitlines()[-1].startswith(stop),
+                       "retiring the scheduler is the last activation command")
+
+        h.clear_commands()
+        with open(stale, "w") as handle:
+            handle.write(stale_body)
+        failed_env = h.environment.copy()
+        failed_env["CURL_CODE"] = "500"
+        failed = h.run(env=failed_env)
+        th.assert_true(failed.returncode != 0,
+                       "a candidate that fails the probe must not activate")
+        th.assert_true(stop not in h.commands(),
+                       "a failed activation must leave the old scheduler running")
+        th.assert_true(os.path.isfile(stale),
+                       "a failed activation must leave the old cron entry in place")
+        os.remove(stale)
+
+        rolled_back = h.run("--rollback-candidate")
+        th.assert_eq(rolled_back.returncode, 0, rolled_back.stderr)
+        th.assert_true(os.path.isfile(stale), "rollback must restore the swept cron file")
+        with open(stale) as handle:
+            th.assert_eq(handle.read(), stale_body,
+                         "the restored cron file must be byte-identical")
 
 
 @th.django_unit_test()
@@ -636,6 +758,38 @@ def test_code_node_runs_only_common_checkout_and_declared_dependencies(opts):
             failed.stderr,
             "the rollback result did not retain its fixed failure phase")
 
+        # #3428: the transaction marks where recovery starts, once, so the
+        # launcher's bounded replay keeps the cause written just before it.
+        th.assert_true("; recovering" not in done.stderr,
+                       "a successful deployment wrote a recovery line")
+        th.assert_eq(
+            failed.stderr.count("Deployment failed during candidate_activation; recovering"),
+            1, "rollback did not mark where recovery began exactly once")
+        git("remote", "set-url", "origin", os.path.join(root, "missing-origin.git"))
+        unreachable = subprocess.run(
+            ["bash", update, "--sha", candidate, "--framework", "1.17.2",
+             "--deployment", "55555555-5555-4555-8555-555555555555",
+             "--node-type", "code"],
+            env=environment, capture_output=True, text=True, timeout=30)
+        git("remote", "set-url", "origin", origin)
+        th.assert_true(unreachable.returncode != 0,
+                       "a failed candidate fetch reported success")
+        lines = unreachable.stderr.splitlines()
+        fatal = [index for index, line in enumerate(lines) if line.startswith("fatal:")]
+        marker = "Deployment failed during candidate_checkout; recovering"
+        summary = "Deployment failed during candidate_checkout; rollback completed"
+        th.assert_true(fatal, "Git's fetch error did not reach stderr")
+        th.assert_eq(lines.count(marker), 1,
+                     "the fetch failure did not mark recovery exactly once")
+        th.assert_in(summary, lines, "the fetch failure lost its rollback outcome")
+        th.assert_true(fatal[-1] < lines.index(marker) < lines.index(summary),
+                       "the cause, recovery line and outcome are out of order")
+        th.assert_eq(git("rev-parse", "HEAD"), previous,
+                     "a failed candidate fetch moved the checkout")
+        th.assert_true(not os.path.exists(os.path.join(
+            environment["MOJO_DEPLOY_STATE_ROOT"], "active")),
+            "a failed candidate fetch retained an active transaction")
+
         unrecovered_env = environment.copy()
         unrecovered_env["FAIL_PUBLICATION_ALWAYS"] = "1"
         unrecovered = subprocess.run(
@@ -770,53 +924,95 @@ def test_update_enters_one_bounded_transient_unit_before_mutation(opts):
                        "the oneshot unit retained systemd's ignored runtime property")
 
 
-@th.django_unit_test()
-def test_update_replays_only_the_failed_transient_unit_tail(opts):
+_REPLAY_HEADER = "Deployment transaction failed; recent journal follows:"
+
+
+def _replay_failed_unit(root, rows, **extra_env):
+    """Run the launcher against a stub journal and return its result.
+
+    ``rows`` are ``(transport, message)`` pairs, oldest first. The stub
+    journalctl applies the ``_TRANSPORT=`` match and ``--lines=N`` the way the
+    real one does (match first, then the last N entries), so a filter the
+    launcher forgets lets the noise through for the real reason.
+    """
     import mojo
 
     repo = os.path.dirname(os.path.dirname(os.path.abspath(mojo.__file__)))
     update = os.path.join(repo, "mojo", "deploy", "project_scripts", "update.sh")
+    stubs = os.path.join(root, "bin")
+    os.makedirs(stubs, exist_ok=True)
+    fixture = os.path.join(root, "journal-fixture")
+    with open(fixture, "w") as handle:
+        for transport, message in rows:
+            handle.write("%s\t%s\n" % (transport, message))
+    _write_executable(
+        os.path.join(stubs, "id"),
+        "[ \"${1:-}\" != -u ] || { printf '0\\n'; exit 0; }\n"
+        "exec /usr/bin/id \"$@\"\n")
+    _write_executable(
+        os.path.join(stubs, "systemd-run"),
+        "printf '%s\\n' \"$*\" >> \"$SYSTEMD_LOG\"\n"
+        "exit \"${SYSTEMD_RC:-0}\"\n")
+    _write_executable(
+        os.path.join(stubs, "journalctl"),
+        "printf '%s\\n' \"$*\" >> \"$JOURNAL_LOG\"\n"
+        "if [ \"${JOURNAL_RC:-0}\" != 0 ]; then\n"
+        "  printf 'journalctl unavailable\\n' >&2\n"
+        "  exit \"$JOURNAL_RC\"\n"
+        "fi\n"
+        "transport=''; lines=''\n"
+        "for arg in \"$@\"; do\n"
+        "  case \"$arg\" in\n"
+        "    _TRANSPORT=*) transport=\"${arg#_TRANSPORT=}\" ;;\n"
+        "    --lines=*) lines=\"${arg#--lines=}\" ;;\n"
+        "  esac\n"
+        "done\n"
+        "awk -F '\\t' -v t=\"$transport\" "
+        "'t == \"\" || $1 == t { sub(/^[^\\t]*\\t/, \"\"); print }' \"$JOURNAL_FIXTURE\" |\n"
+        "  if [ -n \"$lines\" ]; then tail -n \"$lines\"; else cat; fi\n")
+    environment = os.environ.copy()
+    environment.update({
+        "PATH": stubs + ":/usr/bin:/bin",
+        "SYSTEMD_LOG": os.path.join(root, "systemd-run"),
+        "JOURNAL_LOG": os.path.join(root, "journalctl"),
+        "JOURNAL_FIXTURE": fixture,
+        "PROJ_PATH": os.path.join(root, "must-not-be-touched"),
+        "SYSTEMD_RC": "23",
+    })
+    environment.update(extra_env)
+    done = subprocess.run(
+        ["bash", update, "--sha", "a" * 40, "--framework", "1.17.2",
+         "--deployment", "11111111-1111-4111-8111-111111111111",
+         "--node-type", "sites"],
+        env=environment, capture_output=True, text=True, timeout=30)
+    journal_command = None
+    if os.path.exists(environment["JOURNAL_LOG"]):
+        with open(environment["JOURNAL_LOG"]) as handle:
+            journal_command = handle.read().strip()
+        os.unlink(environment["JOURNAL_LOG"])
+    return done, journal_command
+
+
+def _sudo_noise(count):
+    rows = []
+    for number in range(count):
+        rows.append(("syslog", "root : PWD=/opt/app ; USER=app ; "
+                     "COMMAND=/usr/bin/git fetch --prune origin %d" % number))
+        rows.append(("syslog", "pam_unix(sudo:session): session opened for "
+                     "user app(uid=1001) by (uid=0)"))
+        rows.append(("syslog", "pam_unix(sudo:session): session closed for user app"))
+    return rows
+
+
+@th.django_unit_test()
+def test_update_replays_only_the_failed_transient_unit_tail(opts):
     deployment = "11111111-1111-4111-8111-111111111111"
     unit = "django-mojo-deploy-%s.service" % deployment
+    rows = [("stdout", "embedded detail one"), ("stdout", "embedded detail two"),
+            ("stdout", "")]
+    rows += [("stdout", "transaction record %s" % number) for number in range(4, 13)]
     with tempfile.TemporaryDirectory() as root:
-        stubs = os.path.join(root, "bin")
-        os.makedirs(stubs)
-        systemd_log = os.path.join(root, "systemd-run")
-        journal_log = os.path.join(root, "journalctl")
-        _write_executable(
-            os.path.join(stubs, "id"),
-            "[ \"${1:-}\" != -u ] || { printf '0\\n'; exit 0; }\n"
-            "exec /usr/bin/id \"$@\"\n")
-        _write_executable(
-            os.path.join(stubs, "systemd-run"),
-            "printf '%s\\n' \"$*\" >> \"$SYSTEMD_LOG\"\n"
-            "exit \"${SYSTEMD_RC:-0}\"\n")
-        _write_executable(
-            os.path.join(stubs, "journalctl"),
-            "printf '%s\\n' \"$*\" >> \"$JOURNAL_LOG\"\n"
-            "if [ \"${JOURNAL_RC:-0}\" != 0 ]; then\n"
-            "  printf 'journalctl unavailable\\n' >&2\n"
-            "  exit \"$JOURNAL_RC\"\n"
-            "fi\n"
-            "printf 'embedded detail one\\nembedded detail two\\n'\n"
-            "for number in 4 5 6 7 8 9 10 11 12; do\n"
-            "  printf 'transaction record %s\\n' \"$number\"\n"
-            "done\n")
-        environment = os.environ.copy()
-        environment.update({
-            "PATH": stubs + ":/usr/bin:/bin",
-            "SYSTEMD_LOG": systemd_log,
-            "JOURNAL_LOG": journal_log,
-            "PROJ_PATH": os.path.join(root, "must-not-be-touched"),
-            "SYSTEMD_RC": "23",
-        })
-        argv = [
-            "bash", update, "--sha", "a" * 40, "--framework", "1.17.2",
-            "--deployment", deployment, "--node-type", "sites",
-        ]
-
-        failed = subprocess.run(
-            argv, env=environment, capture_output=True, text=True, timeout=30)
+        failed, journal_command = _replay_failed_unit(root, rows)
 
         th.assert_eq(failed.returncode, 23,
                      "journal replay replaced the systemd-run failure status")
@@ -825,18 +1021,16 @@ def test_update_replays_only_the_failed_transient_unit_tail(opts):
         failed_lines = failed.stderr.splitlines()
         th.assert_eq(len(failed_lines), 10,
                      "failure replay exceeded one summary plus nine lines")
-        th.assert_eq(
-            failed_lines[0],
-            "Deployment transaction failed; recent journal follows:",
-            "the fixed failure summary changed")
+        th.assert_eq(failed_lines[0], _REPLAY_HEADER,
+                     "the fixed failure summary changed")
         th.assert_eq(
             failed_lines[1:],
             ["transaction record %s" % number for number in range(4, 13)],
-            "the launcher did not replay the bounded recent journal tail")
-        with open(journal_log) as handle:
-            journal_command = handle.read().strip()
+            "without a recovery line the launcher must replay the last nine lines")
         th.assert_in("_SYSTEMD_UNIT=%s" % unit, journal_command,
                      "journal replay was not restricted to the failed unit")
+        th.assert_in("_TRANSPORT=stdout", journal_command,
+                     "journal replay was not restricted to the unit's own output")
         th.assert_in("--boot=0", journal_command,
                      "journal replay was not restricted to the current boot")
         th.assert_in("--output=cat", journal_command,
@@ -845,28 +1039,159 @@ def test_update_replays_only_the_failed_transient_unit_tail(opts):
                      "journal replay may invoke an interactive pager")
         th.assert_in("--quiet", journal_command,
                      "journal replay may emit journalctl notices")
-        th.assert_in("--lines=9", journal_command,
-                     "journal replay was not bounded to nine records")
+        th.assert_true("--lines" not in journal_command,
+                       "journal replay truncated the unit's output before the "
+                       "excerpt was chosen")
 
-        os.unlink(journal_log)
-        unavailable_environment = environment.copy()
-        unavailable_environment["JOURNAL_RC"] = "1"
-        unavailable = subprocess.run(
-            argv, env=unavailable_environment, capture_output=True,
-            text=True, timeout=30)
+        unavailable, _ = _replay_failed_unit(root, rows, JOURNAL_RC="1")
         th.assert_eq(unavailable.returncode, 23,
                      "missing journald replaced the transaction failure status")
-        th.assert_eq(
-            unavailable.stderr,
-            "Deployment transaction failed; recent journal follows:\n",
-            "journalctl's own diagnostic escaped the fixed safe summary")
+        th.assert_eq(unavailable.stderr, _REPLAY_HEADER + "\n",
+                     "journalctl's own diagnostic escaped the fixed safe summary")
 
-        os.unlink(journal_log)
-        successful_environment = environment.copy()
-        successful_environment["SYSTEMD_RC"] = "0"
-        successful = subprocess.run(
-            argv, env=successful_environment, capture_output=True,
-            text=True, timeout=30)
+        successful, journal_command = _replay_failed_unit(root, rows, SYSTEMD_RC="0")
         th.assert_eq(successful.returncode, 0, successful.stderr)
-        th.assert_true(not os.path.exists(journal_log),
+        th.assert_true(journal_command is None,
                        "successful transaction queried journald")
+
+
+@th.django_unit_test()
+def test_update_replay_keeps_git_error_behind_sudo_noise(opts):
+    """#3428: sudo and PAM records must not push Git's error out of the tail."""
+    rows = [
+        ("stdout", "[09:14:02] Fetching candidate"),
+        ("stdout", "Host key verification failed."),
+        ("stdout", "fatal: Could not read from remote repository."),
+        ("stdout", ""),
+        ("stdout", "Please make sure you have the correct access rights"),
+        ("stdout", "and the repository exists."),
+    ]
+    rows += _sudo_noise(4)
+    rows.append(("stdout", "Deployment failed during candidate_checkout; rollback completed"))
+    rows += _sudo_noise(2)
+    with tempfile.TemporaryDirectory() as root:
+        failed, _ = _replay_failed_unit(root, rows)
+    th.assert_eq(failed.returncode, 23, failed.stderr)
+    lines = failed.stderr.splitlines()
+    th.assert_true(len(lines) <= 10, "failure replay exceeded ten lines")
+    th.assert_eq(lines[0], _REPLAY_HEADER, "the fixed failure summary changed")
+    th.assert_in("Host key verification failed.", lines,
+                 "sudo/PAM records displaced Git's host-key error")
+    th.assert_in("fatal: Could not read from remote repository.", lines,
+                 "sudo/PAM records displaced Git's fatal fetch error")
+    th.assert_true(not any("pam_unix" in line or "COMMAND=" in line for line in lines),
+                   "sudo/PAM syslog records reached the diagnosis")
+
+
+@th.django_unit_test()
+def test_update_replay_keeps_error_before_long_recovery(opts):
+    """#3428: rollback output after the recovery line cannot hide the cause."""
+    rows = [("stdout", "Collecting candidate-dep-%d" % number) for number in range(12)]
+    rows += [
+        ("stdout", "ERROR: Could not find a version that satisfies the requirement candidate-dep==9"),
+        ("stdout", "ERROR: No matching distribution found for candidate-dep==9"),
+        ("stdout", "Deployment failed during dependency_install; recovering"),
+        ("stdout", "[09:20:11] Rolling back candidate lifecycle"),
+        ("stdout", "[09:20:11] Restoring " + "b" * 40),
+    ]
+    rows += _sudo_noise(3)
+    rows += [("stdout", "Requirement already satisfied: previous-dep-%d" % number)
+             for number in range(40)]
+    rows += [
+        ("stdout", "[09:20:40] Rollback completed"),
+        ("stdout", "Deployment failed during dependency_install; rollback completed"),
+    ]
+    with tempfile.TemporaryDirectory() as root:
+        failed, _ = _replay_failed_unit(root, rows)
+    th.assert_eq(failed.returncode, 23, failed.stderr)
+    lines = failed.stderr.splitlines()
+    th.assert_true(len(lines) <= 10, "failure replay exceeded ten lines")
+    th.assert_eq(lines[0], _REPLAY_HEADER, "the fixed failure summary changed")
+    for expected in (
+            "ERROR: Could not find a version that satisfies the requirement candidate-dep==9",
+            "ERROR: No matching distribution found for candidate-dep==9",
+            "Deployment failed during dependency_install; recovering",
+            "Deployment failed during dependency_install; rollback completed"):
+        th.assert_in(expected, lines, "the diagnosis lost: " + expected)
+    th.assert_true(lines.index("Deployment failed during dependency_install; recovering")
+                   < lines.index("Deployment failed during dependency_install; rollback completed"),
+                   "the excerpt is out of write order")
+
+
+@th.django_unit_test()
+def test_update_replay_is_bounded_and_last_recovery_line_wins(opts):
+    """#3428: the excerpt stays bounded and a forged early marker loses."""
+    rows = [("stdout", "Deployment failed during candidate_checkout; recovering")]
+    rows += [("stdout", "forged neighbour %d" % number) for number in range(30)]
+    rows += [("stdout", "real cause one"), ("stdout", "real cause two"),
+             ("stdout", "Deployment failed during framework_install; recovering")]
+    rows += [("stdout", "pip output %d" % number) for number in range(4000)]
+    rows += _sudo_noise(300)
+    rows += [("stdout", "Deployment failed during framework_install; rollback completed")]
+    with tempfile.TemporaryDirectory() as root:
+        failed, journal_command = _replay_failed_unit(root, rows)
+    th.assert_eq(failed.returncode, 23, failed.stderr)
+    lines = failed.stderr.splitlines()
+    th.assert_true(len(lines) <= 10, "failure replay exceeded ten lines")
+    th.assert_eq(lines[0], _REPLAY_HEADER, "the fixed failure summary changed")
+    th.assert_in("Deployment failed during framework_install; rollback completed", lines,
+                 "the recovery outcome was lost")
+    th.assert_in("real cause one", lines, "a forged early marker displaced the cause")
+    th.assert_in("real cause two", lines, "a forged early marker displaced the cause")
+    th.assert_in("Deployment failed during framework_install; recovering", lines,
+                 "the last recovery line was lost")
+    th.assert_true(
+        "Deployment failed during candidate_checkout; recovering" not in lines,
+        "a forged early marker anchored the excerpt")
+    th.assert_true("--lines" not in journal_command,
+                   "journal replay truncated the unit's output before the "
+                   "excerpt was chosen")
+
+
+@th.django_unit_test()
+def test_update_replay_keeps_cause_however_much_recovery_prints(opts):
+    """#3428: no recovery volume pushes the cause out (Brenda's review 174763)."""
+    for recovery_rows in (1998, 2000, 4000, 20000):
+        rows = [("stdout", "Host key verification failed."),
+                ("stdout", "fatal: Could not read from remote repository."),
+                ("stdout", "Deployment failed during candidate_checkout; recovering")]
+        rows += [("stdout", "recovery output %d" % number)
+                 for number in range(recovery_rows)]
+        rows += [("stdout", "Deployment failed during candidate_checkout; rollback completed")]
+        with tempfile.TemporaryDirectory() as root:
+            failed, _ = _replay_failed_unit(root, rows)
+        th.assert_eq(failed.returncode, 23, failed.stderr)
+        lines = failed.stderr.splitlines()
+        th.assert_true(len(lines) <= 10, "failure replay exceeded ten lines")
+        th.assert_eq(lines[0], _REPLAY_HEADER, "the fixed failure summary changed")
+        for expected in (
+                "Host key verification failed.",
+                "fatal: Could not read from remote repository.",
+                "Deployment failed during candidate_checkout; recovering",
+                "Deployment failed during candidate_checkout; rollback completed"):
+            th.assert_in(expected, lines, "%d recovery lines pushed out: %s"
+                         % (recovery_rows, expected))
+
+
+@th.django_unit_test()
+def test_update_replay_is_redacted_by_stderr_tail(opts):
+    """#3428: more real subprocess output still passes the durable sanitizer."""
+    from mojo.apps.edge.services import deploy
+
+    rows = [
+        ("stdout", "fatal: unable to access 'https://deployer:ghp_Z9x8C7v6B5n4M3a2S1d0F9g8H7j6K5l4P3o2@github.com/acme/app.git/'"),
+        ("stdout", "password=hunter2-Very-Secret-Value-881"),
+        ("stdout", "Deployment failed during candidate_checkout; recovering"),
+        ("stdout", "Deployment failed during candidate_checkout; rollback completed"),
+    ]
+    with tempfile.TemporaryDirectory() as root:
+        failed, _ = _replay_failed_unit(root, rows)
+    stored = deploy.stderr_tail(failed.stderr)
+    th.assert_true(len(stored) <= 10, "the durable tail exceeded ten entries")
+    joined = "\n".join(str(line) for line in stored)
+    th.assert_true("ghp_Z9x8C7v6B5n4M3a2S1d0F9g8H7j6K5l4P3o2" not in joined,
+                   "a URL credential survived the durable sanitizer")
+    th.assert_true("hunter2-Very-Secret-Value-881" not in joined,
+                   "a password survived the durable sanitizer")
+    th.assert_in("Deployment failed during candidate_checkout; rollback completed", joined,
+                 "the sanitizer dropped the recovery outcome")

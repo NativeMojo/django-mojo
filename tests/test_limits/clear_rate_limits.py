@@ -23,6 +23,25 @@ def _redis():
     return get_connection()
 
 
+class _RedisCalls:
+    """Observe only the connection argument passed to this one operation.
+
+    get_connection() is shared by parallel test threads. Mutating its methods
+    would capture unrelated logins, so delegate through a private proxy while
+    retaining the real Redis backend and its scan/delete behavior.
+    """
+    def __init__(self, backend):
+        self.backend = backend
+        self.scans = []
+
+    def __getattr__(self, name):
+        return getattr(self.backend, name)
+
+    def scan_iter(self, *args, **kwargs):
+        self.scans.append((args, dict(kwargs)))
+        return self.backend.scan_iter(*args, **kwargs)
+
+
 @th.django_unit_test()
 def test_literal_pattern_deletes_without_scanning(opts):
     """``srl:<key>:ip:<ip>`` has no glob character — it IS the key name, so
@@ -33,19 +52,9 @@ def test_literal_pattern_deletes_without_scanning(opts):
         return
     key = f"srl:testit-literal-{_uuid.uuid4().hex[:8]}"
     r.set(key, 1)
-    calls = []
-    real_scan = r.scan_iter
-
-    def spy(*a, **kw):
-        calls.append((a, kw))
-        return real_scan(*a, **kw)
-
-    r.scan_iter = spy
-    try:
-        assert _delete_matching(r, key) == 1, "the literal key must be deleted"
-    finally:
-        r.scan_iter = real_scan
-    assert calls == [], f"a literal pattern must not SCAN, got {calls}"
+    observed = _RedisCalls(r)
+    assert _delete_matching(observed, key) == 1, "the literal key must be deleted"
+    assert observed.scans == [], f"a literal pattern must not SCAN, got {observed.scans}"
     assert not r.exists(key), "the key must be gone"
     assert _delete_matching(r, key) == 0, "a second clear reports nothing deleted"
 
@@ -65,7 +74,7 @@ def test_glob_pattern_sweeps_and_spares_neighbours(opts):
     try:
         deleted = _delete_matching(r, f"rl:login:ip:testit-{tag}:*")
         assert deleted == 3, f"every window key must be swept, got {deleted}"
-        assert not any(r.exists(k) for k in mine)
+        assert not any(r.exists(k) for k in mine), "every matching window key must be deleted"
         assert r.exists(other), "a neighbouring identity must be untouched"
     finally:
         r.delete(other, *mine)
@@ -79,18 +88,17 @@ def test_glob_sweep_asks_redis_for_a_real_batch(opts):
     r = _redis()
     if r is None:
         return
-    seen = {}
-    real_scan = r.scan_iter
-
-    def spy(*a, **kw):
-        seen.update(kw)
-        return real_scan(*a, **kw)
-
-    r.scan_iter = spy
-    try:
-        _delete_matching(r, f"rl:login:ip:testit-{_uuid.uuid4().hex[:8]}:*")
-    finally:
-        r.scan_iter = real_scan
+    observed = _RedisCalls(r)
+    # A parallel login can scan the shared connection while this observer is
+    # alive. It must not be mistaken for this operation's scan or overwrite
+    # the recorded COUNT/match arguments.
+    list(r.scan_iter(match=f"rl:login:muid:testit-unrelated-{_uuid.uuid4().hex[:8]}:*", count=100))
+    assert observed.scans == [], "a shared-client scan must not contaminate a per-operation observer"
+    pattern = f"rl:login:ip:testit-{_uuid.uuid4().hex[:8]}:*"
+    _delete_matching(observed, pattern)
+    assert len(observed.scans) == 1, f"one glob sweep must call scan_iter once, got {observed.scans}"
+    args, seen = observed.scans[0]
+    assert args == () and seen.get("match") == pattern, "the observer must capture exactly this operation's key pattern"
     assert seen.get("count") == _SCAN_COUNT, (
         f"the sweep must pass an explicit COUNT (redis-py defaults to 10 — "
         f"thousands of round trips on a large db), got {seen}")

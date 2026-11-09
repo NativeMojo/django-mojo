@@ -207,3 +207,29 @@ def test_role_clear_is_root_only_anchored_and_idempotent(opts):
                        "clearing a symlink must preserve its destination")
         th.assert_true(role.clear(path, required_uid=uid),
                        "repeated clearing of missing authority must succeed")
+
+
+@th.django_unit_test()
+def test_role_seals_profile_and_preserves_legacy_profile(opts):
+    from mojo.deploy import fleet_config_role as role
+    with tempfile.TemporaryDirectory() as directory:
+        path = os.path.join(directory, "role.json")
+        uid = os.geteuid()
+        for profile in role.REQUEST_PROFILES:
+            th.assert_true(role.write(REVISION, DIGEST, True, path, required_uid=uid, request_service_profile=profile),
+                           "Root config-sync must seal each reviewed fixed profile")
+            document = role.read(REVISION, DIGEST, path, required_uid=uid)
+            th.assert_eq(document["request_service_profile"], profile, "Sealed authority must retain the selected socket profile")
+        for invalid in (None, "", "unknown", "/run/mojo/asgi.sock", [], 1):
+            th.assert_true(not role.write(REVISION, DIGEST, False, path, required_uid=uid, request_service_profile=invalid),
+                           "Malformed explicit profiles cannot authorize a worker exemption")
+        legacy = {"revision": REVISION, "digest": DIGEST, "request_service_required": True, "installed_at": 100.0}
+        with open(path, "w") as handle:
+            json.dump(legacy, handle)
+        th.assert_eq(role.read(REVISION, DIGEST, path, required_uid=uid)["request_service_profile"], "opt_api_asgi_v1",
+                     "Existing sealed role files must retain the original opt-api socket")
+        for invalid in (None, "unknown", []):
+            with open(path, "w") as handle:
+                json.dump(dict(legacy, request_service_profile=invalid), handle)
+            th.assert_eq(role.read(REVISION, DIGEST, path, required_uid=uid), None,
+                         "Malformed explicit profiles must not silently fall back to legacy transport")

@@ -66,7 +66,7 @@ shorten(url="", file=None, rendition=None, source="", expire_days=3, expire_hour
 | `bot_passthrough` | `False` | Skip bot detection and OG preview — always redirect. Use for transactional links. |
 | `is_protected` | `False` | Protected links are not deleted by the automatic cleanup job. |
 | `user` | `None` | User who created the link. |
-| `group` | `None` | Group scope for permissions. |
+| `group` | `None` | Group scope for permissions. `shorten()` does not check that the creator belongs to it; the REST quick-create route does. |
 | `base_url` | `None` | Override base URL. Default: `SHORTLINK_BASE_URL` or `BASE_URL` from settings. |
 
 Both `expire_days` and `expire_hours` are bounded by `mojo.apps.shortlink.models.MAX_EXPIRE_TOTAL_HOURS` (876000 — roughly 100 years, a module constant, not a `ShortLink` attribute), checked **per component and on the sum**, so `expire_days=1, expire_hours=-24` is rejected rather than quietly collapsing to "never expires". Out-of-range and negative values raise `ValueException`, which the dispatcher turns into a `400`; previously they either overflowed `timedelta` into a `500` or were silently accepted.
@@ -263,6 +263,32 @@ Dynamic resolution (`resolve_file=True`, the default) calls `file.get_direct_dow
 
 Snapshot mode (`resolve_file=False`) captures the URL once at creation — useful when the URL is stable and presigning is not required.
 
+`shorten()` itself checks nothing: the caller decides who may share the file.
+
+### Quick create route
+
+`POST /api/shortlink/link/create` first calls
+`require_group_access(request)` from the same module, then
+`require_create_perms(request)` (the opt-in `SHORTLINK_CREATE_PERMS` gate,
+see Settings). When a group is active,
+a person must be a member of it (directly or through a parent, active
+membership only) or hold `manage_shortlinks` globally; an API key or group
+token must be allowed that group (`identity_allows_group`). A link with no
+group is not checked. Refusal is the same 403 as below, branch
+`shortlink.group_not_member`.
+
+The route also accepts a `file` id. It resolves it with
+`mojo.apps.shortlink.services.access.shareable_file(request, raw_id)`, which
+returns the active `File` only when
+`File.rest_check_permission(request, "SAVE_PERMS", file)` allows it — the
+permission fileman's own `share` action needs (owner, `manage_files`, `files`),
+checked against the file's group, with the API-key and group-token tenant
+bounds. It restores `request.group` afterwards, so the link is stored in the
+caller's group. Every failure (missing, malformed, inactive, refused) raises the
+same `PermissionDeniedException` (403, branch `shortlink.file_unavailable`).
+The link's `user` is `_resolve_stamp_actor(request)`: the key's linked member,
+or none for an unlinked API key.
+
 ---
 
 ## Click Tracking
@@ -354,6 +380,19 @@ The cleanup job is defined in `mojo/apps/shortlink/cronjobs.py` and the worker l
 | `SHORTLINK_SITE_NAME` | `None` | Product name shown on the "link unavailable" page. Unset = no brand line. |
 | `SHORTLINK_HOME_URL` | `None` | Target of the "back to site" button on that page. Unset = no button. |
 | `BASE_URL` | `"/"` | Fallback if no shortlink-specific base setting is configured. |
+| `SHORTLINK_CREATE_PERMS` | `[]` | Opt-in. A list of permissions; when set, `POST /api/shortlink/link/create` needs one of them. Read from the settings file only (`get_static`), never the database. See below. |
+
+`SHORTLINK_CREATE_PERMS` is checked by `require_create_perms(request)` in
+`mojo.apps.shortlink.services.access`, after the group check and before the
+file check. Empty (the default) means any signed-in caller, as before. When
+set, for example `["manage_shortlinks"]`, the caller passes with the
+permission as a global grant, as a member grant in the request's group or a
+parent group, or (for an API key) in the key's own permissions. A refusal is
+the route's one 403, branch `shortlink.create_perms`. `admin` does not imply
+`manage_shortlinks`: list every permission you want to accept. It is
+file-only because group-scoped Setting rows of an unprotected key can be
+written by a group member, who could otherwise clear the gate for their own
+group.
 
 `SHORTLINK_FALLBACK_URL` was removed in 1.2.51 — see below.
 

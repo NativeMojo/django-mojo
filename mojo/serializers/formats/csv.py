@@ -3,10 +3,17 @@ import io
 from decimal import Decimal
 from datetime import datetime, date
 from django.http import StreamingHttpResponse, HttpResponse
-from django.db.models import QuerySet
+from django.db.models import Model, QuerySet
 from mojo.helpers import logit
 
 logger = logit.get_logger("csv_formatter", "csv_formatter.log")
+
+
+def _active_request():
+    """The request being served. Imported late: mojo.models.rest imports the
+    serializers package at load time."""
+    from mojo.models.rest import ACTIVE_REQUEST
+    return ACTIVE_REQUEST.get()
 
 
 class CsvFormatter:
@@ -46,6 +53,10 @@ class CsvFormatter:
         :param timezone: Timezone string for datetime localization (e.g., 'America/New_York')
         :return: HttpResponse or StreamingHttpResponse
         """
+        # Captured now: a streamed body is written after the view returns, when
+        # the request context is already gone.
+        self._viewer_request = _active_request()
+
         # Determine if we should stream based on queryset size
         should_stream = stream and queryset.count() > self.streaming_threshold
 
@@ -260,6 +271,8 @@ class CsvFormatter:
             for i, field_part in enumerate(parts):
                 if current is None:
                     return None
+                if i > 0 and self._hidden_from_viewer(current, field_part):
+                    return ""
 
                 # Check if this is a model field using get_model_field
                 field = None
@@ -310,6 +323,19 @@ class CsvFormatter:
             logger.warning(f"Error accessing nested field '{field_path}': {e}")
             return None
 
+    def _hidden_from_viewer(self, obj, field_name):
+        """True when `obj` was reached through a relation, `field_name` is one
+        of its NESTED_PRIVATE_FIELDS or NESTED_PRIVATE_LOOKUPS, and the viewer
+        may not read `obj` in full: the CSV twin of the serializer's nested
+        strip (#8648). No request (a job, the shell) hides nothing."""
+        request = getattr(self, "_viewer_request", None)
+        if request is None or not hasattr(obj, "rest_nested_full_view"):
+            return False
+        rest_meta = getattr(obj, "RestMeta", None)
+        private = set(getattr(rest_meta, "NESTED_PRIVATE_FIELDS", None) or ())
+        private |= set(getattr(rest_meta, "NESTED_PRIVATE_LOOKUPS", None) or ())
+        return field_name in private and not obj.rest_nested_full_view(request)
+
     def _process_field_value(self, value, field_name, localize=None, timezone=None):
         """
         Process field value with localization and special handling.
@@ -356,8 +382,8 @@ class CsvFormatter:
         if value is None:
             return ""
 
-        # Handle model instances
-        if hasattr(value, 'pk'):
+        # Handle model instances (an objict answers hasattr(value, 'pk'))
+        if isinstance(value, Model):
             return str(value.pk)
 
         # Handle datetime objects

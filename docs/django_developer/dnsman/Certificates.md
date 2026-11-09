@@ -62,8 +62,12 @@ the ACME/custody flow does not. The alias is authoritatively re-proved before
 `new order`; both apex/wildcard digests are published together through the
 challenge-specific hub client at the stored opaque target; propagation probes
 that target; and the durable cleanup reference is idempotently withdrawn in
-`finally`. Pending delegation is ignored. Verified/broken routing is sticky and
-never silently falls back to direct DNS.
+`finally`. Legacy `allocated` pending delegations are inert. A prepared
+`shared` request is already a routing guard: missing/revoked trust, identity
+change, incomplete connection or broken proof refuses issuance before ACME
+account/order or provider writes. Formerly verified retired tombstones continue
+to guard direct DNS until a successor verifies. See
+[shared setup](AcmeFederation.md#supported-project-setup).
 
 ### The wildcard trap
 
@@ -326,3 +330,27 @@ through inventory comparison and not a fresh API call. `wait_for_propagation`
 drops that sentinel before calling the adapter — see
 [Providers](Providers.md#change-ids-and-the-insync-gate) — so propagation still
 runs, just without the INSYNC gate for that record.
+
+## Shared-connection renewal diagnostics
+
+The [project setup Readiness v1](../../web_developer/dnsman/README.md#readiness-v1)
+keeps serving and renewal evidence separate. `certificate.material_state` is
+`available`, `missing` or `unavailable`; `serving_valid` is null when custody
+cannot be established. This is evidence of API-node custody, never proof that
+an edge host installed or served the material. Only the selected exact-profile
+row is checked, and no PEM or private key is returned by readiness.
+
+`renewal` reports the selected certificate's bounded job id/state, attempts,
+next attempt, safe error code and cleanup status. A blocked or retrying renewal
+can coexist with valid serving material. Unknown worker version is honest:
+confirm the deployment's issuance workers restarted through operator evidence.
+Poll Plan without forcing new requests. Follow `next_action` to repair trust,
+consumer identity, alias, worker or custody, then explicitly Check/Request.
+
+Shared setup uses the existing six-hour `renew_certificates` scan, certificate
+issue/renew Jobs and `certificate_updated` broadcast. It introduces no second
+scheduler or installer. A due active exact apex-plus-wildcard row renews in
+place; Connect/Check do not reset its material or renewal date. On failure,
+existing still-valid material and vhost references survive with the established
+bounded retry/backoff. The edge convergence/install path remains the authority
+for deploying the renewed material on serving hosts.

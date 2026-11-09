@@ -27,7 +27,10 @@ def lookup(phone_number):
     return PhoneNumber.lookup(phone_number)
 
 
-def send_sms(phone_number, message, metadata=None, group=None, user=None, from_number=None):
+def send_sms(phone_number, message, metadata=None, group=None, user=None, from_number=None,
+             secret=None):
+    """Send an SMS. `secret` is a code or link in `message`: it is sent, but
+    stored in the SMS log as [redacted]."""
     from .models import SMS
     # , body, to_number, metadata=None, group=None, user=None
     return SMS.send(
@@ -36,7 +39,8 @@ def send_sms(phone_number, message, metadata=None, group=None, user=None, from_n
         metadata=metadata,
         group=group,
         user=user,
-        from_number=from_number)
+        from_number=from_number,
+        secret=secret)
 
 def get_area_code_info(phone_number):
     from .services.area_codes import get_area_code_info

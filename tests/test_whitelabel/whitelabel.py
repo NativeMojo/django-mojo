@@ -183,9 +183,12 @@ def test_resolve_by_auth_domain_empty(opts):
 def test_resolve_group_by_query_param(opts):
     """_resolve_group falls back to ?group_uuid=<uuid> when hostname doesn't match."""
     from mojo.apps.account.rest.bouncer.views import _resolve_group
+    import objict
     from django.test import RequestFactory
     factory = RequestFactory()
     request = factory.get(f'/auth?group_uuid={TEST_GROUP_UUID}')
+    # The dispatcher normally sets request.DATA; a bare RequestFactory request has none
+    request.DATA = objict.objict({'group_uuid': TEST_GROUP_UUID})
     # RequestFactory doesn't set get_host to our auth_domain, so hostname won't match
     result = _resolve_group(request)
     assert_true(result is not None, "Expected group from ?group_uuid= param")
@@ -204,9 +207,11 @@ def test_resolve_group_ignores_group_int_alias(opts):
     the param works publicly.
     """
     from mojo.apps.account.rest.bouncer.views import _resolve_group
+    import objict
     from django.test import RequestFactory
     factory = RequestFactory()
     request = factory.get(f'/auth?group={TEST_GROUP_UUID}')
+    request.DATA = objict.objict({'group': TEST_GROUP_UUID})
     result = _resolve_group(request)
     assert_true(result is None,
                 f"Expected None when uuid is passed via ?group= (reserved for "
@@ -217,9 +222,11 @@ def test_resolve_group_ignores_group_int_alias(opts):
 def test_resolve_group_invalid_uuid(opts):
     """_resolve_group returns None for invalid ?group_uuid= value."""
     from mojo.apps.account.rest.bouncer.views import _resolve_group
+    import objict
     from django.test import RequestFactory
     factory = RequestFactory()
     request = factory.get('/auth?group_uuid=nonexistent-uuid')
+    request.DATA = objict.objict({'group_uuid': 'nonexistent-uuid'})
     result = _resolve_group(request)
     assert_true(result is None,
                 f"Expected None for invalid group uuid, got {result}")

@@ -72,24 +72,35 @@ class CDP:
                 return message.get("result", {})
         raise AssertionError(f"CDP command deadline expired: {method}")
 
-    def evaluate(self, expression):
-        result = self.call("Runtime.evaluate", {
+    def _evaluate_raw(self, expression):
+        return self.call("Runtime.evaluate", {
             "expression": expression, "returnByValue": True,
             "awaitPromise": True, "userGesture": True,
             # CDP defaults to bypassing unsafe-eval CSP checks. Acceptance
             # probes must exercise the page's policy, not debugger privileges.
             "allowUnsafeEvalBlockedByCSP": False,
         })
+
+    def evaluate(self, expression):
+        result = self._evaluate_raw(expression)
         assert "exceptionDetails" not in result, result.get("exceptionDetails")
         return result.get("result", {}).get("value")
 
     def wait(self, expression, label):
+        # A page that has not loaded yet (document.body still null) throws;
+        # keep polling until the deadline instead of failing at once (#8599).
         deadline = time.monotonic() + 8
+        last_error = None
         while time.monotonic() < deadline:
-            if self.evaluate(expression):
+            result = self._evaluate_raw(expression)
+            details = result.get("exceptionDetails")
+            if details:
+                last_error = (details.get("exception") or {}).get("description") or details.get("text")
+            elif result.get("result", {}).get("value"):
                 return
             time.sleep(0.05)
-        raise AssertionError(f"Chrome did not render {label} before the deadline")
+        raise AssertionError(f"Chrome did not render {label} before the deadline"
+                             + (f"; last evaluation error: {last_error}" if last_error else ""))
 
 
 def _stop(process):
@@ -255,6 +266,25 @@ def test_admin_security_real_chrome(opts):
                     lazy = next(name for name in identity["allowlist"] if name.endswith(".js") and "index-" not in name)
                     assert cdp.evaluate(f"fetch({json.dumps(root_path + 'v2/' + lazy)}).then(r=>r.status)") == 200, "protected lazy chunk unavailable"
                     assert cdp.evaluate("fetch('admin-artifact.json').then(r=>r.status)") == 404, "provenance was deliverable"
+                    # Exercise the vendored Setup route against the real passive
+                    # backend read, without discovering models or touching keys.
+                    cdp.evaluate("location.hash='/assistant/setup';true")
+                    setup_loaded = ("!!document.querySelector('#assistant-setup-title') && "
+                                    "!!document.querySelector('.assistant-setup-area code') && "
+                                    "!![...document.querySelectorAll('button')].find(b=>b.textContent==='Manage keys')")
+                    cdp.wait(setup_loaded, "Assistant Setup summary")
+                    runtime_model = cdp.evaluate("""fetch('/api/account/admin/assistant',{headers:{Authorization:'Bearer '+(sessionStorage.getItem('access_token')||localStorage.getItem('access_token'))}}).then(r=>r.json()).then(body=>body.data.model.effective||body.data.route.model||null)""")
+                    shown_model = cdp.evaluate("document.querySelector('.assistant-setup-area code').textContent")
+                    assert shown_model == (runtime_model or 'Model unavailable'), f"Setup model {shown_model!r} differs from backend {runtime_model!r}"
+                    assert cdp.evaluate("[...document.querySelectorAll('[role=tab]')].map(t=>t.textContent)") == ["AI Assistant", "MCP connections"], "Setup did not separate AI and MCP"
+                    assert not cdp.evaluate("!!document.querySelector('#assistant-replacement-key')"), "credential editor leaked into the summary"
+                    cdp.evaluate("[...document.querySelectorAll('button')].find(b=>b.textContent==='Manage keys').click();true")
+                    cdp.wait("!!document.querySelector('dialog[open] [role=tab]')", "API keys dialog")
+                    cdp.evaluate("[...document.querySelectorAll('dialog[open] [role=tab]')].find(t=>t.textContent==='Assistant key').click();true")
+                    cdp.wait("!!document.querySelector('#assistant-replacement-key')", "Assistant key editor")
+                    assert cdp.evaluate("document.querySelector('#assistant-replacement-key').type==='password' && document.querySelector('#assistant-replacement-key').value===''") is True, "Setup did not keep the replacement key empty and write-only"
+                    cdp.evaluate("document.querySelector('button[aria-label=\"Close setup dialog\"]').click();true")
+                    cdp.wait("!document.querySelector('dialog[open]')", "API keys dismissal")
                     before = len(_json(origin + "/__rider/state", time.monotonic() + 2))
                     deadline = time.monotonic() + 10
                     while time.monotonic() < deadline:
@@ -263,14 +293,16 @@ def test_admin_security_real_chrome(opts):
                         time.sleep(.1)
                     else:
                         raise AssertionError("short-TTL renewal did not occur")
+                    document_started = cdp.evaluate("performance.timeOrigin")
                     cdp.call("Page.reload")
-                    cdp.wait("!!document.querySelector('.app')", "reload after renewal")
+                    cdp.wait(f"performance.timeOrigin !== {document_started} && ({setup_loaded})", "Setup reload after renewal")
                     api_urls = cdp.evaluate("performance.getEntriesByType('resource').map(x=>x.name).filter(x=>x.includes('/api/'))")
                     assert api_urls and all(url.startswith(origin + "/api/") for url in api_urls), "API derived an endpoint from the Admin mount"
                     # The unremembered choice survives a full page reload.
                     cdp.evaluate("for(const k of ['access_token','refresh_token']){const v=localStorage.getItem(k);if(v)sessionStorage.setItem(k,v);localStorage.removeItem(k)};true")
+                    document_started = cdp.evaluate("performance.timeOrigin")
                     cdp.call("Page.reload")
-                    cdp.wait("!!document.querySelector('.app')", "sessionStorage reload")
+                    cdp.wait(f"performance.timeOrigin !== {document_started} && ({setup_loaded})", "Setup sessionStorage reload")
                     assert cdp.evaluate("!!sessionStorage.getItem('access_token') && !localStorage.getItem('access_token')"), "reload promoted an unremembered session"
                     # Another legacy tab uses its historical localStorage auth;
                     # this tab retains its own sessionStorage grant and binding.
@@ -282,7 +314,15 @@ def test_admin_security_real_chrome(opts):
                         for width, label in ((1280, "desktop"), (390, "narrow")):
                             cdp.call("Emulation.setDeviceMetricsOverride", {
                                 "width": width, "height": 844, "deviceScaleFactor": 1, "mobile": False})
+                            collapsed = cdp.evaluate("document.querySelector('.app').classList.contains('app-sidebar-collapsed')")
+                            if collapsed != (width < 640):
+                                cdp.evaluate("document.querySelector('.sidebar-toggle').click();true")
+                            sidebar_width = "< 65" if width < 640 else "> 227"
+                            cdp.wait(f"document.querySelector('.sidebar').getBoundingClientRect().width {sidebar_width}", "sidebar layout")
+                            cdp.evaluate("new Promise(resolve=>requestAnimationFrame(()=>requestAnimationFrame(resolve))).then(()=>true)")
+                            assert cdp.evaluate(f"({setup_loaded}) && !document.body.textContent.includes('Loading admin page…')"), "screenshot captured an unloaded Setup page"
                             assert cdp.evaluate("document.documentElement.scrollWidth <= innerWidth + 1"), "narrow viewport overflows"
+                            assert cdp.evaluate("document.querySelector('.content').scrollWidth <= document.querySelector('.content').clientWidth + 1"), "Setup content overflows its viewport"
                             png = base64.b64decode(cdp.call("Page.captureScreenshot", {"format": "png"})["data"])
                             assert len(png) > 1000, "dark theme or desktop screenshot was empty"
                             (evidence / f"{mount}-{theme}-{label}.png").write_bytes(png)

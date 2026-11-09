@@ -56,7 +56,7 @@
   </div>
 
   {% if selected_decoy %}
-  <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js"></script>
+  <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js?v=1f0934bf3d"></script>
   <script nonce="{{ csp_nonce }}">MojoHostedBouncer.mountDecoy(document);</script>
   {% else %}
   <script nonce="{{ csp_nonce }}">

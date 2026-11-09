@@ -15,10 +15,11 @@ downstream apps must not invent their own.
 import datetime
 import json
 import time
+from decimal import Decimal, InvalidOperation
 
 from django.core.exceptions import FieldError, ValidationError
 from django.db import Error as DBError, models as dm
-from django.db.models import Count, Sum, Avg, Min, Max
+from django.db.models import Count, Sum, Avg, Min, Max, F, Value
 from django.db.models.functions import (
     TruncMinute, TruncHour, TruncDay, TruncWeek, TruncMonth,
 )
@@ -27,6 +28,7 @@ from mojo.helpers import logit
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 from mojo import errors as me
+from mojo.models.rest import is_sensitive_filter_path, walk_denied
 
 
 VALID_MODES = ("list", "count", "top", "distinct", "summary", "histogram")
@@ -207,7 +209,7 @@ def _count_bundles(cls, request, queryset, bundles):
 
 def _agg_top(cls, request, queryset):
     field = _require_field(request, "_field")
-    group_field = _validate_field(cls, field)
+    group_field = _validate_field(cls, field, request)
 
     agg_name = _resolve_agg(request.DATA.get("_agg", "count"))
     agg_field = request.DATA.get("_agg_field")
@@ -216,26 +218,38 @@ def _agg_top(cls, request, queryset):
             raise me.ValueException(
                 f"_agg_field required when _agg={agg_name}",
             )
-        _validate_numeric_field(cls, agg_field)
+        _validate_numeric_field(cls, agg_field, request)
         agg_target = agg_field
     else:
         agg_target = "id"
 
     size = _resolve_int(request.DATA.get("_size"), default=10, cap=TOP_CAP)
     min_count = _resolve_int(request.DATA.get("_min_count"), default=1, cap=None)
+    min_value = _resolve_number(request.DATA.get("_min_value"))
 
-    annotations = {"value": AGG_FUNCS[agg_name](agg_target)}
+    # `_min_count` counts rows per group for every `_agg`; `_min_value`
+    # is the separate, signed threshold on the aggregate value.
+    annotations = {
+        "value": AGG_FUNCS[agg_name](agg_target),
+        "_row_n": Count("pk"),
+    }
     dt_field = _first_datetime_field(cls)
     if dt_field and dt_field != group_field:
         annotations["first_seen"] = Min(dt_field)
         annotations["last_seen"] = Max(dt_field)
 
-    rows = (
+    qs = (
         queryset.values(group_field)
         .annotate(**annotations)
-        .filter(value__gte=min_count)
-        .order_by("-value")[:size]
+        .filter(_row_n__gte=min_count)
     )
+    if min_value is not None:
+        # A typed expression, not a plain int: Django checks a plain int
+        # against the INPUT column's range, but SUM(integer) is wider, so a
+        # threshold past that range would empty or ignore the filter. The
+        # database compares the real aggregate with the exact number.
+        qs = qs.filter(value__gte=Value(min_value, output_field=dm.DecimalField()))
+    rows = qs.order_by(F("value").desc(nulls_last=True))[:size]
 
     data = []
     for row in rows:
@@ -260,7 +274,7 @@ def _agg_top(cls, request, queryset):
 
 def _agg_distinct(cls, request, queryset):
     field = _require_field(request, "_field")
-    group_field = _validate_field(cls, field)
+    group_field = _validate_field(cls, field, request)
     min_count = _resolve_int(request.DATA.get("_min_count"), default=1, cap=None)
 
     # DB-level slice to DISTINCT_CAP+1 — bounds the DB's group-by work
@@ -298,7 +312,7 @@ def _agg_summary(cls, request, queryset):
     if agg_name == "count":
         # Count is row-count; no field arithmetic.
         if field:
-            _validate_field(cls, field)
+            _validate_field(cls, field, request)
         target = "id"
         numeric_target = None
     else:
@@ -306,7 +320,7 @@ def _agg_summary(cls, request, queryset):
             raise me.ValueException(
                 f"_field or _agg_field required for _agg={agg_name}",
             )
-        _validate_numeric_field(cls, agg_field)
+        _validate_numeric_field(cls, agg_field, request)
         target = agg_field
         numeric_target = agg_field
 
@@ -342,6 +356,10 @@ def _agg_histogram(cls, request, queryset):
     if not _datetime_field(cls, field):
         raise me.ValueException(
             f"_field={field!r} is not a DateTimeField/DateField on {cls.__name__}",
+        )
+    if is_sensitive_filter_path(cls, field):
+        raise me.ValueException(
+            f"_field={field!r} is marked sensitive on {cls.__name__}",
         )
 
     # Resolve bucketing window. dr_start/dr_end have already been
@@ -421,7 +439,7 @@ def _require_field(request, param):
     return value
 
 
-def _validate_field(cls, name):
+def _validate_field(cls, name, request=None):
     """Validate `_field` / `_agg_field` and return the ORM field path.
 
     Raises 400 on relation without `__id`, JSON-path drilling,
@@ -434,7 +452,7 @@ def _validate_field(cls, name):
       2. Relation fields require `__id` (else 400).
       3. Non-relation fields cannot use `__` (else 400).
       4. Type-based reject: TextField, JSONField, EmailField (else 400).
-      5. `RestMeta.SENSITIVE_FIELDS` reject (else 400).
+      5. Sensitive reject, by the shared list-filter rule (else 400).
       6. `RestMeta.AGGREGATION_FIELDS` allow-list (when defined; else 400).
 
     A model author cannot use `AGGREGATION_FIELDS` to *grant* access
@@ -465,6 +483,13 @@ def _validate_field(cls, name):
                 f"_field={name!r}: relation fields require '__id' suffix "
                 f"(use {base}__id)",
             )
+        # A forward `<fk>__id` is the local column; a reverse or many-to-many
+        # `<rel>__id` joins the related table, under the list-walk rule
+        # (#8680).
+        if walk_denied(cls, name, request):
+            raise me.ValueException(
+                f"_field={name!r} is not available on {cls.__name__}",
+            )
     else:
         # Non-relation fields cannot have any `__` drilling
         # (blocks JSON-path extraction like metadata__rule_id).
@@ -479,8 +504,7 @@ def _validate_field(cls, name):
             )
 
     rest_meta = getattr(cls, "RestMeta", None)
-    sensitive = getattr(rest_meta, "SENSITIVE_FIELDS", None) if rest_meta else None
-    if sensitive and base in sensitive:
+    if is_sensitive_filter_path(cls, name):
         raise me.ValueException(
             f"_field={name!r} is marked sensitive on {cls.__name__}",
         )
@@ -494,8 +518,8 @@ def _validate_field(cls, name):
     return name
 
 
-def _validate_numeric_field(cls, name):
-    _validate_field(cls, name)
+def _validate_numeric_field(cls, name, request=None):
+    _validate_field(cls, name, request)
     base = name.split("__")[0]
     try:
         field_obj = cls._meta.get_field(base)
@@ -531,6 +555,20 @@ def _resolve_int(value, default, cap):
     if cap is not None and n > cap:
         return cap
     return n
+
+
+def _resolve_number(value):
+    if value is None or value == "":
+        return None
+    if isinstance(value, bool):
+        raise me.ValueException(f"_min_value must be a number, got {value!r}")
+    try:
+        d = Decimal(str(value))
+    except (InvalidOperation, ValueError):
+        raise me.ValueException(f"_min_value must be a number, got {value!r}")
+    if not d.is_finite():
+        raise me.ValueException(f"_min_value must be a number, got {value!r}")
+    return d
 
 
 def _datetime_field(cls, name):

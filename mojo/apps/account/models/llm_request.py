@@ -25,6 +25,10 @@ class LLMRequest(models.Model, MojoModel):
     cache_read_input_tokens = models.PositiveIntegerField(default=0)
     cache_creation_input_tokens = models.PositiveIntegerField(default=0)
     reserved_tokens = models.PositiveIntegerField(default=0)
+    # The provider's own input count behind the reservation, and where the
+    # reservation came from ("count" or "bytes"); compare with input_tokens.
+    estimated_input_tokens = models.PositiveIntegerField(default=0)
+    estimate_source = models.CharField(max_length=16, blank=True, default="")
     duration_ms = models.PositiveIntegerField(default=0)
     job_id = models.CharField(max_length=64, blank=True, default="", db_index=True)
     incident_id = models.BigIntegerField(null=True, blank=True, default=None, db_index=True)

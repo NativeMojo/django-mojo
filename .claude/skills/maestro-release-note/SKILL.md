@@ -8,7 +8,7 @@ description: >-
   over MCP. It never asks a person to write the words.
 user-invocable: true
 argument-hint: <version to cut (omit to use the next one the release process will mint)>
-maestro-skill-version: 5
+maestro-skill-version: 6
 ---
 
 # Release Note — write what shipped, for the people who use it
@@ -96,12 +96,15 @@ the file IS the mechanism.
 Nothing is written to disk. The note becomes a row in that project's own
 release history, drafted by you and filed with `create_release(...)`.
 
-1. **Resolve the project.** Read `.claude/maestro.json` at the repo root:
-   `{"workspace": …, "board": …, "project": <project id>}`. `project` is the
-   key you need. If it is absent, call `list_projects(workspace)`, name the
-   candidates to the user, ask which one this repo ships, and offer to write
-   the key back into the file. **Never infer the project from the directory
-   name.** No config file at all → the standard Board Resolution path first,
+A brokered agent's role must explicitly include **Releases** (`releases`); project permissions and the existing supervision gate still apply, and workers never receive these tools.
+
+1. **Resolve the product.** Read `.claude/maestro.json` at the repo root:
+   `{"workspace": …, "board": …, "project": <product id>}`. `project` is the
+   key you need: it names the Product (this repo). If it is absent, call
+   `list_products()`, name the candidates to the user, ask which one this
+   repo ships, and offer to write the key back into the file. (Not
+   `list_projects(workspace)`: that lists a workspace's Projects, the dated
+   efforts.) **Never infer the product from the directory name.** No config file at all → the standard Board Resolution path first,
    then ask.
 2. **Run the versioning gate** (next section). If it does not pass, **stop
    before drafting**.

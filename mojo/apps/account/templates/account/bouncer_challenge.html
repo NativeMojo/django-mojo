@@ -4,61 +4,189 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Continue securely</title>
+  <link rel="stylesheet" href="/api/account/static/mojo-auth-theme.css?v=1246d67384">
+  {% comment %}
+    Page-only styles. The challenge response is no-store, so this block always
+    ships with its markup. It carries no {{ }} interpolation: every colour
+    comes from the hosted theme tokens and the tenant
+    accent set on the body. One data-state on #mbg-root drives every visual
+    state; the hosted bouncer script sets it and owns the texts and the
+    hidden/disabled flags, which [hidden] keeps authoritative.
+  {% endcomment %}
   <style>
-    *{box-sizing:border-box}body{margin:0;min-height:100vh;display:grid;place-items:center;
-      background:#0b1020;color:#edf0fa;font:16px/1.5 system-ui,-apple-system,sans-serif;padding:24px}
-    .mbg-card{width:min(100%,440px);padding:36px;border:1px solid #30394f;border-radius:20px;
-      background:#151c30;box-shadow:0 24px 80px #0004;--accent:{{ accent_color|default:'#6384ff' }}}
-    .mbg-logo{width:52px;height:52px;object-fit:contain;margin-bottom:16px}
-    .mbg-brand{font-size:14px;color:#b4bfd6;margin:0 0 24px}h1{font-size:26px;line-height:1.2;margin:0 0 12px}
-    p{margin:12px 0}#mbg-status{min-height:48px;color:#bdc8df}
-    button{min-height:48px;padding:12px 22px;font:inherit;font-weight:600;border:1px solid #8ca5ff;
-      border-radius:10px;background:#294685;color:white;cursor:pointer;width:100%}
-    button:disabled{opacity:.55;cursor:default}button:focus-visible,input:focus-visible,a:focus-visible,summary:focus-visible{outline:3px solid #b4c7ff;outline-offset:4px}
-    [hidden]{display:none!important}
-    .mbg-help{margin-top:24px;font-size:14px;color:#b4bfd6}a{color:#c1d0ff}.mbg-provider{margin-top:28px;font-size:12px;color:#9aa9c8}
+    .mbg-body{height:auto;min-height:100%}
+    .mbg{--mbg-strong:color-mix(in srgb,var(--mat-accent) 80%,#000);--mbg-strong-hover:color-mix(in srgb,var(--mat-accent) 70%,#000);
+      display:flex;flex-direction:column;align-items:center;min-height:100vh;min-height:100dvh;padding:36px 16px 28px;color:var(--mat-text)}
+    @supports not (color:color-mix(in srgb,#000 50%,#fff)){.mbg{--mbg-strong:var(--mat-accent);--mbg-strong-hover:var(--mat-accent)}}
+    .mbg [hidden]{display:none!important}
+    .mbg-brand{flex:none;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:10px;max-width:100%;min-height:32px;text-align:center}
+    .mbg-logo{display:block;height:32px;width:auto;max-width:160px;object-fit:contain}
+    .mbg-brand-name{font-size:1.0625rem;font-weight:700;letter-spacing:-.01em;overflow-wrap:anywhere}
+    .mbg-col{margin:auto 0;padding:32px 0;display:flex;flex-direction:column;align-items:center;gap:28px;width:100%;max-width:400px;
+      animation:mat-pending-enter .45s cubic-bezier(.2,.8,.2,1) both}
+    .mbg-footer{flex:none;display:flex;align-items:center;justify-content:center;gap:8px;max-width:100%;font-size:.8125rem;color:var(--mat-muted);text-align:center;overflow-wrap:anywhere}
+    .mbg-footer svg{flex:none;width:14px;height:14px}
+    .mbg svg{fill:none;stroke:currentColor;stroke-linecap:round;stroke-linejoin:round}
+
+    .mbg-glyph{position:relative;flex:none;width:140px;height:140px}
+    .mbg-glyph>*{position:absolute;display:none}
+    .mbg-ring{inset:0;width:140px;height:140px}
+    .mbg-ring circle{stroke-width:3.5}
+    .mbg-glyph>.mbg-track{display:block}
+    .mbg-track circle{stroke:var(--mat-track);stroke-width:3}
+    .mbg-halo{inset:0;border-radius:50%;border:1.5px solid var(--mat-accent);opacity:0;animation:mat-pending-ripple 3s cubic-bezier(.2,.6,.3,1) infinite}
+    .mbg-spin{animation:mat-pending-rotate 1.6s linear infinite}
+    .mbg-dash{stroke:var(--mat-accent);stroke-dasharray:110 440;animation:mat-pending-dash 1.6s ease-in-out infinite}
+    .mbg-flash{inset:16px;border-radius:50%;border:2px solid var(--mat-accent);opacity:0;animation:mat-pending-flash .9s .1s cubic-bezier(.2,.7,.3,1) both}
+    .mbg-close{transform:rotate(-90deg)}
+    .mbg-close circle{stroke:var(--mat-accent);stroke-dasharray:440;animation:mat-pending-close .5s cubic-bezier(.4,0,.2,1) both}
+    .mbg-fail-ring{animation:mat-pending-fade-up .5s cubic-bezier(.2,.8,.2,1) both}
+    .mbg-fail-ring circle{stroke:var(--mat-warn);stroke-width:3}
+    .mbg-disc{left:34px;top:34px;width:72px;height:72px;border-radius:50%;align-items:center;justify-content:center}
+    .mbg-disc-shield{background:var(--mat-card-bg);box-shadow:var(--mat-pending-shadow);color:var(--mat-accent)}
+    .mbg-disc-shield svg{width:32px;height:32px;stroke-width:1.8}
+    .mbg-disc-check{background:var(--mbg-strong);color:#fff;animation:mat-pending-pop .5s cubic-bezier(.2,.9,.3,1.2) both}
+    .mbg-disc-check svg{width:34px;height:34px;stroke-width:3}
+    .mbg-draw{stroke-dasharray:24;animation:mat-pending-draw .35s .35s ease-out both}
+    .mbg-disc-fail{background:var(--mat-card-bg);border:1.5px solid var(--mat-warn);color:var(--mat-warn-text);animation:mat-pending-shake .45s .05s ease-in-out both}
+    .mbg-disc-fail svg{width:30px;height:30px;stroke-width:2.2}
+    .mbg[data-state=ready] .mbg-halo,.mbg[data-state=checking] .mbg-spin,.mbg[data-state=verified] .mbg-flash,
+    .mbg[data-state=verified] .mbg-close,.mbg[data-state=sent] .mbg-close,.mbg[data-state=failed] .mbg-fail-ring{display:block}
+    .mbg[data-state=ready] .mbg-disc-shield,.mbg[data-state=checking] .mbg-disc-shield,.mbg[data-state=verified] .mbg-disc-check,
+    .mbg[data-state=sent] .mbg-disc-check,.mbg[data-state=failed] .mbg-disc-fail{display:flex}
+
+    .mbg-live{display:flex;flex-direction:column;align-items:center;gap:10px;width:100%;text-align:center}
+    .mbg[data-state=failed] .mbg-live,.mbg[data-state=verified] .mbg-live,.mbg[data-state=sent] .mbg-live{animation:mat-pending-fade-up .45s cubic-bezier(.2,.8,.2,1) both}
+    .mbg-heading{font-size:clamp(1.5rem,6vw,1.75rem);font-weight:700;line-height:1.2;letter-spacing:-.03em;overflow-wrap:anywhere}
+    .mbg-heading:focus{outline:none}
+    .mbg-status{font-size:.9375rem;line-height:1.55;color:var(--mat-muted);overflow-wrap:anywhere}
+    .mbg-bar{display:none;width:160px;height:4px;margin-top:8px;border-radius:4px;background:var(--mat-track)}
+    .mbg-bar span{display:block;height:100%;border-radius:4px;background:var(--mat-accent);transform-origin:left center;animation:mat-pending-bar 1.8s cubic-bezier(.4,0,.2,1) both}
+    .mbg[data-state=verified] .mbg-bar{display:block}
     .mbg-hp{position:absolute;left:-9999px;width:1px;height:1px;overflow:hidden}
-    .mbg-secondary{margin-top:12px;background:transparent;border-color:#56617b}
-    .mbg-field{display:block;margin:18px 0}.mbg-field input,.mbg-field textarea{display:block;width:100%;margin-top:6px;padding:12px;
-      font:inherit;border:1px solid #78839b;border-radius:8px;background:#0d1527;color:white}
-    textarea{resize:vertical;min-height:88px}summary{min-height:44px;cursor:pointer;padding:10px 0}
-    #mbg-reference{overflow-wrap:anywhere}#mbg-review-status{min-height:24px}
-    fieldset{border:0;margin:0;padding:0}
-    @media(max-width:420px){body{padding:16px}.mbg-card{padding:26px 22px}}
+
+    .mbg-actions{display:flex;flex-direction:column;align-items:center;gap:12px;width:100%}
+    .mbg[data-state=failed] .mbg-actions{animation:mat-pending-fade-up .45s .1s cubic-bezier(.2,.8,.2,1) both}
+    .mbg-primary,.mbg-restart.is-primary{display:inline-flex;align-items:center;justify-content:center;gap:10px;width:100%;min-height:50px;margin:0;padding:0 22px;
+      border:0;border-radius:12px;background:var(--mbg-strong);color:#fff;font:inherit;font-size:1rem;font-weight:600;text-decoration:none;cursor:pointer}
+    .mbg-primary:hover:not(:disabled),.mbg-restart.is-primary:hover{background:var(--mbg-strong-hover)}
+    .mbg-secondary{display:inline-flex;align-items:center;justify-content:center;width:100%;min-height:48px;margin:0;padding:0 22px;
+      border:1px solid var(--mat-border);border-radius:12px;background:transparent;color:var(--mat-text);font:inherit;font-size:.9375rem;font-weight:600;cursor:pointer}
+    .mbg-secondary:hover{border-color:var(--mat-muted)}
+    .mbg-link,.mbg-restart{display:inline-flex;align-items:center;justify-content:center;min-width:44px;min-height:44px;padding:0 12px;border:0;border-radius:8px;
+      background:none;color:var(--mat-muted);font:inherit;font-size:.875rem;font-weight:500;text-align:center;text-decoration:none;cursor:pointer}
+    .mbg-link:hover,.mbg-restart:not(.is-primary):hover{color:var(--mat-text);text-decoration:underline;text-underline-offset:3px}
+    .mbg-btn-spinner{display:none;flex:none;width:18px;height:18px;border:2.5px solid currentColor;border-right-color:transparent;border-radius:50%;animation:mat-spin .8s linear infinite}
+    .mbg[data-state=checking] .mbg-btn-spinner{display:inline-block}
+    .mbg[data-state=checking] #mbg-continue:disabled{opacity:.75;cursor:progress}
+    .mbg-primary:disabled{opacity:.55;cursor:not-allowed}
+    .mbg .mbg-actions>*{display:none}
+    .mbg[data-state=verified] .mbg-actions,.mbg[data-state=sent] .mbg-actions{display:none}
+    .mbg[data-state=ready] #mbg-continue,.mbg[data-state=checking] #mbg-continue,.mbg[data-state=failed] #mbg-continue,
+    .mbg[data-state=ready] #mbg-help,.mbg[data-state=failed] #mbg-restart,.mbg[data-state=failed] #mbg-review-open,
+    .mbg[data-state=failed] #mbg-top-level{display:inline-flex}
+
+    .mbg-ref{display:none;flex-wrap:wrap;align-items:center;justify-content:center;gap:2px 6px;max-width:100%;font-size:.75rem;color:var(--mat-muted);text-align:center}
+    .mbg[data-state=failed] .mbg-ref,.mbg[data-state=sent] .mbg-ref{display:flex}
+    .mbg-ref code{min-width:0;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;font-size:.75rem;color:var(--mat-text);overflow-wrap:anywhere}
+    .mbg-copy{flex:none;display:inline-flex;align-items:center;justify-content:center;width:44px;height:44px;border:0;border-radius:10px;background:transparent;color:var(--mat-muted);cursor:pointer}
+    .mbg-copy:hover{color:var(--mat-text)}
+    .mbg-copy svg{width:16px;height:16px;stroke-width:2}
+    .mbg-copy-status{flex-basis:100%}
+    .mbg-copy-status:empty{display:none}
+    @media (max-width:359.98px){.mbg-ref{flex-direction:column}}
+    .mbg-sent-restart{display:none;width:auto}
+    .mbg[data-state=sent] .mbg-sent-restart{display:inline-flex}
+
+    .mbg-review{display:none;flex-direction:column;gap:18px;width:100%;padding:28px;border-radius:20px;background:var(--mat-card-bg);box-shadow:var(--mat-pending-shadow);text-align:left}
+    .mbg[data-state=review] .mbg-review,.mbg:not([data-js]) .mbg-review:target{display:flex}
+    .mbg[data-state=review] .mbg-glyph,.mbg[data-state=review] .mbg-live,.mbg[data-state=review] .mbg-actions,.mbg[data-state=review] .mbg-ref{display:none}
+    .mbg[data-state=review] .mbg-review{animation:mat-pending-fade-up .4s cubic-bezier(.2,.8,.2,1) both}
+    .mbg-back{align-self:flex-start;margin:-12px 0 -8px -12px}
+    .mbg-review h2{font-size:1.5rem;font-weight:700;line-height:1.2;letter-spacing:-.02em;overflow-wrap:anywhere}
+    .mbg-review h2:focus{outline:none}
+    .mbg-review p{font-size:.875rem;line-height:1.55;color:var(--mat-muted);overflow-wrap:anywhere}
+    .mbg-review form{display:flex;flex-direction:column;gap:18px}
+    .mbg-field{display:flex;flex-direction:column;gap:6px;font-size:.8125rem;font-weight:600;color:var(--mat-text)}
+    .mbg-field .mat-input{min-height:44px;font:inherit;font-size:1rem;font-weight:400}
+    .mbg-field textarea.mat-input{min-height:88px;resize:vertical}
+    .mbg-review .mbg-hint{margin-top:-6px;font-size:.75rem}
+    .mbg-review a{color:var(--mat-text);text-decoration:underline;text-underline-offset:3px}
+    #mbg-review-status:empty{display:none}
+    #mbg-review-status{color:var(--mat-text)}
+    .mbg button:focus-visible,.mbg a:focus-visible,.mbg .mat-input:focus-visible{outline:2px solid var(--mat-accent);outline-offset:3px}
+    @media (max-width:420px){.mbg-review{padding:22px 18px}}
+    @media (prefers-reduced-motion:reduce){
+      .mbg,.mbg *,.mbg *::before,.mbg *::after{animation:none!important;transition:none!important}
+      .mbg-halo,.mbg-flash{opacity:0}
+    }
   </style>
+  {% if custom_css_url %}<link rel="stylesheet" href="{{ custom_css_url }}">{% endif %}
+  {% if custom_css %}<style>{{ custom_css|safe }}</style>{% endif %}
+  <noscript><style>.mbg .mbg-review{display:flex}.mbg .mbg-back{display:none!important}</style></noscript>
 </head>
-<body>
-  <main class="mbg-card">
-    {% if logo_url %}<img class="mbg-logo" src="{{ logo_url }}" alt="">{% endif %}
-    <p class="mbg-brand">{{ brand_name }}</p>
-    <section id="mbg-check">
-      <h1 id="mbg-heading">One quick check</h1>
-      <p id="mbg-status" role="status" aria-live="polite">Select Continue to proceed securely.</p>
+<body class="mbg-body mat-appearance-{{ auth_appearance }}" style="--mat-accent:{{ accent_color }}">
+  <main id="mbg-root" class="mbg" data-state="ready">
+    <header class="mbg-brand">
+      {% if logo_url %}<img class="mbg-logo" src="{{ logo_url }}" alt="">{% endif %}
+      {% if brand_name %}<span class="mbg-brand-name">{{ brand_name }}</span>{% endif %}
+    </header>
+    <div class="mbg-col">
+      <div class="mbg-glyph" aria-hidden="true">
+        <span class="mbg-halo"></span>
+        <svg class="mbg-ring mbg-track" viewBox="0 0 160 160"><circle cx="80" cy="80" r="70"></circle></svg>
+        <svg class="mbg-ring mbg-spin" viewBox="0 0 160 160"><circle class="mbg-dash" cx="80" cy="80" r="70"></circle></svg>
+        <span class="mbg-flash"></span>
+        <svg class="mbg-ring mbg-close" viewBox="0 0 160 160"><circle cx="80" cy="80" r="70"></circle></svg>
+        <svg class="mbg-ring mbg-fail-ring" viewBox="0 0 160 160"><circle cx="80" cy="80" r="70"></circle></svg>
+        <span class="mbg-disc mbg-disc-shield"><svg viewBox="0 0 24 24"><path d="M12 3l7 3v5.5c0 4.4-3 8.1-7 9.5-4-1.4-7-5.1-7-9.5V6l7-3z"></path><path d="M9 12l2 2 4-4"></path></svg></span>
+        <span class="mbg-disc mbg-disc-check"><svg viewBox="0 0 30 30"><path class="mbg-draw" d="M8 15.5l4.5 4.5 9.5-10"></path></svg></span>
+        <span class="mbg-disc mbg-disc-fail"><svg viewBox="0 0 24 24"><path d="M12 6.5v7"></path><path d="M12 17.5h.01"></path></svg></span>
+      </div>
+      <div id="mbg-live" class="mbg-live" role="status" aria-live="polite" aria-atomic="true">
+        <h1 id="mbg-heading" class="mbg-heading" tabindex="-1">One quick check</h1>
+        <p id="mbg-status" class="mbg-status">Select Continue to proceed securely.</p>
+        <div class="mbg-bar" aria-hidden="true"><span></span></div>
+      </div>
       <div class="mbg-hp" aria-hidden="true"><input id="mbg-hp-field" type="text" tabindex="-1" autocomplete="off"></div>
-      <button id="mbg-continue" type="button" disabled>Continue</button>
-      <button id="mbg-restart" class="mbg-secondary" type="button" hidden>Restart this check</button>
-      <a id="mbg-top-level" href="{{ login_url }}" target="_blank" rel="noopener" hidden>Open this page in a new tab</a>
+      <div class="mbg-actions">
+        <button id="mbg-continue" class="mbg-primary" type="button" disabled><span class="mbg-btn-spinner" aria-hidden="true"></span><span id="mbg-continue-label">Continue</span></button>
+        <button id="mbg-review-open" class="mbg-secondary" type="button">Ask for a review</button>
+        <button id="mbg-restart" class="mbg-restart" type="button" hidden>Start over</button>
+        <a id="mbg-help" class="mbg-link" href="#mbg-review">Having trouble? Get help</a>
+        <a id="mbg-top-level" class="mbg-link" href="{{ login_url }}" target="_blank" rel="noopener" hidden>Open this page in a new tab</a>
+      </div>
+      <div id="mbg-reference-row" class="mbg-ref"{% if not hosted_bouncer.reference %} hidden{% endif %}>
+        <span>Reference</span>
+        <code id="mbg-reference">{{ hosted_bouncer.reference|default:'' }}</code>
+        <button id="mbg-copy" class="mbg-copy" type="button" aria-label="Copy reference"><svg viewBox="0 0 24 24" aria-hidden="true"><rect x="9" y="9" width="11" height="11" rx="2"></rect><path d="M5 15V6a2 2 0 0 1 2-2h9"></path></svg></button>
+        <span id="mbg-copy-status" class="mbg-copy-status" role="status" aria-live="polite"></span>
+      </div>
+      <button id="mbg-sent-restart" class="mbg-secondary mbg-sent-restart" type="button">Back to start</button>
       <noscript><p>JavaScript is needed for verification. You can still request help using the form below.</p></noscript>
-    </section>
-    <details id="mbg-help" class="mbg-help" {% if hosted_bouncer.next_action == 'recovery' or hosted_bouncer.next_action == 'error' %}open{% endif %}>
-      <summary>Having trouble? Get help</summary>
-      <p>You can ask the site operator to review this visit. You won’t need to sign in or enter a password.</p>
-      <p id="mbg-reference">{% if hosted_bouncer.reference %}Reference: {{ hosted_bouncer.reference }}{% endif %}</p>
-      <form id="mbg-review-form" method="post" action="/api/auth/bouncer/recovery" {% if not hosted_bouncer.review_ticket %}hidden{% endif %}>
-        <input id="mbg-review-ticket" name="review_ticket" type="hidden" value="{{ hosted_bouncer.review_ticket|default:'' }}">
-        <label class="mbg-field">Email for follow-up<input id="mbg-review-email" name="email" type="email" autocomplete="email" maxlength="254" required></label>
-        <label class="mbg-field">What happened? (optional)<textarea id="mbg-review-note" name="note" maxlength="500" placeholder="For example: I’m trying to sign in from the mobile app."></textarea></label>
-        <p>Please don’t include passwords or verification codes.</p>
-        <button id="mbg-review-submit" type="submit">Request a review</button>
-        <p id="mbg-review-status" role="status" aria-live="polite"></p>
-      </form>
-      {% if not hosted_bouncer.review_ticket %}<p>Review requests are temporarily unavailable. Please try again later or contact site support.</p>{% endif %}
-      {% if recovery_support_url %}<p><a href="{{ recovery_support_url }}" rel="noreferrer noopener">Contact site support</a></p>{% endif %}
-    </details>
-    <p class="mbg-provider">Secure sign-in via {{ auth_provider_name }}</p>
+      <section id="mbg-review" class="mbg-review" aria-labelledby="mbg-review-title">
+        <button id="mbg-review-back" class="mbg-link mbg-back" type="button">← Back</button>
+        <h2 id="mbg-review-title" tabindex="-1">Ask for a review</h2>
+        <p>You can ask the site operator to review this visit. You won’t need to sign in or enter a password.</p>
+        <form id="mbg-review-form" method="post" action="/api/auth/bouncer/recovery" {% if not hosted_bouncer.review_ticket %}hidden{% endif %}>
+          <input id="mbg-review-ticket" name="review_ticket" type="hidden" value="{{ hosted_bouncer.review_ticket|default:'' }}">
+          <label class="mbg-field" for="mbg-review-email">Email<input id="mbg-review-email" class="mat-input" name="email" type="email" autocomplete="email" maxlength="254" required></label>
+          <label class="mbg-field" for="mbg-review-note">What happened? (optional)<textarea id="mbg-review-note" class="mat-input" name="note" maxlength="500" placeholder="For example: I’m trying to sign in from the mobile app."></textarea></label>
+          <p class="mbg-hint">Please don’t include passwords or verification codes.</p>
+          <button id="mbg-review-submit" class="mbg-primary" type="submit">Send request</button>
+          <p id="mbg-review-status" role="status" aria-live="polite"></p>
+        </form>
+        {% if not hosted_bouncer.review_ticket %}<p>Review requests are temporarily unavailable. Please try again later or contact site support.</p>{% endif %}
+        {% if recovery_support_url %}<p><a href="{{ recovery_support_url }}" rel="noreferrer noopener">Contact site support</a></p>{% endif %}
+      </section>
+    </div>
+    <footer class="mbg-footer">
+      <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="5" y="11" width="14" height="10" rx="2"></rect><path d="M8 11V7a4 4 0 0 1 8 0v4"></path></svg>
+      <span>Secure sign-in via {{ auth_provider_name }}</span>
+    </footer>
   </main>
   {{ hosted_bouncer|json_script:"mbg-config" }}
-  <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js?v=mobile-1"></script>
+  <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js?v=1f0934bf3d"></script>
   <script nonce="{{ csp_nonce }}">MojoHostedBouncer.mount(document, JSON.parse(document.getElementById('mbg-config').textContent));</script>
 </body>
 </html>

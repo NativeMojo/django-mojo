@@ -8,6 +8,7 @@ from mojo.helpers import content_guard
 from mojo.helpers import crypto
 from mojo.helpers import logit
 from mojo.helpers.perms import implied_perms
+from mojo.helpers.request import is_signed_in_user
 from mojo.apps.account.utils.jwtoken import JWToken
 from mojo.apps import metrics
 from .device import UserDevice
@@ -175,6 +176,16 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         ]
         NO_SHOW_FIELDS = ["password", "auth_key", "onetime_code"]
         SENSITIVE_FIELDS = ["password", "auth_key", "onetime_code"]
+        # Account privileges and sign-in settings: kept out of a user nested
+        # inside another row (a member list, a device, a page) for a viewer
+        # who could not GET /api/user/<pk> for that user (#8648). The
+        # serializer drops these output keys, CSV writes them as "", and the
+        # filter guard in mojo.models.rest drops these lookups past a relation.
+        NESTED_PRIVATE_FIELDS = ["permissions", "is_superuser", "requires_mfa",
+                                 "requires_password_change", "has_password",
+                                 "has_passkey", "metadata"]
+        NESTED_PRIVATE_LOOKUPS = ["is_superuser", "requires_mfa",
+                                  "requires_password_change", "passkeys", "totp"]
         # auth_key and last_activity must never be writable via REST by anyone.
         # auth_key is the JWT signing secret — writing it is a session-invalidation
         # attack vector. last_activity is a server-managed audit timestamp.
@@ -385,7 +396,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             request = self.active_request
         if request is None:
             return False
-        if hasattr(request.user, "is_request_user"):
+        if is_signed_in_user(request.user):
             return request.user.id == self.id
         return False
 
@@ -1139,6 +1150,14 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
     def on_rest_saved(self, changed_fields, created):
         if "is_active" in changed_fields:
             metrics.set_value("total_users", User.objects.filter(is_active=True).count(), account="global")
+        if getattr(self, "_switched_off_in_save", False):
+            # Match disable_entity: drop live websockets once committed.
+            # Best effort; the new key is the guarantee (maestro #9533).
+            self._switched_off_in_save = False
+            from django.db import transaction
+            from mojo.apps.account.services.disable import disconnect_realtime
+            request = self.active_request
+            transaction.on_commit(lambda: disconnect_realtime(self, request=request))
         removed_phone = getattr(self, "_removed_verified_phone", None)
         if removed_phone:
             self._removed_verified_phone = None
@@ -1150,17 +1169,67 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         new key, and the grants are revoked with it, or none of it is stored.
         A password that changed while a connected app's refresh token stayed
         good would be the half that matters missing (maestro #6226). The
-        websockets go once it is committed."""
-        if not getattr(self, "_password_changed_in_save", False):
+        websockets go once it is committed.
+
+        A REST save of an existing account also settles is_active and
+        auth_key against the stored row, under its lock, in the same
+        transaction (see _settle_active_under_lock, maestro #9533)."""
+        password_changed = getattr(self, "_password_changed_in_save", False)
+        settle_active = getattr(self, "_reconcile_active_in_save", False)
+        if not password_changed and not settle_active:
             return super().atomic_save()
         from django.db import transaction
         self._password_changed_in_save = False
+        self._reconcile_active_in_save = False
         with transaction.atomic():
+            if settle_active:
+                self._settle_active_under_lock(key_written=password_changed)
             self.save()
-            self.end_sessions(
-                "password_changed", request=self.active_request,
-                actor=self.active_user, key_rotated=True)
-        self._sessions_ended_in_save = True
+            if password_changed:
+                self.end_sessions(
+                    "password_changed", request=self.active_request,
+                    actor=self.active_user, key_rotated=True)
+        if password_changed:
+            self._sessions_ended_in_save = True
+
+    def _settle_active_under_lock(self, key_written=False):
+        """Decide is_active and auth_key against the row as stored, not as
+        loaded. A REST save is a full save of the copy it loaded; without this,
+        a disable that commits between the load and the save is overwritten:
+        the account comes back on with the key from before the disable.
+
+          - This save did not ask to switch the account: keep the stored
+            is_active and the stored key. A stale copy never writes either back.
+          - It asked, and the stored state differs: a real switch. New key and
+            cached invite cleared, the same as disable_entity /
+            reactivate_entity, so nothing signed before or during a disable
+            works afterwards.
+          - It asked, and the stored state already matches: no switch here;
+            keep the key the writer that switched it stored.
+
+        A key this save writes itself (a password change) is kept. The cached
+        invite is cleared whenever the stored key differs from the one loaded:
+        it was signed with a key that no longer verifies. Call inside the
+        save's transaction (maestro #9533)."""
+        stored = User.objects.select_for_update().only("is_active", "auth_key").get(pk=self.pk)
+        loaded_key = self.auth_key
+        switches = False
+        if getattr(self, "_active_change_requested", False):
+            switches = bool(stored.is_active) != bool(self.is_active)
+        else:
+            self.is_active = stored.is_active
+        self._active_change_requested = False
+        self._switched_off_in_save = switches and not self.is_active
+        if switches:
+            if not key_written:
+                self.auth_key = uuid.uuid4().hex
+            for key in INVITE_CACHE_SECRETS:
+                self.set_secret(key, None)
+        elif not key_written:
+            if stored.auth_key != loaded_key:
+                for key in INVITE_CACHE_SECRETS:
+                    self.set_secret(key, None)
+            self.auth_key = stored.auth_key
 
     def on_rest_pre_save(self, changed_fields, created):
         for _field in SUPERUSER_ONLY_FIELDS:
@@ -1267,6 +1336,11 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if "is_active" in changed_fields:
             if not self.is_active:
                 metrics.record("user_deactivated", category="user", min_granularity="hours")
+        # Whether this request asked to switch the account. The switch itself,
+        # and the new key it needs, are decided in atomic_save against the row
+        # as stored, under its lock (maestro #9533).
+        self._active_change_requested = "is_active" in changed_fields
+        self._reconcile_active_in_save = True
 
     def check_phone_number_change(self, old_phone, admin_caller, allow_change=None):
         """The rule for a phone number changed through a save. Raises when the
@@ -1349,6 +1423,53 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         if "owner" in perms and self.is_request_user():
             return True
         return request.user.has_permission(perms)
+
+    def rest_nested_full_view(self, request):
+        """True when `request` may see this user's NESTED_PRIVATE_FIELDS when
+        the user is nested in another row (#8648).
+
+        The rule is the one GET /api/user/<pk> applies. The self check and
+        the account check read only `request`, never ACTIVE_REQUEST: a
+        streamed CSV body is written after the request context var is reset,
+        or under another request. No request gives False; the
+        serializer never asks without one. Side-effect free.
+        """
+        if request is None:
+            return False
+        confined = (getattr(request, "group_token", None) is not None
+                    or getattr(request, "api_key", None) is not None)
+        perms = type(self).RestMeta.VIEW_PERMS
+        if confined:
+            return bool(self.check_edit_permission(perms, request))
+        if self.is_request_user(request):
+            return True
+        return type(self).rest_viewer_has_account_view(request)
+
+    @classmethod
+    def rest_viewer_has_account_view(cls, request):
+        """True when `request` may read every user's account fields (#8648).
+
+        The instance-free form of rest_nested_full_view, for the filter guard
+        and the serializer's persistent-cache rule: a lookup crosses into User
+        for every row at once, so `owner` cannot apply. ApiKeys and group
+        tokens follow check_edit_permission's confinement.
+        """
+        if getattr(request, "group_token", None) is not None:
+            return False
+        perms = [p for p in cls.RestMeta.VIEW_PERMS if p != "owner"]
+        api_key = getattr(request, "api_key", None)
+        if api_key is not None:
+            return bool(cls.get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False)
+                        and api_key.has_permission(perms))
+        user = getattr(request, "user", None)
+        if not getattr(user, "is_authenticated", False):
+            return False
+        return bool(user.has_permission(perms))
+
+    @classmethod
+    def rest_viewer_can_list_all(cls, request):
+        """User's form of the list-walk check (#8680): the account view."""
+        return cls.rest_viewer_has_account_view(request)
 
     def on_action_send_invite(self, value):
         self.send_invite()
@@ -1915,6 +2036,12 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         return {"response": {"type": "ack"}}
 
     def on_realtime_can_subscribe(self, topic):
+        # The project's REALTIME_SUBSCRIBE_HANDLER may narrow the built-in
+        # verdict, never widen it (maestro #8874).
+        from mojo.apps.realtime import policy
+        return policy.allows(self, topic, self._builtin_can_subscribe(topic))
+
+    def _builtin_can_subscribe(self, topic):
         if topic.startswith("chat:"):
             from mojo.apps.chat.models import ChatRoom, ChatMembership
             try:

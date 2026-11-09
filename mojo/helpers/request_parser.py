@@ -121,13 +121,15 @@ class RequestDataParser:
             'user[name][]' -> 'user.name'
             'items[0][name]' -> 'items.0.name'
         """
-        # Remove trailing []
-        key = key.rstrip('[]')
+        import re
+
+        # Remove whole trailing [] list markers only. rstrip('[]') would also
+        # eat the closing bracket of 'device[id]' (#9499).
+        key = re.sub(r'(?:\[\])+$', '', key)
 
         # Convert bracket notation to dot notation
         # user[name] -> user.name
         # items[0][name] -> items.0.name
-        import re
         key = re.sub(r'\[([^\]]+)\]', r'.\1', key)
 
         return key

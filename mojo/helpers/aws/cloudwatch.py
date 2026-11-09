@@ -191,10 +191,15 @@ class CloudWatchHelper:
     """
 
     def __init__(self, access_key=None, secret_key=None, region=None,
-                 session=None, client_factory=None, timeout=3):
-        self.access_key = access_key or settings.AWS_KEY
-        self.secret_key = secret_key or settings.AWS_SECRET
-        self.region = region or getattr(settings, "AWS_REGION", "us-east-1")
+                 session=None, client_factory=None, timeout=3, static_configuration=False):
+        if static_configuration:
+            self.access_key = access_key if access_key is not None else settings.get_static("AWS_KEY", None)
+            self.secret_key = secret_key if secret_key is not None else settings.get_static("AWS_SECRET", None)
+            self.region = region or settings.get_static("AWS_REGION", "us-east-1")
+        else:
+            self.access_key = access_key or settings.AWS_KEY
+            self.secret_key = secret_key or settings.AWS_SECRET
+            self.region = region or getattr(settings, "AWS_REGION", "us-east-1")
         self.session = session
         self.client_factory = client_factory or get_client
         self.timeout = timeout
@@ -407,6 +412,356 @@ class CloudWatchHelper:
         for bucket_dt in buckets:
             values.append(round(values_by_ts.get(bucket_dt, 0.0), 4))
         return values
+
+    def get_metric_evidence(self, namespace, metric_name, dimensions,
+                            dt_start, dt_end, period_seconds=3600,
+                            stat="Average", client=None, freshness_periods=2):
+        """Additive evidence API. Missing buckets remain null; chart APIs stay unchanged."""
+        import math
+        from .provider_call import map_error
+        start = mdates.parse_datetime(dt_start)
+        end = mdates.parse_datetime(dt_end)
+        buckets = _build_buckets(start, end, period_seconds)
+        if len(buckets) > 60 or start >= end:
+            raise ValueError("evidence_window_invalid")
+        output = {"status": "unavailable", "reason": "no_datapoints", "source": "cloudwatch",
+                  "observed_at": None, "unit": None, "namespace": namespace,
+                  "metric": metric_name, "dimensions": dimensions,
+                  "start": start.isoformat(), "end": end.isoformat(),
+                  "period_seconds": period_seconds, "aggregation": stat,
+                  "sample_count": 0, "last_sample_at": None,
+                  "buckets": [{"at": bucket.isoformat(), "value": None, "sample_at": None}
+                              for bucket in buckets],
+                  "minimum": None, "maximum": None, "average": None, "omitted_count": 0}
+        try:
+            page = (client or self.cw).get_metric_statistics(
+                Namespace=namespace, MetricName=metric_name, Dimensions=dimensions,
+                StartTime=start, EndTime=end, Period=period_seconds, Statistics=[stat])
+        except Exception as exc:
+            error = map_error(exc, "cloudwatch.get_metric_statistics", "cloudwatch:GetMetricStatistics")
+            output.update(reason="provider_denied" if error.denied else (
+                              "metric_budget_exceeded" if isinstance(exc, TimeoutError) else error.provider_code),
+                          failure=error.detail())
+            return output
+        points = []
+        for point in page.get("Datapoints") or []:
+            try:
+                timestamp = mdates.parse_datetime(point["Timestamp"])
+                value = point[stat]
+                if (start <= timestamp < end and type(value) in (int, float)
+                        and math.isfinite(value)):
+                    points.append((timestamp, value, point.get("Unit")))
+            except (ValueError, TypeError, KeyError):
+                continue
+        if not points:
+            return output
+        points.sort(key=lambda item: item[0])
+        by_bucket = {_align_to_period(point[0], period_seconds): point for point in points}
+        values = [value for _, value, _ in points]
+        for row, bucket in zip(output["buckets"], buckets):
+            if bucket in by_bucket:
+                timestamp, value, _ = by_bucket[bucket]
+                row.update(value=value, sample_at=timestamp.isoformat())
+        last = points[-1][0]
+        units = {unit for _, _, unit in points}
+        output.update(status="ok", reason=None, sample_count=len(points),
+                      last_sample_at=last.isoformat(), observed_at=last.isoformat(),
+                      unit=next(iter(units)) if len(units) == 1 else None,
+                      minimum=min(values), maximum=max(values), average=sum(values) / len(values))
+        if len(units) > 1:
+            output.update(status="unknown", reason="inconsistent_units")
+        elif (end - last).total_seconds() > period_seconds * freshness_periods:
+            output.update(status="stale", reason="last_sample_stale")
+        return output
+
+    def get_recent_evidence(self, nodes, namespace="CWAgent", mounts=None, *, deadline,
+                            client=None, now=None, budget=None, maximum_series=256, extra_series=None, maximum_operations=32):
+        """One recent acquisition, exact discovered dimensions and batched data.
+
+        Input identities are resolved expected rows, never request parameters.
+        Discovery is shared across the selected namespace and filtered back to
+        those exact instance IDs. A truncated discovery cannot prove absence.
+        """
+        import time
+        from .provider_call import DeadlineProviderClient, map_error
+        end = mdates.parse_datetime(now or mdates.utcnow())
+        start = end - datetime.timedelta(minutes=30)
+        provider = DeadlineProviderClient("cloudwatch", deadline, region=self.region,
+            session=self.session, client=client, client_factory=self.client_factory,
+            access_key=self.access_key, secret_key=self.secret_key)
+        calls, pages, queries, targets = 0, 0, [], {}
+        accounting = {"provider_operations": 0, "metric_discovery_pages": 0, "series": 0}
+        def call(operation, **params):
+            nonlocal calls
+            if calls >= maximum_operations or time.monotonic() >= deadline:
+                raise TimeoutError("metric_budget_exceeded")
+            if budget is not None:
+                budget.take("provider_operations")
+            calls += 1
+            accounting["provider_operations"] += 1
+            return getattr(provider, operation)(**params)
+        ids = {row.get("instance_id") for row in nodes if row.get("instance_id")}
+        discovery = {}
+        for metric_name in ("mem_used_percent", "disk_used_percent"):
+            series, token, discovery_error = {}, None, None
+            try:
+                while True:
+                    if pages >= 4:
+                        raise TimeoutError("metric_discovery_page_limit")
+                    if budget is not None:
+                        budget.take("metric_discovery_pages")
+                    params = {"Namespace": namespace, "MetricName": metric_name,
+                              "Dimensions": [{"Name": "InstanceId"}]}
+                    if token:
+                        params["NextToken"] = token
+                    page = call("list_metrics", **params)
+                    pages += 1
+                    accounting["metric_discovery_pages"] += 1
+                    if len(page.get("Metrics") or []) > 500:
+                        raise TimeoutError("discovery_row_limit")
+                    for raw in (page.get("Metrics") or [])[:500]:
+                        dims = raw.get("Dimensions") or []
+                        if not isinstance(dims, list) or len(dims) > 30 or any(not isinstance(item, dict) for item in dims):
+                            continue
+                        normalized = {item.get("Name"): item.get("Value") for item in dims}
+                        if (len(normalized) != len(dims) or normalized.get("InstanceId") not in ids
+                                or raw.get("Namespace") != namespace or raw.get("MetricName") != metric_name
+                                or not all(isinstance(k, str) and isinstance(v, str) for k, v in normalized.items())):
+                            continue
+                        series[tuple(sorted(normalized.items()))] = [{"Name": k, "Value": v} for k, v in sorted(normalized.items())]
+                    next_token = page.get("NextToken")
+                    if not next_token:
+                        break
+                    if next_token == token:
+                        raise ValueError("discovery_token_repeated")
+                    token = next_token
+            except Exception as exc:
+                failure = map_error(exc, "cloudwatch.list_metrics", "cloudwatch:ListMetrics")
+                discovery_error = "provider_denied" if failure.denied else (str(exc) if isinstance(exc, TimeoutError) else failure.provider_code)
+            discovery[metric_name] = (series, discovery_error)
+        output = {"nodes": {}, "extra": {}, "start": start.isoformat(), "end": end.isoformat(),
+                  "complete": True, "omitted_count": 0, "accounting": accounting}
+        def request(node_id, name, metric, period, dimensions, ns=namespace, unit="Percent"):
+            row = {"source": "cloudwatch", "namespace": ns, "metric": metric,
+                   "dimensions": dimensions, "period_seconds": period, "aggregation": "Average",
+                   "start": start.isoformat(), "end": end.isoformat(), "value": None,
+                   "observed_at": None, "last_sample_at": None, "sample_count": 0,
+                   "unit": unit, "status": "unavailable", "reason": "no_sample_in_window"}
+            targets[(node_id, name)] = row
+            if dimensions is None:
+                row.update(status="unknown", reason="series_unresolved")
+                return row
+            if len(queries) >= maximum_series:
+                output["omitted_count"] += 1
+                row.update(reason="not_collected_budget")
+                return row
+            if budget is not None:
+                try:
+                    budget.take("cloudwatch_series")
+                except TimeoutError:
+                    output["omitted_count"] += 1
+                    row.update(reason="not_collected_budget")
+                    return row
+            identifier = "m%d" % len(queries)
+            queries.append({"Id": identifier, "MetricStat": {"Metric": {"Namespace": ns, "MetricName": metric,
+                              "Dimensions": dimensions}, "Period": period, "Stat": "Average", "Unit": unit}, "ReturnData": True})
+            row["query_id"] = identifier
+            return row
+        for extra in (extra_series or [])[:256]:
+            output["extra"][extra["key"]] = request("__managed", extra["key"], extra["metric"], extra.get("period_seconds", 300),
+                extra["dimensions"], extra["namespace"], extra["unit"])
+        for node in nodes[:128]:
+            node_id, instance = node["node_id"], node.get("instance_id")
+            cpu = request(node_id, "cpu", "CPUUtilization", 300,
+                          [{"Name": "InstanceId", "Value": instance}] if instance else None, "AWS/EC2")
+            record = {"cpu": cpu, "memory": None, "filesystems": []}
+            for metric, name in (("mem_used_percent", "memory"), ("disk_used_percent", "filesystems")):
+                discovered, error = discovery[metric]
+                paths = [None] if name == "memory" else sorted(set(["/"] + list((mounts or {}).get(node_id, []))))
+                for path_index, path in enumerate(paths):
+                    if path is not None and path_index >= 8:
+                        row = {"source": "cloudwatch", "status": "unavailable", "reason": "not_collected_budget", "path": path, "value": None, "observed_at": None, "period_seconds": 300, "truncated": True}
+                        record["filesystems"].append(row)
+                        output["omitted_count"] += 1
+                        output["complete"] = False
+                        continue
+                    matching = [dims for key, dims in discovered.items() if dict(key).get("InstanceId") == instance
+                                and (path is None or dict(key).get("path") == path)]
+                    row = request(node_id, name + (path or ""), metric, 60 if path is None else 300,
+                                  matching[0] if len(matching) == 1 and not error else None)
+                    if error or len(matching) != 1:
+                        row.update(status="unknown" if error or len(matching) > 1 else "unavailable",
+                                   reason=error or ("series_ambiguous" if matching else "no_series"))
+                    if path is None:
+                        record["memory"] = row
+                    else:
+                        row["path"] = path
+                        record["filesystems"].append(row)
+            output["nodes"][node_id] = record
+        points, partial_ids, data_complete = {}, set(), False
+        query_units = {query["Id"]: query["MetricStat"]["Unit"] for query in queries}
+        query_ids = set(query_units)
+        token = None
+        try:
+            while queries:
+                params = {"MetricDataQueries": queries, "StartTime": start, "EndTime": end, "ScanBy": "TimestampDescending", "MaxDatapoints": 10000}
+                if token:
+                    params["NextToken"] = token
+                page = call("get_metric_data", **params)
+                for result in page.get("MetricDataResults") or []:
+                    query_id = result.get("Id")
+                    if query_id not in query_ids:
+                        continue
+                    if result.get("StatusCode") != "Complete":
+                        partial_ids.add(query_id)
+                    points.setdefault(query_id, []).extend(
+                        {"Timestamp": at, "Average": value, "Unit": query_units[query_id]}
+                        for at, value in list(zip(result.get("Timestamps") or [], result.get("Values") or []))[:60])
+                    points[query_id] = points[query_id][:60]
+                following = page.get("NextToken")
+                if not following:
+                    data_complete = True
+                    break
+                if following == token:
+                    raise TimeoutError("metric_data_token_repeated")
+                token = following
+        except Exception as exc:
+            failure = map_error(exc, "cloudwatch.get_metric_data", "cloudwatch:GetMetricData")
+            output["complete"] = False
+            output["reason"] = "provider_denied" if failure.denied else "metric_budget_exceeded" if isinstance(exc, TimeoutError) else failure.provider_code
+        for row in targets.values():
+            if "query_id" not in row:
+                output["complete"] = False
+                continue
+            query_id = row.pop("query_id")
+            samples = points.get(query_id, [])
+            class Samples:
+                def get_metric_statistics(self, **params):
+                    return {"Datapoints": samples}
+            normalized = self.get_metric_evidence(row["namespace"], row["metric"], row["dimensions"], start, end,
+                row["period_seconds"], client=Samples(), freshness_periods=3)
+            values = [bucket for bucket in normalized["buckets"] if bucket["value"] is not None]
+            normalized["value"] = values[-1]["value"] if values else None
+            normalized.pop("buckets", None)
+            row.update(normalized)
+            if query_id in partial_ids or not data_complete:
+                row.update(truncated=True, reason="provider_partial_data")
+                output["complete"] = False
+            if not samples:
+                row["reason"] = output.get("reason", "no_sample_in_window")
+            if row["status"] != "ok":
+                output["complete"] = False
+        accounting["series"] = len(queries)
+        return output
+
+    def get_node_evidence(self, instance_id, namespace="CWAgent", mounts=None,
+                          hours=24, deadline=None, client=None, now=None):
+        """One instance, exact discovered dimensions, <=4 discovery pages/12 calls."""
+        import math
+        import time
+        from .provider_call import DeadlineProviderClient, map_error
+        if type(hours) is not int or not 1 <= hours <= 168:
+            raise ValueError("invalid_hours")
+        deadline = deadline if deadline is not None else time.monotonic() + 20
+        end = mdates.parse_datetime(now or mdates.utcnow()).replace(minute=0, second=0, microsecond=0)
+        start = end - datetime.timedelta(hours=hours)
+        period = max(1, math.ceil(hours / 60)) * 3600
+        # A non-even UTC end hour can add a leading aligned bucket. Select
+        # against the actual count, preserving the honest requested window.
+        while len(_build_buckets(start, end, period)) > 60:
+            period += 3600
+        provider = DeadlineProviderClient("cloudwatch", deadline, region=self.region,
+                                           session=self.session, client=client,
+                                           client_factory=self.client_factory,
+                                           access_key=self.access_key, secret_key=self.secret_key)
+        accounting = {"calls": 0, "discovery_pages": 0}
+        class BudgetClient:
+            def __getattr__(self, operation):
+                def call(**kwargs):
+                    if accounting["calls"] >= 12 or time.monotonic() >= deadline:
+                        raise TimeoutError("metric_budget_exceeded")
+                    accounting["calls"] += 1
+                    return getattr(provider, operation)(**kwargs)
+                return call
+        bounded_client = BudgetClient()
+        dimensions = [{"Name": "InstanceId", "Value": instance_id}]
+        output = {"status": "ok", "source": "cloudwatch", "namespace": namespace,
+                  "cpu": None, "memory": None, "filesystems": [], "omitted_count": 0,
+                  "complete": True, "reasons": []}
+        def unavailable(metric, reason, dims=None):
+            return {"status": "unavailable", "reason": reason, "source": "cloudwatch",
+                    "namespace": namespace, "metric": metric, "dimensions": dims,
+                    "observed_at": None, "unit": "Percent", "value": None,
+                    "start": start.isoformat(), "end": end.isoformat(),
+                    "period_seconds": period, "aggregation": "Average", "sample_count": 0,
+                    "last_sample_at": None, "buckets": [], "minimum": None,
+                    "maximum": None, "average": None, "omitted_count": 0}
+        def discover(metric):
+            series, seen = {}, set()
+            token = None
+            while True:
+                if accounting["discovery_pages"] >= 4:
+                    return series, "discovery_page_limit"
+                params = {"Namespace": namespace, "MetricName": metric, "Dimensions": dimensions}
+                if token:
+                    params["NextToken"] = token
+                try:
+                    page = bounded_client.list_metrics(**params)
+                    accounting["discovery_pages"] += 1
+                except Exception as exc:
+                    error = map_error(exc, "cloudwatch.list_metrics", "cloudwatch:ListMetrics")
+                    return series, "provider_denied" if error.denied else (
+                        "metric_budget_exceeded" if isinstance(exc, TimeoutError) else error.provider_code)
+                if len(page.get("Metrics") or []) > 500:
+                    return series, "discovery_row_limit"
+                for row in (page.get("Metrics") or [])[:500]:
+                    dims = row.get("Dimensions") or []
+                    if (row.get("Namespace") != namespace or row.get("MetricName") != metric
+                            or len(dims) > 30 or any(not isinstance(d, dict) for d in dims)):
+                        continue
+                    exact = {d.get("Name"): d.get("Value") for d in dims}
+                    if len(exact) != len(dims) or exact.get("InstanceId") != instance_id:
+                        continue
+                    if not all(isinstance(k, str) and isinstance(v, str) for k, v in exact.items()):
+                        continue
+                    key = tuple(sorted(exact.items()))
+                    series[key] = [{"Name": k, "Value": v} for k, v in key]
+                token = page.get("NextToken")
+                if not token:
+                    return series, None
+                if token in seen:
+                    return series, "discovery_token_repeated"
+                seen.add(token)
+        output["cpu"] = self.get_metric_evidence(
+            "AWS/EC2", "CPUUtilization", dimensions, start, end, period, client=bounded_client)
+        memory, memory_error = discover("mem_used_percent")
+        disks, disk_error = discover("disk_used_percent")
+        def read(metric, matches, error):
+            if error:
+                return unavailable(metric, error)
+            if not matches:
+                return unavailable(metric, "no_series")
+            if len(matches) != 1:
+                return dict(unavailable(metric, "series_ambiguous"), status="unknown")
+            if accounting["calls"] >= 12 or time.monotonic() >= deadline:
+                output["omitted_count"] += 1
+                return unavailable(metric, "metric_budget_exceeded", matches[0])
+            return self.get_metric_evidence(namespace, metric, matches[0], start, end, period,
+                                            client=bounded_client)
+        output["memory"] = read("mem_used_percent", list(memory.values()), memory_error)
+        paths = sorted(set(["/"] + [p for p in (mounts or []) if isinstance(p, str)]))
+        output["omitted_count"] += max(0, len(paths) - 8)
+        for path in paths[:8]:
+            matching = [dims for key, dims in disks.items() if dict(key).get("path") == path]
+            metric = read("disk_used_percent", matching, disk_error)
+            metric["path"] = path
+            output["filesystems"].append(metric)
+        families = [output["cpu"], output["memory"]] + output["filesystems"]
+        output["reasons"] = sorted({row["reason"] for row in families if row.get("reason")})
+        output["complete"] = not output["reasons"] and not output["omitted_count"]
+        output["status"] = "ok" if output["complete"] else "partial"
+        output.update(accounting)
+        return output
 
     # ------------------------------------------------------------------
     # Resource-scoped convenience wrappers

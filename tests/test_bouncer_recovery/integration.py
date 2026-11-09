@@ -139,7 +139,7 @@ def test_registration_phone_and_contact(opts):
         request.group = request.duid = request.bearer = None
         request.muid = client.session.cookies.get('_muid')
         sent = []
-        def send(phone, body):
+        def send(phone, body, secret=None):
             sent.append(phone)
             return objict(status='sent', id='test-sms')
         phone = on_phone_register_start(request, send=send)

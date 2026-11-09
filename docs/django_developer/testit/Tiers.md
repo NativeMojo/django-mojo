@@ -6,7 +6,7 @@ model, which had no middle ground between "everything critical" and "everything
 at all" and let the default tier grow to thousands of tests.
 
 > **Status.** Live (maestro #2790–#2793). The suite is curated into buckets,
-> a **bare `bin/run_tests` is the ≤30s `core` baseline** (~9s today); `--tier
+> a **bare `bin/run_tests` is the `core` baseline, budget 40s** (38-46s on the team host in 10-2026); `--tier
 > framework` runs django-mojo's own critical tier and `--all` runs everything.
 > Consumers configure their own tiers via `apps/tests/testit.json` (see *For
 > consumers* below). Legacy `default_core` / `requires_extra` keys still map onto
@@ -17,7 +17,7 @@ at all" and let the default tier grow to thousands of tests.
 
 | Bucket | What belongs here |
 |---|---|
-| `core` | The ≤30s baseline every consumer runs. Security boundaries, the handful of framework contracts whose failure means django-mojo is broken for everyone. Held to the strictest isolation contract. |
+| `core` | The baseline every consumer runs (40s budget). Security boundaries, the handful of framework contracts whose failure means django-mojo is broken for everyone. Held to the strictest isolation contract. |
 | `framework` | django-mojo's own critical contracts (the old default tier). Parallel-safe. |
 | `bug` | One isolated regression per fixed bug. Runs in the framework preset. |
 | `extended` | Correct-but-not-critical coverage, exhaustive input matrices, deep feature-internal variants. |
@@ -36,13 +36,13 @@ any other name is a literal single bucket.
 
 | Preset | Selects | Budget |
 |---|---|---|
-| `core` | `core` | 30s (hard-fail; non-advisory GitHub status on every push) |
-| `framework` | `core` + `framework` + `bug` | 90s (warn locally; advisory in GitHub CI until #2813) |
+| `core` | `core` | 40s (hard-fail; non-advisory GitHub status on every push) |
+| `framework` | `core` + `framework` + `bug` | 90s default; django-mojo sets 210s (warn locally; advisory in GitHub CI until #2813) |
 | `all` | every bucket | — |
 
 ```bash
 ./bin/run_tests                          # the core preset (the default)
-./bin/run_tests --tier core              # just the ≤30s baseline
+./bin/run_tests --tier core              # just the core baseline
 ./bin/run_tests --tier framework         # django-mojo's own critical tier
 ./bin/run_tests --tier admin --tier edge # two literal buckets
 ./bin/run_tests --all                    # everything (== --tier all)
@@ -118,8 +118,15 @@ isolation policy*) applies a contract keyed on the bucket:
 Wall-clock budgets are declared in `tests/testit.json`:
 
 ```json
-{ "budgets": { "core": 30, "framework": 90 } }
+{ "budgets": { "core": 40, "framework": 210 } }
 ```
+
+With no file the defaults are core 30 and framework 90. django-mojo's own
+core budget is 40s, measured on the team host on merged main 9e4539cc
+(37.9-46.0s on three runs started quiet, maestro #7538); its 1.25x line, 50s,
+is above every run measured on main, quiet or loaded. Its framework budget is 210s, measured on quiet runs on the team host (190-202s,
+maestro #7538): about 68s of it is serial packages, so 90s is out of reach
+until that work is made faster. Raise or lower it only from measured quiet runs.
 
 - A run over `budget × 1.25` is a **violation**; under `0.6 × budget` is a
   **stale-warning** (lower the budget so it cannot silently regrow).
@@ -130,9 +137,15 @@ Wall-clock budgets are declared in `tests/testit.json`:
   `cold_budget`; an over-budget module is flagged whatever preset ran it.
 - Budgets are skipped for partial runs (`-t` / `--ignore`) — those are not the
   preset's wall clock.
-- The budget exit is separate from the run's verdict and unchanged: it never
-  sets the report `status` or `reasons` (see *What makes a run fail* in
-  `Overview.md`).
+- The budget exit is separate from the run's verdict: it never adds to
+  `reasons` and never keeps the `--continue` checkpoint (see *What makes a run
+  fail* in `Overview.md`). A blown `core` budget does set `status: "failed"`,
+  so a run that exits 1 never reads as passed.
+- Every report carries a `budget` block: `enforced` (true for `core`, the only
+  preset whose budget fails the exit), `failed`, `time_only` (failed on time
+  with no verdict reasons, so every test passed) and the `scale` used. A
+  time-only failure is therefore `status: "failed"`, `reasons: []`,
+  `budget.time_only: true`.
 
 ## Diagnostics
 
@@ -206,7 +219,7 @@ Measured walls on the curated suite (`-j8`): **core ≈9s** (the bare run), **fr
 - **core** (~500 tests) — the security/contract boundary tests that must hold for every
   consumer: auth/token validation, permission and tenancy gates, SSRF/redirect guards,
   protected-key denial, model FK/graph permission contracts. Kept small and clean so the
-  bare run stays under 30s.
+  bare run stays inside its 40s budget.
 - **framework** — django-mojo's own critical contracts not in the universal baseline
   (model save/serialize, REST dispatch, jobs routing, most of the default_core packages'
   non-core tests).

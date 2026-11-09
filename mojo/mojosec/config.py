@@ -269,7 +269,13 @@ def validate_config(value):
     for name in _COLLECTOR_KEYS:
         if name not in collectors:
             raise ConfigError(f"collectors.{name} is required")
-        _reject_unknown(collectors[name], DEFAULTS["collectors"][name], f"collectors.{name}")
+        allowed = set(DEFAULTS["collectors"][name])
+        if name == "rpm":
+            # Profile-owned and optional: never defaulted, so an effective
+            # config matches its profile's rpm block byte for byte whether or
+            # not the profile carries the flag (al2023-web-v3 does).
+            allowed.add("skip_host_tier_roots")
+        _reject_unknown(collectors[name], allowed, f"collectors.{name}")
         if not isinstance(collectors[name]["enabled"], bool):
             raise ConfigError(f"collectors.{name}.enabled must be a boolean")
     _integer(collectors["journal"]["max_records"], "collectors.journal.max_records", 1, 20000)
@@ -331,6 +337,8 @@ def validate_config(value):
                  f"collectors.fim.tiers.{tier}.max_depth", 1, 256)
 
     rpm = collectors["rpm"]
+    if "skip_host_tier_roots" in rpm and not isinstance(rpm["skip_host_tier_roots"], bool):
+        raise ConfigError("collectors.rpm.skip_host_tier_roots must be a boolean")
     _absolute(rpm["interpreter"], "collectors.rpm.interpreter")
     _integer(rpm["interval_seconds"], "collectors.rpm.interval_seconds", 5, 86400)
     _integer(rpm["max_entries"], "collectors.rpm.max_entries", 1, 1000000)

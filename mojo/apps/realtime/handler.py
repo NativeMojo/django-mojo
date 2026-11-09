@@ -38,6 +38,13 @@ PRESENCE_REFRESH_MIN_INTERVAL = 30   # throttle presence refreshes
 
 # Returned by a guarded write that wrote nothing because the handler is closing.
 _WRITE_SKIPPED = object()
+# Close codes that mean no close frame was received (RFC 6455 7.4.1):
+# abnormal closure, TLS failure. Logged as connection_lost (#10231).
+NO_CLOSE_FRAME_CODES = (1006, 1015)
+# 1005 is "no status": a close frame without a code (a browser's plain
+# close()), but uvicorn's wsproto backend also reports a dropped transport
+# as 1005. Logged as no_status with no initiator (#10231).
+NO_STATUS_CODE = 1005
 ACTIVITY_CHECK_SECONDS = 5           # longest gap between idle checks
 WS_CONNECT_WINDOW_SECONDS = 60       # fixed window for the pre-accept rate check
 
@@ -179,6 +186,12 @@ class WebSocketHandler:
         self.connected_at = time.time()
         self.last_activity = time.time()
         self.last_presence_refresh = 0
+        # Why the socket closed (#10231). The first cause recorded wins and
+        # cleanup_connection logs it once. last_inbound counts every frame
+        # received, valid JSON or not; last_activity counts handled ones.
+        self.last_inbound = self.connected_at
+        self.close_reason = None
+        self.close_initiator = None
 
     def _log(self, message):
         try:
@@ -188,6 +201,58 @@ class WebSocketHandler:
         except Exception:
             rip = None
         logger.info(f"[{self.connection_id} -> {rip}]: {message}")
+
+    def _note_close(self, reason, initiator=None):
+        """Record why this socket is closing, unless a cause is already
+        recorded. `reason` is always one of this module's own fixed words,
+        never client input, so the close line stays bounded (#10231).
+        The socket may have ended first, by a disconnect event or a failed
+        send, while receive was still pending: that earlier cause wins."""
+        if getattr(self, "close_reason", None) is not None:
+            return
+        ended_by = getattr(getattr(self, "websocket", None), "ended_by", None)
+        if ended_by in ("event", "send_error"):
+            reason, initiator = self._stream_end_cause()
+        self.close_reason = reason
+        self.close_initiator = initiator
+
+    def _stream_end_cause(self):
+        """(reason, initiator) for a receive stream that ended, from what the
+        socket recorded (#10231). ASGI sends websocket.disconnect for a client
+        close, a lost transport and a server shutdown alike, so only an
+        ordinary close-frame code is called the client's."""
+        ended_by = getattr(self.websocket, "ended_by", None)
+        code = getattr(self.websocket, "close_code", None)
+        if ended_by == "send_error":
+            return "send_failed", None
+        if ended_by == "server":
+            return "server_close", "server"
+        if ended_by != "event":
+            return "stream_ended", None
+        if code == 1012:
+            # Uvicorn sends it when the worker shuts down; a peer may too.
+            return "service_restart", None
+        if code == NO_STATUS_CODE:
+            return "no_status", None
+        if not isinstance(code, int) or code in NO_CLOSE_FRAME_CODES:
+            return "connection_lost", None
+        return "client_closed", "client"
+
+    def _close_line(self):
+        """The one line cleanup writes per socket. It carries no frame
+        content, token or client-supplied close text."""
+        now = time.time()
+        connected_at = getattr(self, "connected_at", now)
+        code = getattr(getattr(self, "websocket", None), "close_code", None)
+        if not isinstance(code, int) or isinstance(code, bool):
+            code = None
+        return (
+            f"disconnected reason={getattr(self, 'close_reason', None) or 'unknown'} "
+            f"code={'none' if code is None else code} "
+            f"initiator={getattr(self, 'close_initiator', None) or 'unknown'} "
+            f"connected={now - connected_at:.1f}s "
+            f"idle={now - getattr(self, 'last_inbound', connected_at):.1f}s "
+            f"auth={'yes' if getattr(self, 'authenticated', False) else 'no'}")
 
     def user_online_key(self):
         return f"realtime:online:{self.user_type}:{self.user.id}"
@@ -283,8 +348,12 @@ class WebSocketHandler:
             )
 
         except Exception as e:
+            self._note_close("error")
             self._log_exception("connection error")
         finally:
+            # No cause yet: the handler itself was cancelled (a worker
+            # shutting down, for one).
+            self._note_close("handler_stopped", "server")
             # Cancel the remaining child tasks here, not after the wait: a
             # cancelled handler never reaches the line after it (#4567).
             pending = [task for task in getattr(self, "_child_tasks", ()) if not task.done()]
@@ -416,15 +485,18 @@ class WebSocketHandler:
                 if not self.authenticated:
                     await self.report_incident("auth timeout", "auth", 6)
                     await self.send_error("Authentication timeout")
+                    reason = "auth_timeout"
                 else:
                     self._log(f"timeout due to no activity for {time_since_activity:.2f} seconds, connected for {connected_duration:.2f} seconds")
-                await self.close_connection()
+                    reason = "idle_timeout"
+                await self.close_connection(reason)
                 break
 
     async def handle_client_messages(self):
         """Handle messages from WebSocket client"""
         try:
             async for message in self.websocket:
+                self.last_inbound = time.time()
                 if not self.running:
                     break
 
@@ -436,11 +508,16 @@ class WebSocketHandler:
                 except Exception as e:
                     self._log_exception("message processing error")
                     await self.send_error("Message processing error")
+            # The stream ended. If the server closed first, its cause is
+            # already recorded and wins.
+            self._note_close(*self._stream_end_cause())
 
         except Exception as e:
             if "closed" in str(e).lower():
-                self._log("disconnected")
+                # Logged once, by cleanup_connection (#10231).
+                self._note_close("connection_lost")
             else:
+                self._note_close("error")
                 self._log_exception("client message handler error")
         finally:
             self.running = False
@@ -625,7 +702,7 @@ class WebSocketHandler:
                     f"({current} >= {max_connections})",
                     "traffic:ws_maxconn", 6)
             await self.send_error("Too many connections")
-            await self.close_connection()
+            await self.close_connection("too_many_connections")
             return
 
         self.bearer_prefix = str(prefix or "").strip().lower()
@@ -1050,7 +1127,7 @@ class WebSocketHandler:
             await self.send_message(data.get("data", {}))
         elif message_type == "disconnect":
             await self.send_message(data)
-            await self.close_connection()
+            await self.close_connection("server_disconnect")
 
     async def send_message(self, message):
         """Send message to WebSocket client"""
@@ -1058,6 +1135,7 @@ class WebSocketHandler:
         try:
             await self.websocket.send(json.dumps(message))
         except Exception as e:
+            self._note_close("send_failed")
             if "closed" in str(e).lower():
                 self.running = False
             else:
@@ -1146,7 +1224,7 @@ class WebSocketHandler:
         if refused and not getattr(self, "_closing", False):
             self._log("removed from the online set and the cap is full: closing")
             await self.send_error("Too many connections")
-            await self.close_connection()
+            await self.close_connection("too_many_connections")
 
     async def report_incident(self, details, event_type="info", level=1, scope="realtime", **context):
         """
@@ -1185,8 +1263,10 @@ class WebSocketHandler:
         except Exception as e:
             self._log_exception("failed to report incident")
 
-    async def close_connection(self):
-        """Close WebSocket connection"""
+    async def close_connection(self, reason="server_close"):
+        """Close WebSocket connection. `reason` is a fixed word naming why
+        the server is closing it; it is logged on cleanup (#10231)."""
+        self._note_close(reason, "server")
         self.running = False
         try:
             await self.websocket.close()
@@ -1197,7 +1277,7 @@ class WebSocketHandler:
         """Clean up connection state in Redis"""
         # First, so a presence refresh still in flight writes nothing after this.
         self._closing = True
-        self._log("disconnected")
+        self._log(self._close_line())
 
         # Stop the post-auth pub/sub and ping tasks if they were started (they
         # are not in handle_connection's task set, so they are cancelled here).

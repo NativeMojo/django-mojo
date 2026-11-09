@@ -7,7 +7,7 @@ description: >-
   to track; leaves a born-done history item on the board at close-out.
 ---
 
-<!-- Generated from .claude/skills/maestro-vibe/SKILL.md (maestro-skill-version: 14). Do not edit directly. -->
+<!-- Generated from .claude/skills/maestro-vibe/SKILL.md (maestro-skill-version: 18). Do not edit directly. -->
 
 # Maestro Vibe — One Session, No Board Ceremony
 
@@ -20,6 +20,28 @@ close-out (step 10).
 For work that is small, single-session and low-risk: a one-file fix, a small
 bug, a typo, a config tweak, a tiny endpoint addition — where a workspec would
 cost more than the change.
+
+## Existing authority and routine decisions
+
+A clear request authorizes its ordinary implementation steps within the caller's
+actual permissions. Validate task identity, workspace, scope and current rules,
+then proceed without repeat confirmation. Ask only for material ambiguity or
+changes outside existing authority, an explicit wait, or a missing decision
+required by an enabled workspace rule. Silence is not new authority.
+
+Coordinate ownership and checkout conflicts with the holder, wait, or work on
+independent authorized tasks. Never seize an active checkout, pretend to hold a
+lease, or bypass an actual refusal. Resume parked/rejected work only with actual
+resumption authority; a clear user instruction can provide it. Read the prior
+reason and current scope first; an item ID alone does not cancel a hold.
+
+Choose routine sequencing and proportionate verification, documenting why.
+Reuse valid evidence bound to the source, commands, counts and covered behavior;
+rerun affected checks after a relevant change, failure or uncertainty. Preserve
+explicitly required checks and selected independent review. Never present a
+claim, stale output or self-review as independent proof. Routine handoffs are
+coordination, not extra human approval gates. Explicit waits, release holds,
+release authority and native-host boundaries remain binding.
 
 ## One Change or Several
 
@@ -63,14 +85,16 @@ escalate.
      the change is verified more convincingly some other way. Say what.
    - **`targeted`** — the default: name the modules that cover the change and
      run only those, after. **No baseline.**
-   - **`full`** — unbounded blast radius (migration, shared helper, contract).
-     Take a green baseline first; needing `full` is proof this was never
-     vibe-sized, so offer `$maestro-task` instead.
+   - **`full`** — unbounded blast radius (migration, shared helper or
+     contract, dependency bump). Run the default suite once, after — never
+     before; needing `full` is proof this was never vibe-sized, so offer
+     `$maestro-task` instead.
 
-   Below `full` there is no up-front baseline. If a test goes red, attribute it
-   then: read the failure, and if that doesn't settle it, `git stash -u`,
-   re-run that one test, unstash. A failure that predates you is reported, not
-   silently fixed.
+   No tier takes an up-front baseline. If a test goes red, judge it the way
+   `maestro-build`'s "Judging a Red Run" does: the project's recorded
+   integration-branch run (`test_status`), the workspace's `known-flaky-tests`
+   fact, then that one test re-run alone (`git stash -u` on a tree holding only
+   your work). A failure that predates you is reported, not silently fixed.
 4. For a bug: write a regression test that reproduces it and confirm it FAILS
    before the fix. Every tier, including `none`.
 5. Implement, matching existing patterns. Tests with the change, not after.
@@ -108,10 +132,19 @@ escalate.
      the history) or the session escalated to `$maestro-task`.
    - Maestro unreachable: say so in the report and move on — this never blocks
      a close-out.
+   - **Record the result on it** with `record_work_result` (through
+     `invoke_tool`; `expected_head` from `get_board_item(item).results`, a
+     fresh UUID `request_key` per write): a `delivery` of the commit (repo and
+     full 40-hex sha), your `verification` of it (what ran, its totals, and
+     `test_run` when the runner reported one on that commit), then an
+     `outcome` of `shipped`. On an existing tracked item, record these on
+     that item instead.
 11. Report back briefly: what changed (commits, one line each), how it was
     verified — the tier, what ran, and at `none` the plain statement that no
     tests ran and what stood in for them — and anything left open. Keep the
     report as small as the change.
+
+**Before you end.** Stop the processes this session started that outlive a command, such as a dev server, a browser or a watcher. Never stop a process you did not start. A test server `bin/run_tests` started is the runner's, so leave it. Never stop a shared Redis or Postgres, even one you started, because other checkouts use it. Remove each worktree this session created once its branch is merged into the integration branch, or for a verification worktree once its verdict is recorded.
 
 ## Board Touchpoints
 

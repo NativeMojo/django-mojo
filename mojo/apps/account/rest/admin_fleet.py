@@ -25,7 +25,9 @@ def on_admin_fleet(request):
     from mojo.apps.account.services import fleet_config, fleet_apply
     actor = _actor(request)
     result = fleet_config.state(actor)
-    result["fleet"] = fleet_apply.observe(result.get("revision"))
+    result["fleet"] = fleet_apply.observe(result.get("revision"),
+                                          topic_required=result.get("shared_validation_required", False),
+                                          topic_identity=result.get("shared_validation_identity"))
     return result
 
 
@@ -87,6 +89,10 @@ def on_fleet_serving_proof(request):
         healthy = admin_platform._database()["reachable"] and admin_platform._redis()["reachable"]
     except Exception:
         pass
-    return {"loaded_revision": settings.get_static("MOJO_FLEET_CONFIG_REVISION", None),
+    from mojo.deploy.fleet_config_node import loaded_topic_identity
+    topic = loaded_topic_identity()
+    healthy = healthy and topic.get("state") in ("disabled", "verified")
+    return {"shared_validation": topic,
+            "loaded_revision": settings.get_static("MOJO_FLEET_CONFIG_REVISION", None),
             "pid": os.getpid(), "node": socket.gethostname().lower(),
             "nonce": challenge["nonce"], "healthy": bool(healthy)}

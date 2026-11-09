@@ -1327,7 +1327,9 @@ def get_runners_bounded(channel, limit=128, max_scan_pages=16, timeout=1.0):
         channel, limit=limit, max_scan_pages=max_scan_pages, timeout=timeout)
 
 
-def get_sysinfo(runner_id=None, timeout=5.0):
+def get_sysinfo(runner_id=None, timeout=5.0, diagnostic=False, roster=None,
+                channel=None, deadline=None, revision=None, *, manager=None,
+                connect=None):
     """
     Collect host system info from one or all active runners.
 
@@ -1358,7 +1360,27 @@ def get_sysinfo(runner_id=None, timeout=5.0):
         info = jobs.get_sysinfo(runner_id='runner-host1-abc123')
     """
     from .manager import get_manager
-    manager = get_manager()
+    manager = manager or get_manager()
+    if diagnostic:
+        import time
+        from mojo.helpers.redis import get_bounded_connection
+        from mojo.helpers.settings import settings
+        connect = connect or get_bounded_connection
+        deadline = min(deadline if deadline is not None else time.monotonic() + 5,
+                       time.monotonic() + min(5, max(0, float(timeout))))
+        channel = channel or settings.get_static("ADMIN_FLEET_CONFIG_CHANNEL", "edge")
+        if roster is None:
+            raise ValueError("diagnostic_roster_required")
+        if runner_id is not None:
+            raise ValueError("diagnostic_uses_bound_roster")
+        with connect(timeout=max(0.001, deadline - time.monotonic()),
+                     max_connections=2, read_from_replicas=False,
+                     deadline=deadline) as client:
+            return manager.broadcast_execute_checked(
+                "mojo.apps.jobs.services.sysinfo_task.collect_diagnostics",
+                {"revision": revision} if revision else {},
+                timeout=min(5, float(timeout)), channel=channel, roster=roster,
+                client=client, deadline=deadline)
     func_path = "mojo.apps.jobs.services.sysinfo_task.collect_sysinfo"
     if runner_id:
         result = manager.execute_on_runner(runner_id, func_path, timeout=timeout)

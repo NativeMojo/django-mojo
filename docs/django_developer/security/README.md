@@ -963,10 +963,13 @@ lifecycle.
 
 ### MojoSec broker-flood cleanup
 
-Missing broker proof remains centrally visible by design; never suppress raw
-`auth.sudo_command` at the sensor. After a fixed release has been deployed and
-the matching count has stopped growing, preview the September-style flood on
-each affected database with an exact sensor and UTC half-open interval:
+A broker sudo that is not the deployed automation's — most often a job engine
+an operator started from an SSH shell, whose broker sudos then carry that
+shell's Audit session until cron relaunches the engine — is one ordinary
+`auth.sudo_command` per minute, centrally visible by design; the sensor never
+samples raw sudo. Once the engine is back under cron and the matching count
+has stopped growing, preview the flood on each affected database with an exact
+sensor and UTC half-open interval:
 
 ```bash
 uv run python manage.py prune_mojosec_broker_flood \
@@ -977,7 +980,8 @@ uv run python manage.py prune_mojosec_broker_flood \
 
 The JSON preview reports `matched`, `safe`, `unsafe`, and the ID/time range.
 `safe` requires the exact MojoSec scope/category/sensor, broker command path,
-missing-proof status, no Event-linked Incident, and only published terminal
+no TTY (an interactive broker run is never pruned), no Event-linked Incident,
+and only published terminal
 receipts with no receipt-linked Incident. Any exact match outside those gates is
 reported as `unsafe` and makes apply refuse. Review and record the preview, then
 obtain write approval for that exact database, sensor, interval, and ceiling:
@@ -1141,14 +1145,44 @@ OSSEC → POST /api/incident/ossec/alert
 
 ## 10. Health Monitoring
 
-The health monitoring system runs every 3 minutes (when enabled) and reports infrastructure events.
+OS cron directly checks runner and scheduler liveness every three minutes,
+independently of Jobman. Enrolled health snapshot sources collect this evidence
+quietly even when `HEALTH_MONITORING_ENABLED` is false. The flag enables the
+existing incident reports, default notification/ticket rules and queued resource
+metrics collection; enrollment alone enables none of those actions.
+
+The detector reads at most 128 hosts and 32 declared channels through a private
+primary Redis connection with a four-second deadline and 256-command cap.
+`ADMIN_FLEET_CONFIG_EXPECTED_NODES` declares physical expected hosts on
+`ADMIN_FLEET_CONFIG_CHANNEL` (default `edge`). Logical `EDGE_EXPECTED_TOPOLOGY`
+node IDs use the existing scoped, checked fleet identity cache and shared
+reconciliation; unresolved or ambiguous logical aliases stay Unknown. Established
+node-to-host mappings are retained for at most 24 hours within the same current
+declaration scope, preserving missing-host detection after short alias expiry.
+A replacement process needs a checked mapping for its own incarnation; a
+predecessor's alias leaves its logical identity Unknown.
+`JOBS_CHANNELS` declares channels requiring a live consumer. A bounded 24-hour
+last-seen baseline preserves established host/channel expectations after
+heartbeat expiry. Current host and channel declarations retire removed hosts
+and roles; a process restart preserves the host identity. Explicit host declarations
+are needed for durable expectations beyond baseline retention. Read errors and
+malformed rosters remain unavailable rather than healthy empty lists. Unchanged
+detector results do not repeat incident fanout; recovery rearms the next failure.
+
+After each successful scheduler loop, including idle loops, the leader writes
+an expiring progress sample at most once per five seconds. Cron checks that the
+sample belongs to the current lease and is younger than 30 seconds. Lease
+presence alone is metadata. Detector records expire after 15 minutes and become
+stale after 420 seconds; cached reads never refresh either clock. Deployment
+needs the existing OS crond installation and a scheduler restart to load the
+progress writer. No new daemon, credentials or notification channel is installed.
 
 ### What It Checks
 
 | Check | Category | Level | Threshold |
 |-------|----------|-------|-----------|
 | Dead job runners | `system:health:runner` | 10 | Runner not responding |
-| Missing scheduler | `system:health:scheduler` | 10 | No scheduler lock in Redis |
+| Missing scheduler | `system:health:scheduler` | 10 | Missing lease or missing/stale current loop progress |
 | TCP connections | `system:health:tcp` | 8 | > `HEALTH_TCP_MAX` (default 2000) |
 | CPU usage | `system:health:cpu` | 8 | > `HEALTH_CPU_CRIT` (default 90%) |
 | Memory usage | `system:health:memory` | 8 | > `HEALTH_MEM_CRIT` (default 90%) |
@@ -1297,6 +1331,15 @@ The five legacy regex values used by the three OSSEC pattern RuleSets retain
 the exact runtime-only compatibility exception described above. A governed
 replacement must express equivalent intent using the atomic safe subset; the
 exception cannot be inherited by reusing a RuleSet name or metadata flag.
+
+### MojoSec Rules
+
+The [MojoSec defaults guide](mojosec_defaults.md) covers its separate,
+create-only governed policies: receipt-proven routine activity and refused
+probes avoid incident noise, repeated sensitive-path scanners can request a
+bounded checked fleet block, and failures remain visible. It also documents
+the reserved `mojosec_*` operands and the preview-first `mojosec_rules` command
+for exact legacy WMWX visibility repair.
 
 ### OSSEC Rules
 

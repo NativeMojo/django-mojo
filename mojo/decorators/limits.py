@@ -8,6 +8,7 @@ from mojo.helpers.redis import get_connection
 from mojo.helpers.response import JsonResponse
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
+from mojo.helpers.request import is_signed_in_user
 from mojo.apps import metrics
 
 logger = logit.get_logger("error", "error.log")
@@ -1031,14 +1032,14 @@ def _matches_prefix_rule(request, prefix):
 def _resolve_throttle_identity(request):
     """Return ("apikey"|"user", pk) for an authenticated identity, else (None, None).
 
-    hasattr(user, "is_request_user") is the framework's canonical "real request
-    User" test — ANONYMOUS_USER and bare ApiKey identities don't have it.
+    is_signed_in_user is the framework's canonical "real request User" test;
+    ANONYMOUS_USER and bare ApiKey identities fail it.
     """
     api_key = getattr(request, "api_key", None)
     if api_key is not None:
         return "apikey", api_key.pk
     user = getattr(request, "user", None)
-    if user is not None and hasattr(user, "is_request_user") and getattr(user, "is_authenticated", False):
+    if is_signed_in_user(user):
         return "user", user.pk
     return None, None
 

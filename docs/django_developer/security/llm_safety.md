@@ -24,7 +24,7 @@ _LLM_LIMITS = {
     "tokens_hour": 2000000,
     "tokens_day": 10000000,
     "concurrency": 4,
-    "max_input_bytes": 200000,
+    "max_input_bytes": 150000,
     "max_output_tokens": 8192,
     "timeout_seconds": 60,
     "max_loop_calls": 25,
@@ -33,7 +33,7 @@ _LLM_LIMITS = {
 LLM_SAFETY_POLICY = {
     "version": 1,
     "routes": {
-        "assistant": {"provider": "anthropic", "model": "claude-sonnet-5",
+        "assistant": {"provider": "anthropic", "model": "auto:sonnet",
                       "credential": "admin",
                       "capabilities": ["text", "tools", "images", "prompt_cache"]},
         "incident_triage": {"provider": "anthropic", "model": "claude-sonnet-5",
@@ -73,7 +73,7 @@ LLM_SAFETY_POLICY = {
         "configuration": {**_LLM_LIMITS, "concurrency": 1,
                           "max_output_tokens": 16, "max_loop_calls": 1},
         "model_discovery": {**_LLM_LIMITS, "concurrency": 1,
-                            "max_output_tokens": 16, "max_loop_calls": 1},
+                            "max_output_tokens": 16, "max_loop_calls": 5},
         "unattributed": {**_LLM_LIMITS, "concurrency": 1,
                          "max_loop_calls": 1},
     },
@@ -91,7 +91,14 @@ feature caps are both enforced for request windows, token windows,
 concurrency, input bytes, output tokens, timeout, and loop calls. A request's
 tools, images, and enabled prompt cache must be declared by its route. The
 route owns the guarded model; an explicit `model=` is accepted only when it
-exactly matches the route. `credential: "admin"` requires
+exactly matches the resolved runtime ID. Only `assistant` on Anthropic may
+use `model="auto:sonnet"`; other feature/provider routes reject delegation.
+Literal policy routes remain fixed. The delegated priority is owner-stored
+`LLM_ADMIN_MODEL`, file-owned `LLM_ADMIN_MODEL`, then the newest compatible
+active Sonnet from metadata. No handler model/key fallback is allowed.
+Inspect/clear old legacy pins before opting in, deploy the policy change, and
+activate the new hash normally. No installed policy is rewritten automatically.
+`credential: "admin"` requires
 `LLM_ADMIN_API_KEY`; it never silently falls back to the handler credential.
 
 Each installation supplies its exact Anthropic credential or AWS role/profile
@@ -151,8 +158,13 @@ LLM_SAFETY_POLICY["features"]["my_maestro_reasoning"] = {
 ```
 
 Bedrock requires exactly these six route keys, `credential="aws"`, and
-`capabilities` of exactly `["text"]` or, to admit image input, `text` plus
-`images` in either order (see [Image input](#image-input)). Allowed models are exactly
+`capabilities` of `["text"]`, optionally plus `"tools"`, `"images"`, or both,
+in any order. Adding `"tools"` lets
+callers declare tools (see [Tool use on Bedrock](../helpers/llm.md#tool-use-on-bedrock));
+adding `"images"` admits image input (see [Image input](#image-input)). Either
+changes the policy hash, so activate the deployed policy again. A tool
+loop of N rounds makes N + 1 calls under one operation id, so give the
+feature envelope a `max_loop_calls` of at least that. Allowed models are exactly
 `us.amazon.nova-2-lite-v1:0`, `eu.amazon.nova-2-lite-v1:0`,
 `jp.amazon.nova-2-lite-v1:0`, and `global.amazon.nova-2-lite-v1:0`.
 `reasoning_efforts` must be a nonempty, unique list drawn from `off`, `low`,
@@ -186,12 +198,16 @@ role credentials does not reset budgets or the circuit. The two Anthropic key
 settings are never read to resolve a Bedrock credential.
 
 See [the call and response contract](../helpers/llm.md#bedrock-reasoning).
-The adapter accepts text, plus image blocks in user messages on an image
-route, returns text only, suppresses reasoning content from the final
-answer, and retains billed reasoning within `usage.output_tokens`. It sends
-no explicit cache controls, guardrail configuration, or application content
-filter. Anthropic tool routes, key probes, and model discovery retain their
-existing contracts.
+The adapter supports text, image blocks in user messages on an image route,
+caller-declared tools, and streamed answers. It
+suppresses reasoning content from the final answer and from the stream, and
+retains billed reasoning within `usage.output_tokens`. It sends no explicit
+cache controls, guardrail configuration, or application content filter.
+Streaming needs no extra policy capability, but `ConverseStream` needs the
+IAM action `bedrock:InvokeModelWithResponseStream` on the same inference
+profile and destination model resources that `bedrock:InvokeModel` covers.
+Anthropic tool routes, key probes, and model discovery retain their existing
+contracts; streaming is Bedrock-only.
 
 ## Image input
 
@@ -210,9 +226,16 @@ response = llm.call(
 
 The block is `{"type": "image", "source": {"type": "base64", "media_type": ...,
 "data": ...}}`, the same shape the Anthropic adapter takes. To admit it on a
-Bedrock route, set `"capabilities": ["text", "images"]`. That changes the policy
+Bedrock route, add `"images"` to its capabilities: `["text", "images"]`, or
+`["text", "tools", "images"]` for a tool route. That changes the policy
 hash, so update `LLM_SAFETY_POLICY_EXPECTED_HASH` with it; an existing
-`["text"]` policy parses and hashes exactly as before.
+policy without `images` parses and hashes exactly as before.
+
+The same block works in `llm.stream()` and inside a tool loop. In a loop the
+image stays in its user turn and is resent, and revalidated, on every round;
+Nova bills its 230 tokens again each round. A tool result's content stays
+text-only: an image inside a `tool_result` is `image_invalid`. Document blocks
+(PDF) are not supported.
 
 Before any byte cap, permit, ledger row or adapter, the guard checks every image
 in the request, for any provider:
@@ -290,13 +313,36 @@ remote cancellation: credential refresh and I/O may outlive the admission
 lease. These concurrency caps bound admission leases, not every still-running
 AWS request.
 
+`llm.stream()` passes exactly the same steps before it dispatches
+`converse_stream`, so a refused stream raises before any event. Its extra
+pre-dispatch checks are the route's adapter supporting streaming (only
+Bedrock does) and, for every Bedrock call, the tool-loop rules: tool turns
+without declared tools are `capability_unsupported`, declared tools without
+an `operation_id` are `operation_invalid`, and a transcript holding more
+answered tool rounds than `max_tool_rounds` (Bedrock default 8) is
+`loop_limit`. The Bedrock adapter then checks the whole request shape
+(messages, tool declarations and tool turns) without any SDK work; a
+malformed request is `provider_rejected`. All of these refuse before the
+operation counter, circuit, permit, or ledger, for plain and streamed calls.
+
+A stream settles exactly once: on its final record (actual usage,
+`succeeded`), on a provider failure (as below), or on a cancel
+(`failed`/`cancelled`, full reservation kept unless the final usage report
+had arrived). A cancel releases the circuit as healthy only after the stream
+delivered provider events, so cancels cannot hide a provider that accepts
+and then hangs. A timer ends a stream at the policy timeout, so a trickling
+stream cannot outlive its admission lease. A deadline that passes while the
+caller holds the stream between reads still fails as `provider_timeout`, but
+does not count against the circuit; only a read left blocked by AWS does.
+
 Bedrock success and failed answers with validated token evidence reconcile
 the reservation using all four usage classes, including billed reasoning and
 implicit cache usage. If spend is unknown, the failure releases concurrency
 but retains the full token reservation for its budget windows; missing usage
 is never treated as zero. Existing Anthropic failure accounting is unchanged.
 Bedrock authentication, throttling, timeout, unavailable, and server failures
-count toward the circuit. Unusable output (`provider_rejected`, including an
+count toward the circuit, including connection resets and read timeouts in
+the middle of a stream. Unusable output (`provider_rejected`, including an
 AWS `content_filtered` result) does not open it and releases a half-open probe
 as healthy. This does not add content filtering to the application.
 
@@ -311,6 +357,62 @@ fingerprint or raw error.
 
 `LLMRequest`, `LLMCircuitBreaker`, and `IncidentLLMAttempt` have no generic
 per-row REST surface. Operators receive aggregates only.
+
+## How token budgets are charged
+
+Every `tokens_*` limit counts tokens: input, output, cache read and cache
+write, all at full weight. Each call reserves its input estimate plus the full
+`max_tokens` before it runs, and settles against the usage the provider
+reports when it finishes.
+
+- **Anthropic text and tool calls.** The guard asks Anthropic's free
+  token-count endpoint for the exact request (messages, system prompt and
+  tools) on the resolved model, with a 3-second timeout. It reserves
+  `min(bytes, ceil(count × 1.10) + 64)` for the input, computed in integers
+  (count 50 gives exactly 119), where `bytes` is the length of the
+  serialized request. The count never raises a reservation
+  above today's byte bound. It is not counted as a request in the budget
+  windows and never touches the circuit breaker.
+- **Byte fallback.** Bedrock routes (Nova 2 Lite has no count endpoint),
+  requests containing images, and any count that fails, times out or returns
+  something other than a positive integer reserve the serialized byte length,
+  exactly as before.
+- **Output headroom** is always the full `max_tokens`.
+- **Settling.** Usage below the reservation is refunded. Usage above it is
+  charged at once to every token window that is still live. The one corner:
+  a call that outlives its minute window charges the excess to the hour and
+  day windows only, because an expired window is never recreated.
+- **Windows** are per provider and credential fingerprint, for the shared
+  envelope and the feature, so two features on one key share the shared
+  windows.
+- **Two budget codes.** A reservation above the smaller `tokens_minute`
+  (shared or feature) can never fit: it is refused with
+  `request_exceeds_budget`, permanently, before anything is written. A
+  reservation that would overfill a current window is refused with
+  `budget_exhausted` and `retry_after`: the seconds until the first refusing
+  window rolls over. `concurrency_exhausted` carries no hint.
+
+Each ledger row records `estimated_input_tokens` (the provider count, 0 for
+the byte fallback) and `estimate_source` (`count` or `bytes`). To compare the
+estimate with billed input on real traffic:
+
+```python
+from django.db.models import Avg, Count, F, Max, Min
+from mojo.apps.account.models import LLMRequest
+
+(LLMRequest.objects
+    .filter(status="succeeded", estimate_source="count", input_tokens__gt=0)
+    .annotate(billed=F("input_tokens") + F("cache_read_input_tokens")
+              + F("cache_creation_input_tokens"))
+    .values("feature", "model")
+    .annotate(calls=Count("id"),
+              mean_ratio=Avg(F("estimated_input_tokens") * 1.0 / F("billed")),
+              low=Min(F("estimated_input_tokens") * 1.0 / F("billed")),
+              high=Max(F("estimated_input_tokens") * 1.0 / F("billed"))))
+```
+
+A ratio near 1.0 means the count matches billed input; the 10% + 64 margin
+sits on top of it.
 
 ## Autonomous and explicit incident work
 
@@ -346,7 +448,9 @@ requeues an unexpired worker.
 
 States are:
 
-- Ledger: `started`, `succeeded`, `failed`, `blocked`, `unknown`.
+- Ledger: `started`, `succeeded`, `failed`, `blocked`, `unknown`. A cancelled
+  stream is `failed` with the ledger-only code `cancelled`; it is never
+  raised to a caller.
 - Circuit: `closed`, `open`, `half_open`.
 - Incident attempt: `claimed`, `queued`, `running`, `retryable`, `succeeded`,
   `terminal` (a retryable attempt normally transitions immediately back to
@@ -403,24 +507,51 @@ Checking a stored credential targets exactly `admin` or `handler`, never
 fallback resolution. It is an ordinary guarded call, is refused while stopped,
 uses the configuration route/model and accounting, and forces prompt caching
 off. Candidate probes require owner authority in the service as well as the
-fresh-auth owner REST boundary. Model discovery is one page of at most 100
-models with the policy timeout and one permit/ledger; it does not paginate
-invisibly.
+fresh-auth owner REST boundary. Model discovery traverses at most five pages
+of 100 entries under a total deadline of 20 seconds or the smaller configured
+shared/discovery timeout. Each page re-proves current controls/credential,
+counts the same operation ID, and obtains its own breaker lease, permit and
+ledger. A smaller installed `max_loop_calls` stops pagination safely; this
+feature never increases deployment budgets. Partial traversal is a failure.
+
+The shared catalogue is namespaced by version, policy hash, provider and exact
+credential fingerprint. Assistant and discovery credentials must match.
+Metadata explicitly declares active Sonnet line, release instant, adequate
+output cap and image support when required; no family/version guessing or
+invented client-tool metadata is used. Complete success with no compatible
+model invalidates old selection. Freshness is 24 hours, bounded last-good use
+is seven days from success after failed/incomplete refresh, and expired data
+cannot make an automatic route ready. A 30-second Redis NX owner-token lock
+and 60-second attempt cooldown bound refresh work; unknown coordination
+cannot issue a request. The process-local fallback shares these deadlines.
+Ordinary setup/bootstrap reads are passive. First authorized calls after
+expiry or explicit owner refresh perform refreshes, with no background job or
+SDK retry. The response reports the actual refresh outcome independently of
+usable stale data. See [selection/cache details](../helpers/llm.md#catalogue-cache)
+and the [additive schema-2 owner API](../../web_developer/account/admin_portal/assistant.md).
 
 ## Stable failures and retry semantics
 
-`llm.call()` and `ask()` raise `LLMExecutionError(code, retry_after=None)`.
+`llm.call()`, `ask()` and `stream()` (from the call or from iteration) raise
+`LLMExecutionError(code, retry_after=None)`.
 Provider text is discarded. `retry_after` may be populated for a bounded
-provider rate-limit response. Stable codes are:
+provider rate-limit response, and for `budget_exhausted` (the seconds until the
+first refusing budget window rolls over). Stable codes are:
 
 - Controls/policy: `policy_invalid`, `policy_mixed`, `route_missing`,
   `emergency_stopped`, `control_state_unknown`, `credential_missing`,
   `provider_unsupported`, `capability_unsupported`, `model_mismatch`,
-  `context_invalid`, `operation_invalid`, `triage_incomplete`.
+  `context_invalid`, `operation_invalid`, `triage_incomplete`, `credential_mismatch`,
+  `catalogue_unavailable`, `catalogue_incomplete`, `no_compatible_model`,
+  `refresh_in_progress`, `refresh_throttled`.
 - Image input: `image_invalid`.
 - Limits/persistence: `input_too_large`, `output_too_large`, `loop_limit`,
-  `budget_exhausted`, `concurrency_exhausted`, `permit_unavailable`,
-  `ledger_unavailable`, `ledger_persistence_unknown`.
+  `request_exceeds_budget`, `budget_exhausted`, `concurrency_exhausted`,
+  `permit_unavailable`, `ledger_unavailable`, `ledger_persistence_unknown`.
+
+`request_exceeds_budget` is permanent: the call alone is larger than the
+smallest `tokens_minute` limit, so retrying it can never succeed and incident
+work does not retry it. `budget_exhausted` is retryable after `retry_after`.
 - Circuit/provider: `breaker_open`, `breaker_half_open`,
   `provider_authentication`, `provider_billing_exhausted`,
   `provider_rate_limited`, `provider_timeout`, `provider_unavailable`,

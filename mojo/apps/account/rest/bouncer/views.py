@@ -29,8 +29,12 @@ logger = logit.get_logger('bouncer', 'bouncer.log')
 
 DISABLE_LOGIN = settings.get_static('DISABLE_LOGIN', False)
 
-_DEFAULT_CHALLENGE_LOGO = 'https://mojoverify.com/logo.svg'
-_DEFAULT_CHALLENGE_BRAND = 'MOJO VERIFY'
+# BOUNCER_CHALLENGE_LOGO_URL / BOUNCER_CHALLENGE_BRAND apply only when they
+# are explicitly set (deployment or group). The empty default means "not set",
+# and the challenge then falls back exactly as the sign-in page does: no logo,
+# and the sign-in page's default name (#9132).
+_DEFAULT_CHALLENGE_LOGO = ''
+_DEFAULT_CHALLENGE_BRAND = ''
 
 
 def _resolve_group(request):
@@ -334,6 +338,20 @@ def _auth_context(request, group=None, include_registration_extras=False):
     # straight back into another 440 response.
     context['skip_session_check'] = str(
         request_data.get('force_reauth', '')).lower() in ('1', 'true', 'yes')
+    # An app on its own host sends its signed-out visitor here with
+    # ?signed_out=1 (#9568). The page's stored tokens live on this host, so
+    # the app's own sign-out cannot clear them: auth_base.html clears them
+    # before the session check, which is skipped, and shows the form.
+    context['signed_out'] = str(
+        request_data.get('signed_out', '')).lower() in ('1', 'true', 'yes')
+    if context['signed_out']:
+        context['skip_session_check'] = True
+    # Back from a sign-in provider (?code=&state=): auth_base.html renders the
+    # "Signing you in" view and hides the form in the first byte of HTML, so
+    # the form never flashes while the completion runs (#8579). The page
+    # script reads the same query, so the two cannot disagree.
+    context['oauth_callback'] = bool(
+        request_data.get('code') and request_data.get('state'))
     # Only same-origin hosted sign-in returning to this installation's Admin
     # participates in the source-cookie generation protocol.
     from urllib.parse import urlsplit
@@ -401,6 +419,8 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
         fwd_params['redirect'] = redirect_val
     if str(request_data.get('force_reauth', '')).lower() in ('1', 'true', 'yes'):
         fwd_params['force_reauth'] = '1'
+    if str(request_data.get('signed_out', '')).lower() in ('1', 'true', 'yes'):
+        fwd_params['signed_out'] = '1'
     back_val = request_data.get('back') or ''
     if back_val:
         fwd_params['back'] = back_val
@@ -428,13 +448,30 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
         if public_message.get_kind(kind) is not None:
             fwd_params['kind'] = kind
     group_qs = f'?{urlencode(fwd_params)}' if fwd_params else ''
-    # Challenge page: default branding from settings, opt-in override per group
+    # Challenge branding follows the hosted sign-in theme. A configured theme
+    # value wins; an explicitly set BOUNCER_CHALLENGE_* setting fills a gap;
+    # else the sign-in page's own value. resolve_auth_config deep-merges the
+    # code defaults, so app_title is never empty: a title equal to the
+    # DEFAULT_AUTH_CONFIG default counts as "not configured". The default
+    # logo_url is empty, so a plain truthiness check is enough there.
     cfg = auth_config.resolve_auth_config(group=group, request=request)
     theme = cfg.theme
     logo_url = theme.logo_url or settings.get(
-        'BOUNCER_CHALLENGE_LOGO_URL', _DEFAULT_CHALLENGE_LOGO, group=group)
-    brand_name = theme.app_title or settings.get(
+        'BOUNCER_CHALLENGE_LOGO_URL', _DEFAULT_CHALLENGE_LOGO, group=group) or ''
+    default_title = auth_config.DEFAULT_AUTH_CONFIG['theme']['app_title']
+    challenge_brand = settings.get(
         'BOUNCER_CHALLENGE_BRAND', _DEFAULT_CHALLENGE_BRAND, group=group)
+    if theme.app_title and theme.app_title != default_title:
+        brand_name = theme.app_title
+    elif challenge_brand:
+        brand_name = challenge_brand
+    else:
+        brand_name = theme.app_title or 'DJANGO MOJO'
+    # Appearance is resolved exactly as _auth_context does, so the check uses
+    # the light/dark/system look the sign-in page would use.
+    auth_appearance = auth_config.normalize_appearance(
+        requested_appearance,
+        auth_config.normalize_appearance(theme.appearance or 'system'))
     if hosted_config is None:
         from mojo.apps.account.services.bouncer.hosted_gate import descriptor
         hosted_config = descriptor(request, page_type, group)
@@ -455,6 +492,10 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
         'brand_name': brand_name,
         'auth_provider_name': theme.auth_provider_name or 'DJANGO MOJO',
         'accent_color': auth_config.normalize_accent_color(theme.accent_color),
+        'auth_appearance': auth_appearance,
+        # The tenant's own admin-set stylesheet, loaded as auth_base.html does.
+        'custom_css_url': theme.custom_css_url or '',
+        'custom_css': theme.custom_css or '',
         'group_uuid': group_uuid,
     }
     return _render_with_csp(request, 'account/bouncer_challenge.html', ctx,

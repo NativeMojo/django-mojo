@@ -29,7 +29,7 @@ User sends message via REST
                 approval card, fires "assistant_approval_required".
                 The operator resolves it later over
                 POST /api/assistant/action or the WS assistant_approval
-                message; only approvals.resolve() ever calls the handler.
+                message. An owner_state call returning True runs directly.
                 See approvals.md.
           → Yes, and not mutating: execute handler(params, user), return
             result to LLM
@@ -48,12 +48,14 @@ User sends message via REST
     → Return response + conversation_id + pending_actions
 ```
 
-> **Mutating tools do not execute on the model's call.** See
+> **Chat mutations use approval cards, apart from owner-state calls.** Explicit
+> MCP execution consent additionally permits eligible ordinary tools; protected
+> tools retain their cards. See
 > [Approvals](approvals.md) for the boundary, the `PendingAction` state machine,
 > the gate arguments (`fresh_auth_seconds`, `requires_superuser`,
-> `requires_managed_infrastructure`, `summarize`, `preview`, `authorize`), the
-> transports, and the tool → Admin-twin → gates table for all 38 built-in
-> mutating tools.
+> `requires_managed_infrastructure`, `requires_operator_approval`, `summarize`,
+> `preview`, `authorize`), the transports, and the tool → Admin-twin → gates table
+> for built-in mutating tools.
 
 ### Transports
 
@@ -72,7 +74,10 @@ clients that signed in through this installation's own OAuth 2.1 server. It
 runs no LLM of its own — the client's model does the reasoning and this
 installation only executes tools — and it dispatches through a *projected*
 registry, so the Admin's own conversation tools are not offered. It is off by
-default. See [MCP transport](mcp.md), and
+default. Plain `mcp` grants propose shared changes. Separately consented
+`mcp mcp:execute` grants at the exact MCP resource run eligible ordinary tools
+within the operator's live authority, with protected tools still pending for
+confirmation. Existing grants are never widened. See [MCP transport](mcp.md), and
 [account/oauth_server](../account/oauth_server.md) for token issuance and
 confinement.
 
@@ -112,6 +117,7 @@ All other tools (security, jobs, users, groups, metrics, docit, full discovery) 
 | `docit` | Search the documentation knowledge base (docit books and pages) |
 | `discovery` | Full tool listing (`list_tools`) |
 | `cloud` | Cloud and fleet operations: platform/dashboard health, capacity, managed-engine upgrades, framework version, recorded drift, CloudWatch metrics, System Setup readiness (read-only), and the Admin's deploy/framework/upgrade/capacity controls behind an approval |
+| `dns` | Shared wildcard-validation setup: authorized groups, read-only readiness, prepare/join, check and idempotent request behind PendingAction — see [dns_tools.md](dns_tools.md) |
 
 ### `load_tools` — the primary gateway
 
@@ -231,7 +237,7 @@ read *and* write — see
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `assistant_setup` | Plain global `Setting` row |
 | `LLM_ADMIN_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the Assistant's own key, optional |
-| `LLM_ADMIN_MODEL` | `assistant_setup` | Plain legacy picker pin; absent means no pin. The guarded route owns its runtime model |
+| `LLM_ADMIN_MODEL` | `assistant_setup` | Owner pin on `auto:sonnet` routes; inert legacy pin on fixed routes |
 | `LLM_ADMIN_VERIFY_STATE` | `assistant_setup` | How the STORED Assistant key last checked |
 | `LLM_HANDLER_API_KEY` | `assistant_setup` | **Encrypted** secret `Setting` row — the **platform** key |
 | `LLM_HANDLER_VERIFY_STATE` | `assistant_setup` | How the STORED platform key last checked |
@@ -297,8 +303,33 @@ assistant route credential: admin   -> LLM_ADMIN_API_KEY (Admin row, then deploy
 incident route credential: handler -> LLM_HANDLER_API_KEY (Admin row, then deployment file)
 ```
 
-The safety-policy route owns both credential target and model. A caller may
-omit `model=` or supply the exact route model; it cannot select another model.
+The safety-policy route owns the credential target and either an exact fixed
+model or explicit `auto:sonnet` delegation for the Anthropic Assistant.
+Delegated routes prefer owner-stored `LLM_ADMIN_MODEL`, then a deployment-file
+pin, then the newest compatible active Sonnet by provider line/lifecycle,
+release timestamp, output cap and required image metadata. Existing literal
+policies remain fixed until deployment and owner hash activation; inspect or
+clear legacy pins before opting in. Modern dateless IDs are pinned releases.
+A caller omits `model=` or echoes the actual resolved ID; it cannot override
+selection. Normal and streamed loops snapshot that ID per guarded invocation
+for mismatch checks, ledger and provider.
+
+Owner setup supports explicit `set_model_selection` pin/auto actions. Plain
+GET is passive. Passive `route.ready` requires a currently resolved usable
+model, while `route.can_invoke` admits valid/agreed, unstopped, credentialed
+routes to guarded invocation. Normal/stream agent preflights, the socket
+handler and the Admin bootstrap use this admission so the first turn can
+populate a cold/expired automatic catalogue. `assistant_setup.is_ready()`
+reports enabled bootstrap admission; it does not fetch a model or certify
+resolved readiness. Catalogue freshness is 24 hours, with failed-refresh last-good
+use bounded to seven days from success; complete success with no compatible
+model invalidates selection immediately. Runtime expiry and explicit refresh
+use the same credential-scoped cache, Redis owner lock/cooldown and guarded
+five-page/500-entry/20-second maximum. Every page uses its own permit/ledger
+and the same operation ID; installed smaller budgets remain binding. Refresh
+outcomes describe the actual attempt even while a stale model remains usable.
+See [the helper](../helpers/llm.md#model-selection) and
+[owner API](../../web_developer/account/admin_portal/assistant.md).
 `state()` reports `key` and `handler_key` independently as `admin`,
 `deployment`, or `none`, with a four-character hint and never the value.
 The stable low-level `llm.get_api_key()` helper retains its legacy resolution
@@ -329,7 +360,7 @@ credential nobody proved.
 |---|---|---|
 | `LLM_ADMIN_ENABLED` | `False` | Feature flag — must be True for the assistant to work |
 | `LLM_ADMIN_API_KEY` | `None` | Admin credential used only by policy routes declaring `credential: "admin"` |
-| `LLM_ADMIN_MODEL` | (unset) | Legacy picker pin; guarded calls use the exact safety-policy route model |
+| `LLM_ADMIN_MODEL` | (unset) | Owner pin on delegated `auto:sonnet`; fixed policies keep legacy pins inert |
 | `LLM_ADMIN_MAX_TURNS` | `25` | Max tool-calling turns per request |
 | `LLM_ADMIN_MAX_HISTORY` | `50` | Max messages loaded as conversation context |
 | `LLM_ADMIN_MAX_PARALLEL_TOOLS` | `4` | Max concurrent threads for parallel tool execution |
@@ -344,6 +375,10 @@ credential nobody proved.
 | `FILEMAN_EXPORT_EXPIRES_DAYS` | `14` | Days until assistant `export_data` files expire and are deleted by the cleanup job |
 
 ## Built-in Tools
+
+The descriptions below use the built-in chat's approval behavior. Over MCP,
+explicit execution consent can run eligible ordinary mutations directly; see
+[MCP transport](mcp.md#explicit-delegated-execution).
 
 ### Security Domain (`view_security` / `manage_security`)
 
@@ -415,6 +450,20 @@ or override that actor context.
 | `run_job` | `manage_jobs` | Yes | Publish a new job by func+payload (fresh run) or by cloning an existing job as a template |
 | `run_scheduled_task_now` | `manage_jobs` | Yes | Immediately execute a scheduled task regardless of schedule or enabled state |
 
+`query_job_logs` and `query_job_events` require a string `job_id` and accept an
+optional integer `limit` (default and maximum: 50). Both require `view_jobs` and
+return an array containing only that job's rows, ordered by row `created`
+descending; an empty history returns `[]`.
+
+| Tool | Row keys | Model field mapping |
+|---|---|---|
+| `query_job_logs` | `id`, `job_id`, `level`, `message`, `created` | `level` is `JobLog.kind`; `message` is the log message or `""`, capped at 500 characters |
+| `query_job_events` | `id`, `job_id`, `kind`, `message`, `created` | `kind` is `JobEvent.event`; `message` is the actual `JobEvent.details` value serialized as compact JSON text, capped at 500 characters |
+
+`created` is the row creation timestamp as a string, including for events
+(not `JobEvent.at`). Event JSON uses sorted keys and unescaped Unicode.
+Truncation can leave incomplete JSON, so treat `message` as display text.
+
 ### Users Domain (`view_admin` / `manage_users`)
 
 | Tool | Permission | Mutates | Description |
@@ -425,8 +474,8 @@ or override that actor context.
 | `query_rate_limits` | `view_admin` | No | Fair, bounded sample of currently active fixed- and sliding-window rate limit entries from Redis |
 | `get_permission_summary` | `view_admin` | No | User permissions breakdown (user-level + group-level) |
 | `update_user_permission` | `manage_users` | Yes | Add or remove a permission from a user |
-| `disable_user` | `manage_users` | Yes | Disable account + rotate auth_key (invalidates all sessions). Cannot disable yourself. Does not write `metadata.protected.disable.*` — use the REST `disable` action for audited disables. |
-| `enable_user` | `manage_users` | Yes | Re-enable a disabled account. Does not update `metadata.protected.disable.*` history. |
+| `disable_user` | `manage_users` | Yes | Disable the account through the disable service (`reason="admin"`, the tool's reason as the note): new auth_key, `metadata.protected.disable.*` written, cached invite cleared, websockets dropped. Cannot disable yourself. |
+| `enable_user` | `manage_users` | Yes | Re-enable through the disable service: new auth_key (nothing signed before or during the disable works), history entry with the caller as reactivator, cached invite cleared. |
 | `force_logout` | `manage_users` | Yes | Rotate auth_key to invalidate all sessions (account stays active) |
 
 `query_rate_limits` returns at most 50 entries and shares its bounded Redis
@@ -446,6 +495,23 @@ inventory.
 | `get_group_detail` | `view_groups` | No |
 | `get_group_members` | `view_groups` | No |
 | `get_group_activity` | `view_groups` | No |
+
+`get_group_detail({"group_id": 3})` requires an integer `group_id` and returns
+`id`, `name`, `kind`, `is_active`, `parent_id`, `member_count`,
+`children_count`, `metadata`, `created`, and `modified`. Counts include all
+direct memberships and direct children, including inactive rows; grandchildren
+are excluded. `metadata` includes only `timezone`, `short_name`, `description`,
+`website`, and `industry` when present. An empty group has zero counts.
+
+`get_group_members({"group_id": 3, "limit": 5})` requires an integer
+`group_id`; optional integer `limit` defaults to 50 and is capped at 50. It
+returns only that group's direct membership rows, including inactive
+memberships, newest `created` first, or `[]` when none exist. Each row contains
+`id`, `user_id`, `username`, `display_name`, `is_active`, `permissions`, and
+`created` (the membership creation timestamp as a string). `is_active` describes
+the User, while `permissions` is `GroupMember.permissions`, the membership's
+role data. User account permissions, metadata, and sign-in settings are omitted.
+Both readers require `view_groups`.
 
 ### Metrics Domain (`view_metrics` / `write_metrics` / `view_admin` / `view_security`)
 
@@ -526,7 +592,7 @@ bound to the originating browser Origin.
 | `model_name` | string | required | Model class name (e.g. `User`, `Incident`, `Job`) |
 | `filters` | object | `{}` | ORM filter dict (e.g. `{"status": "active", "created__gte": "2026-01-01"}`) |
 | `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
-| `ordering` | string | `-pk` | Order by field, prefix with `-` for descending (e.g. `-created`) |
+| `ordering` | string | `-pk` | Order by field, prefix with `-` for descending (e.g. `-created`). A forward FK orders by its own column (`group` → `group_id`); a reverse or many-to-many relation is refused. |
 | `limit` | integer | `50` | Max results to return (max 200) |
 | `count_only` | boolean | `false` | If true, return only the total count with no row data |
 
@@ -536,7 +602,7 @@ bound to the originating browser Origin.
 |---|---|---|---|
 | `app_name` | string | required | Django app label |
 | `model_name` | string | required | Model class name |
-| `aggregations` | array | required | List of `{field, func, alias?}` objects. `func` is one of `count`, `sum`, `avg`, `min`, `max`, `count_distinct`. `alias` defaults to `{func}_{field}`. Use `id` as the field for row counts. |
+| `aggregations` | array | required | List of `{field, func, alias?}` objects. `func` is one of `count`, `sum`, `avg`, `min`, `max`, `count_distinct`. `alias` defaults to `{func}_{field}`. Use `id` as the field for row counts. A forward FK aggregates its own column; a reverse or many-to-many relation follows the REST list-walk rule (#8680): it is allowed when the caller could list the related model in full, when the model declares that exact path in `RestMeta.FILTER_RELATED`, or when it is the model's own `RestMeta.GROUP_FIELD` path, and refused with an error otherwise. |
 | `filters` | object | `{}` | ORM filter dict |
 | `group_by` | array | — | Fields to group by (e.g. `["status"]` or `["status", "category"]`). Forward FK fields are accepted by either the relation name or the column name and resolve to the column attname (e.g. `"group"` → `"group_id"`); the resolved column is the key used in result rows. Reverse relations and many-to-many fields are rejected. |
 | `having` | object | — | Post-aggregation filter applied after `group_by` + `annotate` (SQL HAVING semantics). Keys must reference an aggregation alias and may use scalar lookup suffixes (`gte`, `gt`, `lte`, `lt`, `exact`, `in`, `isnull`, `range`). Requires `group_by`. Example: `{"total__gte": 2}`. |
@@ -551,7 +617,7 @@ bound to the originating browser Origin.
 | `model_name` | string | required | Model class name |
 | `filters` | object | `{}` | ORM filter dict |
 | `search` | string | — | Free-text search using the model's `SEARCH_FIELDS` |
-| `ordering` | string | `-pk` | Order by field |
+| `ordering` | string | `-pk` | Order by field; relations as in `query_model` |
 | `limit` | integer | `5000` | Max rows to export (max 50000) |
 | `fields` | array | — | Columns to keep, in this order. Each must be one of `describe_model`'s `serialization.fields`: it narrows the export and can never add a column. An empty list, a duplicate, or a name outside that set is refused before any file is created. |
 
@@ -661,8 +727,7 @@ class RestMeta:
 Details that matter when you declare one:
 
 - **A foreign key is refused under both spellings.** Declaring `"user"` also
-  refuses `user_id`, and the reverse. (REST list filters compare the spelling
-  as written; the assistant asks about both.)
+  refuses `user_id`, and the reverse.
 - **This rule does not edit a graph.** If you put a sensitive field in the
   model's `ai` graph, rows and exports carry it: the graph is yours.
   `serialization.fields` in `describe_model` is not filtered either. Keep
@@ -714,7 +779,7 @@ The AI gate runs **before** the REST permission check, so denied requests return
 
 The tool delegates to `instance.on_rest_save(request, data)` so all model-level save hooks, validators, and `POST_SAVE_ACTIONS` fire exactly as they would through the REST API. The `action_response` from `POST_SAVE_ACTIONS` is included in the return dict when present. Setting `CAN_CREATE = False` in `RestMeta` blocks creates; setting `CAN_UPDATE = False` blocks updates to existing instances.
 
-All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. Attempts to filter, order, group, aggregate, search or narrow an export by a sensitive path are refused and reported as security events — see [What a caller may ask by](#what-a-caller-may-ask-by-sensitive_fields).
+All five tools enforce the same permission and owner/group scoping as the REST layer via `rest_check_permission` and `_apply_owner_group_filter`. The tools take no group, so `query_model`, `aggregate_model` and `export_data` refuse a model whose lists require a group (`RestMeta.LIST_REQUIRES_GROUP` or the `REST_LIST_REQUIRES_GROUP` setting) with an error and no rows, unless the caller is a platform caller (superuser or a global view grant) — never the cross-group union. Attempts to filter, order, group, aggregate, search or narrow an export by a sensitive path are refused and reported as security events — see [What a caller may ask by](#what-a-caller-may-ask-by-sensitive_fields).
 
 #### `add_context` — Clickable model references
 
@@ -870,8 +935,8 @@ Each step object:
 | Tool | Permission | Mutates | Description |
 |---|---|---|---|
 | `read_memory` | `assistant` | No | Read stored memory entries grouped by tier. The system prompt already injects memories, but this tool lets the LLM check raw keys before updating or deleting. |
-| `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. **Owner-state:** a `user`-tier write runs immediately; `global` and `group` produce an approval card. |
-| `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. **Owner-state:** a `user`-tier delete runs immediately; `global` and `group` produce an approval card. |
+| `write_memory` | `assistant` | Yes | Store or update a memory entry. Requires `tier`, `key`, `value`. Enforces key format, size limits, and secret detection. The `global` tier requires `view_admin` (or superuser). **Owner-state:** a `user`-tier write runs immediately; `global` and `group` produce an approval card. |
+| `delete_memory` | `assistant` | Yes | Delete a memory entry by tier and key. The `global` tier requires `view_admin` (or superuser). **Owner-state:** a `user`-tier delete runs immediately; `global` and `group` produce an approval card. |
 
 ### Skills Domain (`assistant`)
 
@@ -945,7 +1010,9 @@ The assistant reports security-relevant actions and errors to the incident syste
 | `assistant:approval:canceled` | 4 | Operator declined |
 | `assistant:approval:denied` | 6 | A resolution was refused (suppressed + budgeted — see [Approvals](approvals.md)) |
 | `assistant:approval:failed` | 6 | An approved handler raised or returned an error |
-| `assistant:tool:<name>` | 5 | Successful mutating tool execution (block_ip, disable_user, etc.). Unchanged — it now fires from `approvals.resolve()`, so existing RuleSets keep working. |
+| `assistant:tool:<name>` | 5 | Successful mutating tool execution, from approval resolution or direct owner-state/delegated dispatch. Delegated evidence identifies the user, client, grant and conversation. |
+| `assistant:execution:<name>` | 5 | Unsuppressed delegated attempt before dispatch; server-owned invocation id and redacted argument fingerprint correlate the outcome |
+| `assistant:execution_failed:<name>` | 5 / 6 | Unsuppressed delegated returned error / exception; effects may be partial, so reconcile before retrying |
 | `assistant_sensitive_field` | 7 | A model tool refused a filter, ordering, aggregation, `group_by`, export field or search on a sensitive path. One event per refused call; the attempted value is never recorded. |
 | `assistant:error` | 6 | Tool handler raised an unhandled exception |
 | `assistant:error` | 7 | Agent loop crashed |
@@ -959,7 +1026,7 @@ The assistant reports security-relevant actions and errors to the incident syste
 ### Design
 
 - **Permission denied = always an event.** These are security signals for probing/brute-force detection.
-- **Mutating tools = event on success only.** No event when the tool returns an error dict (operation failed) — that files `assistant:approval:failed` instead.
+- **Mutating tools = event on success only.** No success event when the tool returns an error dict; an approval-path failure files `assistant:approval:failed`.
 - **Approval lifecycle = evidence at every point.** Proposal, approval, cancel, denial and failure all file bounded events carrying actor, tool, conversation and a secret-free argument fingerprint — never argument values.
 - **Read-only tools = no events.** Too high volume, low signal.
 - **Events supplement, not replace, file logging.** Existing `logger` calls remain for debug.
@@ -1005,7 +1072,7 @@ The assistant has persistent three-tier memory stored in Redis. Memories are inj
 
 | Tier | Redis Key | Who Reads | Who Writes | Injected When |
 |---|---|---|---|---|
-| **Global** | `assistant:memory:global` | `assistant` perm or superuser | `assistant` perm or superuser | Every conversation |
+| **Global** | `assistant:memory:global` | `assistant` perm or superuser | `view_admin` perm or superuser | Every conversation |
 | **User** | `assistant:memory:user:<user_id>` | The user themselves, or superuser | The user themselves, or superuser | Conversations by that user |
 | **Group** | `assistant:memory:group:<group_id>` | Any member of the group | Members with `assistant` perm on their Member record | Conversations in group context |
 
@@ -1029,7 +1096,7 @@ At conversation start, `_get_system_prompt(user, group)` calls `build_memory_pro
 - deploy_window: Deploys run Tuesdays 9-11 PM UTC only
 ```
 
-Empty tiers are omitted. When global memory is empty and the user has `assistant` permission, an onboarding prompt is injected instead — it instructs the LLM to ask the user about their platform and store answers as global memories.
+Empty tiers are omitted. When global memory is empty and the user can write global memory (`view_admin` or superuser), an onboarding prompt is injected instead — it instructs the LLM to ask the user about their platform and store answers as global memories.
 
 ### Memory Limits
 
@@ -1205,10 +1272,11 @@ Every tool call passes through a permission gate before execution. The gate chec
 
 Sensitive fields (`password`, `auth_key`, `onetime_code`) are never included in tool results.
 
-**Permission is necessary but not sufficient for a mutating tool.** Holding
-`manage_security` lets the model *propose* `block_ip`; only an operator approving
-that specific proposal executes it, and the permission is re-checked against a
-freshly reloaded `User` immediately before dispatch. See [Approvals](approvals.md).
+**Permission is necessary but not sufficient for a mutating tool.** Chat and
+proposal-only MCP grants propose shared changes for approval. Explicit MCP
+execution consent additionally opens eligible ordinary tools after live
+user/client/grant and argument checks; protected tools retain per-action
+confirmation. See [Approvals](approvals.md).
 
 ## Adding Custom Tools
 
@@ -1267,17 +1335,18 @@ def _tool_query_orders(params, user):
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
 | `description` | Yes | Human-readable description shown to the LLM |
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
-| `mutates` | No | Default `False`. If `True`, the tool **cannot execute on the model's call** — it produces an approval the operator must resolve, unless an `owner_state` predicate returns `True` for that call. See [Approvals](approvals.md). |
+| `mutates` | No | Default `False`. If `True`, chat and proposal-only MCP calls produce an approval, apart from owner-state calls. A separately consented MCP execution grant can run eligible ordinary tools directly. See [Approvals](approvals.md). |
 | `core` | No | Default `False`. If `True`, tool is always sent to the LLM (two-tier tier 1). Set this for tools that should be available in every conversation without loading a domain. |
 | `fresh_auth_seconds` | No | Mutating only. A positive recency window mirroring `@md.requires_fresh_auth(seconds=N)`, or `"configured"` to resolve the deployment's freshness policy at proposal and execution. A positive resolved window forces REST-only resolution; configured `0` adds no gate. |
 | `requires_superuser` | No | Mutating only. AND-check for a live literal `User.is_superuser`. |
 | `requires_managed_infrastructure` | No | Mutating only. Hidden and refused when `INFRASTRUCTURE_MODE=external`. |
 | `summarize` | No | Mutating only. `(params, user) -> str` — the card's one sentence. |
 | `preview` | No | Mutating only. `(params, user) -> {"summary", "details", "revision"}`, read-only; the revision is bound and re-checked. Raising it refuses the proposal. |
-| `owner_state` | No | Mutating only. `(params, user) -> bool`. Returning **exactly `True`** runs the handler directly on every transport (the `assistant:tool:<name>` event still fires); anything else proposes a card. Only for state the caller alone owns. Cannot be combined with `fresh_auth_seconds`, `requires_managed_infrastructure` or `preview`. |
+| `requires_operator_approval` | No | Mutating only. Default `False`; `True` keeps a per-action confirmation even with delegated MCP execution consent. Fresh-auth, preview, and handlers declaring `approval` or `**kwargs` already stay protected. |
+| `owner_state` | No | Mutating only. `(params, user) -> bool`. Returning **exactly `True`** runs the handler directly on every transport (the success event still fires); anything else proposes a card even with MCP execution consent. Only for state the caller alone owns. Cannot be combined with `fresh_auth_seconds`, `requires_managed_infrastructure`, `preview` or `requires_operator_approval`. |
 | `authorize` | No | **Any** tool. `(user) -> bool`, evaluated in addition to `permission` wherever that check runs. |
 
-> Passing any of the six mutating-only gates without `mutates=True` raises
+> Passing any mutating-only gate without `mutates=True` raises
 > `ValueError` **at import time** — a misdeclared tool breaks the import rather
 > than degrading into a silent no-op.
 
@@ -1328,10 +1397,10 @@ register_tool(
 | `input_schema` | Yes | JSON Schema dict for the tool's parameters |
 | `handler` | Yes | Callable `(params, user) -> dict or list` |
 | `permission` | Yes | Permission string checked via `user.has_permission()` |
-| `mutates` | No | Default `False`. If `True`, the tool is gated behind an operator approval. See [Approvals](approvals.md). |
+| `mutates` | No | Default `False`. Same approval/delegation behavior as on `@tool`. See [Approvals](approvals.md). |
 | `domain` | No | Default `"custom"`. Logical grouping for the tool |
 | `core` | No | Default `False`. If `True`, always included in every conversation (tier 1). |
-| `fresh_auth_seconds`, `requires_superuser`, `requires_managed_infrastructure`, `summarize`, `preview` | No | Mutating-only approval gates — same meaning as on `@tool`. |
+| `fresh_auth_seconds`, `requires_superuser`, `requires_managed_infrastructure`, `requires_operator_approval`, `summarize`, `preview`, `owner_state` | No | Mutating-only gates — same meaning as on `@tool`. |
 | `authorize` | No | `(user) -> bool`, allowed on any tool. |
 
 ### Tool Handler Guidelines

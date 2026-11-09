@@ -26,6 +26,9 @@ TEST_RUN = objict(
     # True once something cut the run short (stop-on-fail, the abort key). Such
     # a run is not the suite's verdict and must not be reported as one.
     aborted=False,
+    # Counted tests that ended with no recorded outcome (item #2774): one
+    # entry per test or per cut-short file, with its cause and count.
+    unrecorded=[],
 )
 STOP_ON_FAIL = True
 VERBOSE = False
@@ -342,6 +345,9 @@ def _record_result(test_name, *, status, detail=None, agent_context=None, durati
         record["detail"] = detail
     if agent_context:
         record["agent_context"] = agent_context
+    # Outcomes recorded by the current test call on this thread; run_test
+    # resets and reads it to find tests that record nothing (item #2774).
+    _thread_local.outcomes = getattr(_thread_local, "outcomes", 0) + 1
 
     with _lock:
         if status == "passed":
@@ -540,6 +546,29 @@ def is_sqlite():
     return get_database_kind() == "sqlite"
 
 
+def _reset_outcomes():
+    _thread_local.outcomes = 0
+
+
+def _outcomes():
+    return getattr(_thread_local, "outcomes", 0)
+
+
+def _add_unrecorded(module, test_module, function, cause, count=1):
+    """Enter a counted test, or `count` tests of a file, that ended with no
+    recorded outcome (item #2774). Never counted as failed: the run verdict
+    gives it its own `unrecorded` reason."""
+    entry = {"module": module, "test_module": test_module, "function": function,
+             "cause": cause, "count": count}
+    with _lock:
+        if getattr(TEST_RUN, "unrecorded", None) is None:
+            TEST_RUN.unrecorded = []
+        TEST_RUN.unrecorded.append(entry)
+    dfn = _get_display_fn()
+    if dfn:
+        dfn("test_unrecorded", count=count)
+
+
 def reset_test_run():
     TEST_RUN.total = 0
     TEST_RUN.passed = 0
@@ -551,6 +580,7 @@ def reset_test_run():
     TEST_RUN.started_at = None
     TEST_RUN.finished_at = None
     TEST_RUN.aborted = False
+    TEST_RUN.unrecorded = []
 
 
 def save_results(path):

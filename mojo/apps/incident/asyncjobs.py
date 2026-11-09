@@ -615,7 +615,17 @@ def sync_firewall(job):
         set_plans = []
         for row in ipsets:
             try:
-                set_plans.append(firewall_truth.ipset_snapshot_from_row(row))
+                snapshot = firewall_truth.ipset_snapshot_from_row(row)
+                set_plans.append(snapshot)
+                if snapshot["carved"]:
+                    # Once per carved set per sync (#8885).
+                    from mojo.apps import metrics
+                    message = (f"IPSet {snapshot['desired']['name']} carves "
+                               f"{snapshot['carved']} unsafe network(s) out of "
+                               "the kernel set")
+                    job.add_log(f"sync_firewall: {message}")
+                    logit.info(f"firewall: {message}")
+                    metrics.record("firewall:ipset_carved", category="firewall")
             except firewall_truth.FirewallTruthError as err:
                 quarantined += 1
                 job.add_log(
@@ -964,8 +974,11 @@ def _aggregate_firewall_truth(job):
             snapshot["fingerprint"], snapshot["desired"], roster=roster)
         verified = aggregate_ok and result.get("ok") is True
         if verified:
+            # An unsafe blocked row keeps its marker (#8885): the kernel
+            # matches the planned absence, not the stored block.
             values = {
-                "firewall_pending": False, "firewall_sync_error": "",
+                "firewall_pending": False,
+                "firewall_sync_error": snapshot["unsafe"],
                 "firewall_observed_at": dates.utcnow(),
             }
         else:
@@ -1286,15 +1299,18 @@ def refresh_threat_lists(job):
 
     for ipset in IPSet.ensure_threat_caches():
         if ipset.refresh_from_source():
-            job.add_log(f"Refreshed threat cache {ipset.name} ({ipset.cidr_count} entries)")
+            dropped = getattr(ipset, "refresh_dropped", 0)
+            job.add_log(
+                f"Refreshed threat cache {ipset.name} ({ipset.cidr_count} "
+                f"entries; {dropped} non-IPv4 dropped)")
         else:
             job.add_log(f"Threat cache {ipset.name} refresh failed: {ipset.sync_error}")
 
 
 def check_system_health(job):
     """
-    Cron job (every 3 min): checks system health across all runners.
-    Fires incident events when thresholds are breached. The rules engine
+    Resource metrics job; OS cron checks liveness before queueing this work.
+    Fires incident events when resource thresholds are breached. The rules engine
     handles escalation via threshold/bundling logic — a single spike is
     a blip, sustained problems trigger incidents.
     """
@@ -1306,22 +1322,17 @@ def check_system_health(job):
     HEALTH_MEM_CRIT = settings.get_static("HEALTH_MEM_CRIT", 90)
     HEALTH_DISK_CRIT = settings.get_static("HEALTH_DISK_CRIT", 85)
 
-    # Check runner availability
-    runners = jobs.get_runners()
-    alive_ids = set()
-    for runner in runners:
-        if runner.get("alive"):
-            alive_ids.add(runner["runner_id"])
-        else:
-            reporter.report_event(
-                f"Runner {runner['runner_id']} is not responding",
-                title=f"Runner down: {runner['runner_id']}",
-                category="system:health:runner",
-                level=10,
-                scope="system",
-                hostname=runner["runner_id"],
-            )
-
+    # Availability is observed directly by OS cron, independently of Jobman.
+    # This queued job only gathers resource metrics from responding runners.
+    from mojo.apps.jobs.manager import get_manager
+    try:
+        runners = get_manager().get_runners_bounded(
+            settings.get_static("ADMIN_FLEET_CONFIG_CHANNEL", "edge"),
+            limit=128, timeout=1)
+    except Exception:
+        job.add_log("Runner roster unavailable; independent detector owns the health event")
+        return
+    alive_ids = {row["runner_id"] for row in runners}
     if not alive_ids:
         job.add_log("No alive runners found, skipping sysinfo collection")
         return
@@ -1386,24 +1397,6 @@ def check_system_health(job):
                 scope="system",
                 hostname=hostname,
             )
-
-    # Check scheduler leader lock
-    try:
-        from mojo.apps.jobs.keys import JobKeys
-        from mojo.apps.jobs.adapters import get_adapter
-        redis_client = get_adapter()
-        keys = JobKeys()
-        lock_key = keys.scheduler_lock()
-        if not redis_client.get(lock_key):
-            reporter.report_event(
-                "Scheduler leader lock is missing — no scheduler may be running",
-                title="Scheduler leader lock missing",
-                category="system:health:scheduler",
-                level=10,
-                scope="system",
-            )
-    except Exception:
-        pass
 
     job.add_log(f"Health check complete: {checked} runners checked, {len(alive_ids)} alive")
 

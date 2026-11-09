@@ -180,7 +180,11 @@ install_manifest() {
     local manifest="${1:-}"
     [ -n "$manifest" ] || return 0
     log "Installing declared dependencies"
-    python3 -m pip install -r "$manifest"
+    if [ -f "$ACTIVE/acme_framework_constraint.txt" ]; then
+        python3 -m pip install --constraint "$ACTIVE/acme_framework_constraint.txt" -r "$manifest"
+    else
+        python3 -m pip install -r "$manifest"
+    fi
 }
 
 read_previous_type() {
@@ -317,6 +321,7 @@ rollback_transaction() {
         return 0
     fi
 
+    # Restore the baseline captured by the ordinary deployment transaction.
     log "Rolling back candidate lifecycle"
     if [ -x "$ACTIVE/candidate_post.sh" ]; then
         MOJO_DEPLOY_ROLLBACK=1 bash "$ACTIVE/candidate_post.sh" \
@@ -351,6 +356,11 @@ rollback_and_exit() {
     ROLLING_BACK=1
     trap - ERR TERM INT HUP
     phase="$(failure_phase)"
+    # One fixed line marks where recovery starts. The launcher's bounded
+    # journal replay keeps the lines just before it, where the cause is,
+    # however much recovery prints afterwards (#3428). It must never stop
+    # rollback, so a failed write is ignored.
+    printf '%s\n' "Deployment failed during $phase; recovering" >&2 || :
     [ ! -f "$ACTIVE/activation_succeeded" ] || publication_recovery=1
     if rollback_transaction; then
         if [ "$publication_recovery" = "1" ]; then
@@ -434,8 +444,35 @@ if [ "$TRANSACTION" = "0" ] && [ "${MOJO_DEPLOY_NO_SYSTEMD:-0}" != "1" ]; then
         status=$?
     fi
     printf '%s\n' 'Deployment transaction failed; recent journal follows:' >&2
-    journalctl "_SYSTEMD_UNIT=${unit}.service" --boot=0 --output=cat \
-        --no-pager --quiet --lines=9 2>/dev/null | tail -n 9 >&2 || true
+    # Only the unit's own output (_TRANSPORT=stdout), never the sudo and PAM
+    # syslog records its cgroup also writes. Keep at most nine non-blank
+    # lines: five before the LAST recovery line, that line, and the last
+    # three after it; with no recovery line, the last nine (#3428). The
+    # output is read whole and streamed through fixed-size buffers, so no
+    # amount of recovery output can push the cause out; the unit's runtime
+    # and stop timeouts bound how much there is to read.
+    journalctl "_SYSTEMD_UNIT=${unit}.service" _TRANSPORT=stdout --boot=0 \
+        --output=cat --no-pager --quiet 2>/dev/null | awk '
+        /^[[:space:]]*$/ { next }
+        {
+            if ($0 ~ /^Deployment failed during [a-z_]+; recovering$/) {
+                kept = (n < 5) ? n : 5
+                for (i = 0; i < kept; i++) before[i] = last5[(n - kept + i) % 5]
+                mark = $0; marked = 1; after = 0
+            } else if (marked) {
+                last3[after % 3] = $0; after++
+            }
+            last5[n % 5] = $0; last9[n % 9] = $0; n++
+        }
+        END {
+            if (marked) {
+                for (i = 0; i < kept; i++) print before[i]
+                print mark
+                for (i = (after < 3) ? 0 : after - 3; i < after; i++) print last3[i % 3]
+            } else {
+                for (i = (n < 9) ? 0 : n - 9; i < n; i++) print last9[i % 9]
+            }
+        }' >&2 || true
     exit "$status"
 fi
 
@@ -449,19 +486,20 @@ APP_USER="$(python3 -m mojo.deploy app-user --root "$PROJ_PATH" \
     die "cannot resolve a non-root application account"
 export APP_USER
 
-cd "$PROJ_PATH"
 ensure_state_root
-run_as_app mkdir -p "$PROJ_PATH/var"
 previous_umask="$(umask)"
 umask 077
 exec 9>"$LOCK_FILE"
-umask "$previous_umask"
 chmod 0600 "$LOCK_FILE"
+umask "$previous_umask"
 if [ "$MANUAL" = "1" ]; then
     flock -n 9 || die "another update is running"
 else
     flock 9
 fi
+
+cd "$PROJ_PATH"
+run_as_app mkdir -p "$PROJ_PATH/var"
 
 for preparing in "$TRANSACTION_ROOT"/preparing.*; do
     [ -d "$preparing" ] || continue
@@ -510,7 +548,6 @@ if [ "$PREVIOUS_NODE_TYPE" != "api" ] && [ "$PREVIOUS_NODE_TYPE" != "code" ]; th
     chmod 0700 "$PREPARING/previous_profile.sh"
 fi
 mv -- "$PREPARING" "$ACTIVE"
-
 trap 'rollback_and_exit $?' ERR
 trap 'rollback_and_exit 143' TERM HUP
 trap 'rollback_and_exit 130' INT

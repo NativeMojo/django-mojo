@@ -413,3 +413,41 @@ A confirmed subscription returns:
 | `403` | Generic signature, certificate-URL, header-consistency, or topic authorization failure |
 | `405` | Method other than POST |
 | `503` | Certificate fetch, confirmation, processing, or durable handler dispatch should be retried by SNS |
+
+## Health evidence versus chart data
+
+The existing chart endpoints keep their compatible zero-filled output. The
+Assistant/MCP `get_node_health` read uses separate missing-preserving evidence:
+missing datapoints are null, genuine zeros remain zero, and a missing memory or
+disk agent series is `unavailable` with `reason:"no_series"`. Agent installation
+is not inferred from a chart or performed by the read.
+
+Each trend carries its exact namespace and full dimensions (including non-root
+mount/device/filesystem dimensions), UTC start/end, period, aggregation, units,
+actual sample timestamps, sample count and last sample. Min/max/average exclude
+missing values. Ambiguous dimension sets, stale samples, denial and budget
+limits stay explicit. The selected provision namespace is used when declared;
+otherwise host-agent evidence uses `CWAgent`. CPU uses `AWS/EC2`.
+
+A node read supports one to 168 hours, no more than sixty actual aligned buckets,
+four discovery pages/twelve provider calls and eight mount series. Results remain
+separate from current host readings. Output omissions carry counts; a full series
+may be omitted to preserve the exact identity of every surviving dimension set.
+See [fleet diagnostic result shapes](../assistant/cloud_tools.md#get_fleet_health-and-get_node_health).
+
+## Recent snapshot and coverage evidence
+
+The additive `get_recent_evidence` batch uses a fixed previous30-minute window
+with CPU300/memory60/disk300-second periods and real sample timestamps. It shares
+exact full-dimension discovery, preserves nulls/zeros and marks PartialData or
+non-exhausted results incomplete. Only eight mount series are collected; known
+capped paths remain named `not_collected_budget` obligations. Coverage allows
+twelve CloudWatch operations; the scheduled producer shares32 total provider
+operations and256 metric series with inventory and managed-resource binding.
+
+Managed RDS/cache dimensions require selected declarations and exact actual
+connection endpoint binding. A stable Aurora endpoint additionally resolves the
+current `IsClusterWriter` member. No API-host sample substitutes for managed
+pressure. A recipe proves declaration, never agent installation. Fresh runtime
+evidence cannot fill a missing continuous slot. See [health snapshots](../account/health_snapshot.md)
+for source grants, three-period/420-second expiry, causal proof and caps.

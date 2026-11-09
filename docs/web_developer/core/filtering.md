@@ -37,6 +37,9 @@ GET /api/myapp/book?status__not=deleted
 GET /api/myapp/book?author=null
 ```
 
+On a Boolean field, `?flag=null` means `false`, as it always has. Use
+`?flag__isnull=true` for an IS NULL test.
+
 ### Relation / Foreign Key Filters
 
 Filter through related fields using `__` notation:
@@ -44,7 +47,49 @@ Filter through related fields using `__` notation:
 ```
 GET /api/myapp/book?author__id=5
 GET /api/myapp/book?author__username=alice
+GET /api/myapp/book?author__is_active=true
+GET /api/myapp/book?author__last_login__gte=2026-01-01
 ```
+
+A relation-path value is converted using the field the path ends on, exactly
+as a top-level filter is: `author__is_active=true` is a Boolean,
+`author__last_login__gte=...` a date. This applies to exact matches, `__in`,
+`__not`, `__not_in`, `__gt/__gte/__lt/__lte` and date components. Text
+lookups (`__startswith`, `__icontains`, ...) and a path ending on the relation
+itself (`?author=5`, `?author__in=5,6`) are passed as sent.
+
+### Value Types and Malformed Values
+
+Every filter value is converted to the field's type, and each element of an
+`__in` / `__not_in` list is converted separately, so the list stays a list:
+
+```
+GET /api/account/notification?is_unread__in=true,false   # both states
+GET /api/account/notification?is_unread__not_in=true     # read only
+```
+
+| Field type | Accepted values (any case, surrounding spaces ignored) |
+|---|---|
+| Boolean | `true` `1` `t` `y` `yes` `on` / `false` `0` `f` `n` `no` `off`, or a JSON boolean, or `0`/`1` |
+| Date / DateTime | an ISO date or datetime, or epoch seconds within the date range |
+| Integer | a whole number (text lookups such as `__startswith` take the text as sent) |
+
+A value the field cannot take is a **400** naming the key, on the list and on
+`_mode=count`:
+
+```
+GET /api/account/notification?is_unread=maybe
+→ 400 {"error": "Invalid boolean for is_unread: 'maybe'"}
+```
+
+Before this, an unrecognized Boolean silently meant `false`, and Boolean lists
+or relation-path Booleans answered 500. Inside a `_stats` bundle a malformed
+value makes that one chip `null`; the other chips and the request are
+unaffected.
+
+A filter on a [protected field](#protected-fields) is still dropped silently,
+whatever its value: the check runs before any conversion, so a malformed value
+on a protected path never produces a 400.
 
 ### Protected Fields
 
@@ -81,6 +126,39 @@ list rather than an unfiltered one.
 Filtering on a sensitive field raises a server-side security event. There is no
 way to discover which fields are protected by probing — a sensitive field and a
 nonexistent one behave identically.
+
+### Filters Into Related Records
+
+A filter, `?search=`, `?sort=` or `_field=` that walks **into** a related
+record works only when you could list those records yourself, the model
+declares that walk, or it is the model's own group link
+(`?domain__group=5` on a certificate or vhost). Otherwise a filter, `?search=`
+or `?sort=` is **silently ignored**, like a protected field, and you get the
+result as if you had not sent it. A `_field=` on the aggregation surface is
+refused with a `400` instead (see below).
+
+```
+# a plain member listing their groups
+GET /api/group?public_messages__email__startswith=a   → ignored (needs support access)
+# a tenant manager listing members: these walks are declared
+GET /api/group/member?group=5&user__email__icontains=bob      → applied
+GET /api/group/member?group=5&user__phone_number__startswith=1 → ignored
+```
+
+- Comparing the link itself is never a walk: `?user=5`, `?user_id=5`,
+  `?user__id=5`, `?user__in=5,6` and `?user__isnull=true` always work.
+- Global admins who can list the related model are unaffected.
+- A link Django hides (`+` in the path) is always ignored and is reported as a
+  security event.
+- `__not` and `__not_in` work only at the end of a key
+  (`?user__email__not=...`). A key with either in the middle
+  (`?user__not__email=...`) is ignored.
+- `?sort=<relation>` sorts by the link's own id; sorting by a reverse or
+  many-to-many relation is ignored.
+- `_field=<reverse relation>__id` on the aggregation surface is a `400`
+  (`... is not available on <Model>`) when the walk is not allowed.
+- The Assistant's query, aggregate and export tools refuse the same walks with
+  an error.
 
 ## Default Filters
 

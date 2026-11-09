@@ -1,6 +1,6 @@
 [project]
 name = "django-mojo"
-version = "1.36.0"
+version = "1.42.2"
 description = "A REST framework for Django with secure DB-backed settings, REST/WebSocket support, jobs, auth, and more."
 authors = [{ name = "MOJO Dev Team", email = "gotmojo@mojo.com" }]
 readme = "README.md"
@@ -47,7 +47,8 @@ dependencies = [
     "psycopg[binary,pool]>=3.2.0,<4.0.0",
     "anthropic>=0.87.0",
     "bs4>=0.0.2",
-    "rich>=13.0.0"
+    "rich>=13.0.0",
+    "packaging>=24.2"
 ]
 
 [project.optional-dependencies]

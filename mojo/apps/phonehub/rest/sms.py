@@ -1,6 +1,7 @@
 """REST endpoints for SMS operations."""
 
 import mojo.decorators as md
+from mojo.helpers.request import is_signed_in_user
 from mojo.apps.phonehub.models import SMS
 from mojo.apps.phonehub.services.twilio import validate_webhook_signature
 from mojo.helpers.response import JsonResponse
@@ -26,8 +27,12 @@ def on_sms_send(request):
         "body": "Hello from PhoneHub!",
         "from_number": "+14155556789",  // optional
         "group": 123,  // optional
-        "metadata": {}  // optional
+        "metadata": {},  // optional
+        "secret": "123456"  // optional: a code or link inside body
     }
+
+    A `secret` (a string of at most 2048 characters; anything else is
+    ignored) is sent as part of body but stored as [redacted].
 
     Returns SMS object with send status.
     """
@@ -35,11 +40,14 @@ def on_sms_send(request):
     body = request.DATA.get('body')
     from_number = request.DATA.get('from_number')
     metadata = request.DATA.get('metadata')
+    secret = request.DATA.get('secret')
+    if not isinstance(secret, str) or len(secret) > 2048:
+        secret = None
 
     # request.user is an ApiKey (not a User) when the caller authenticated
     # with an API key. SMS.user is a User ForeignKey, so only attach a real
     # User — the API-key path is identified by its group instead.
-    user = request.user if hasattr(request.user, "is_request_user") else None
+    user = request.user if is_signed_in_user(request.user) else None
 
     # Send SMS
     sms = SMS.send(
@@ -48,7 +56,8 @@ def on_sms_send(request):
         from_number=from_number,
         group=request.group,
         user=user,
-        metadata=metadata
+        metadata=metadata,
+        secret=secret
     )
 
     if sms:

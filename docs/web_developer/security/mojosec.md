@@ -40,9 +40,9 @@ retains a wrapper for previous activation. An interruption before that boundary
 cannot be repaired by code that has not run. Operators use `check_node` to detect
 installed/loaded drift and recover one node at a time, or complete the next
 deployment. Daily restarts can hide drift and do not prove version alignment.
-After release, canary/fleet verification must establish the released version,
-fresh process generation, and absence of new false broker missing-proof events
-on both MojoVerify nodes; local tests are not that production evidence.
+After release, canary/fleet verification must establish the released version
+and a fresh process generation on both MojoVerify nodes; local tests are not
+that production evidence.
 
 ## Authentication
 
@@ -164,6 +164,58 @@ recommendation/IPSet controls are built from the returned action schemas,
 require the current `modified` revision plus typed confirmation, and never
 replay after a 409 or ambiguous 401. Admin v1 retains its existing routes and
 Activity content.
+
+### Default policy and operator state
+
+On deployments running the MojoSec defaults implementation, missing governed
+RuleSets are seeded after migration and ensured during sensor ingestion.
+Setup preserves existing operator categories and edited or disabled defaults.
+Disable a default through the Admin Security action authority to retain an
+override; deleting it can cause automatic setup to recreate it. These are
+fleet-wide database policies, not per-sensor settings.
+
+The default ignores receipt-proven routine public-key SSH without a recent
+trusted source failure, exact local-operation proof, centrally registered
+expected FIM changes, and 300–499 `web.probe` responses. Ignored policy Events
+and receipts remain available while no Incident is created; the existing
+exact local-only compatibility path remains eventless. Unproven operations,
+real failures, and 2xx/5xx probes remain visible through review RuleSets.
+Default ignore/block conditions require Event level at most 8.
+
+Before ignoring a probe, a higher-priority scanner rule checks for at least
+three trusted receipts from one source on three distinct sensitive paths in
+ten minutes. Receipt creation and sensor observation must both be fresh;
+the default's queued block job rechecks the evidence when it executes. A
+failed recheck skips the block and leaves the existing incident visible.
+Its handler requests a one-hour fleet-wide checked block. A
+sensor's aggregate count, a replayed ID, a user agent, or one path is
+insufficient. Action requests do not themselves establish verified fleet
+enforcement; the block handler resolves the incident only after a verified,
+`ok=true` checked result.
+
+The governed action schema's rule-field roster adds these reserved operands:
+
+| Fields | Type | Meaning |
+|---|---|---|
+| `mojosec_kind`, `mojosec_user`, `mojosec_auth_method` | `str` | Validated event kind, literal identity, and authentication method |
+| `mojosec_path`, `mojosec_response_class`, `mojosec_command_path`, `mojosec_proof_status` | `str` | Safe projected evidence; a class/path/label alone is not routine proof |
+| `mojosec_status` | `int` | Validated HTTP status |
+| `mojosec_expected_change`, `mojosec_routine`, `mojosec_scanner_confirmed` | `bool` | Server-computed proof predicates |
+
+These are receipt-backed rule operands, not fields clients may supply to gain
+an exemption. Missing, corrupted, or ambiguous proof yields no value; Event
+metadata cannot override them. No new batch/ack version or REST route is
+introduced. Newly projected sensor Events use `model_name="mojosec_sensor"`
+and installation API key primary key as `model_id` for separate host bundles;
+`hostname` is unchanged, and historical rows are not rewritten.
+
+Operators can preview missing defaults or the exact legacy WMWX visibility
+repair with `python manage.py mojosec_rules [--repair-visibility]`. Applying
+requires `--apply --expected-revision <revision>` with the same preview flags;
+changed policy invalidates the token. Repair disables only matching
+legacy rows and never deletes historical evidence. See the
+[backend policy guide](../../django_developer/security/mojosec_defaults.md)
+for the full matching and repair contract.
 
 Recommendation approve/reject/cancel/reverse operations use the same action
 writer and bind to the recommendation's `modified` value and exact proposal
@@ -331,91 +383,27 @@ per-event `rejected` — terminal, so the sensor frees the spool slot — never
 ## Privileged-operation evidence
 
 Delivered `auth.sudo_command` Events remain rich: the exact bounded command,
-actor, target, source IP when SSH attribution is proven, TTY, Audit session,
-producer identity, unit/cgroup/SELinux context, semantic broker operation and
-up to eight validated ancestors may be present. The wire and Event schemas are
-still version 1 and all additions are optional, so older sensors and retained
-receipts remain compatible.
+actor, target, source IP when SSH attribution is proven, TTY, Audit session and
+login UID, producer identity, and unit/cgroup/SELinux context may be present.
+The wire and Event schemas are still version 1 and every field is optional, so
+older sensors and retained receipts remain compatible; the former
+`proof_status`, `origin_kind`, `lineage`, `lineage_sha256`, `operation_id`,
+`execution_id`, `job_id`, `job_function` and `receipt_semantics` attributes are
+no longer sent and are tolerated on historical receipts only.
 
-Expected firewall mutations may be absent from the central Event feed only when
-the sensor proves healthy post-cutover jobman, sudo, root broker, and target
-lineage plus matching begin/result receipts. The read-only `broker.status`
-check also emits a root-authored pair, but no firewall child: its result binds
-the broker's own PID generation and both receipt child lists are empty. Its sudo
-observation is suppressed only when that exact pair and generation join to cron
-JobEngine → sudo → broker lineage and the pinned engine origin. A failed result
-or unproven check remains an ordinary Event. The root-owned pair carries the
-broker's Audit session and executable as fallback when journald loses metadata
-for the short-lived process. Trusted journal values still take precedence, and
-any disagreement invalidates the pair. The fixed classifier is
-`jobman_firewall_operation_v1`. Missing, stale, conflicting, interactive,
-direct, SSH-attributed, or audit-unhealthy activity is likewise sent as an
-ordinary Event. A diagnostic window uses the existing eventless local-only
-receipt contract and does not create an Incident or enter learning/feedback
-metrics. The installed broker path enters safe-path Python directly, without a
-shell trampoline that would create an ambiguous second exec generation under
-the receipt's PID/start-ticks identity.
-
-For broker child commands, AL2023 Audit records the resolved kernel executable
-(`/usr/sbin/xtables-nft-multi` or `/usr/sbin/ipset`) rather than the fixed
-`/sbin/*` argv path. Proof accepts only the known logical/resolved pair while
-still matching the exact argv path and digest from the broker receipt. If the
-short-lived process exits before start-tick enrichment, its exact Audit PID
-record must be within five seconds of the receipt pair. A terminal,
-kernel-confirmed failed `execve` does not create a new process generation;
-missing, incomplete, or conflicting Audit outcomes still remain central.
-
-Proof reconciliation is deterministic under bounded bursts: each pass handles
-the oldest 512 pending firewall candidates. Candidate boot, Audit session and
-sudo producer PID first narrow the process-child lookup to possible broker
-PIDs; only receipts for those brokers are loaded, with a 2,048-row cap. The
-resolver combines candidate producer PIDs and pinned-engine anchors with broker
-and target PIDs from those receipt pairs, then loads process nodes for at most
-4,096 exact PIDs. Unrelated global rows are not decoded into the proof work
-set. An unmatched candidate remains pending for later evidence or fails open as
-an ordinary Event at its 30-second deadline. Health gating uses the newest
-locally observed epoch for that boot, not the numerically greatest publisher
-sequence, because the sequence can restart after deployment. A stale higher
-sequence therefore cannot override newer health.
-
-On AL2023 the sensor accepts a trusted same-event PROCTITLE as the compound
-boundary when journald omits the empty EOE. It still requires complete EXECVE
-arguments: quoted strings are unwrapped, unquoted hex is decoded, and a quoted
-hex-looking literal stays literal. PROCTITLE never repairs missing argv, and
-timeouts or a newer Audit serial never prove completion. Conflicting
-representations and late contradictory fragments remain ineligible across
-polls/restarts through bounded local finalized state. Receipt conflicts are
-sticky, and a live engine anchor must continue to match its boot, PID generation,
-executable and complete command line. Malformed journal records also veto
-suppression, even with healthy Audit sidecars.
-
-Audit `NETFILTER_CFG` activity may reuse the PID of the firewall process. A
-later syscall compound with no `EXECVE` row and the explicit `key=(null)`
-marker is not treated as a second process generation. Managed exec/sudo records
-and unknown incomplete evidence keep their conservative proof behavior.
-
-The network-capable root sensor keeps only its filesystem read capability and
-never receives `CAP_SYS_PTRACE`. A separate resolver runs as `ec2-user` with no
-capabilities or IP network. Its root-owned mode-`0600` Unix socket accepts one
-bounded PID/start-ticks request. A successful response echoes those identifiers
-and adds only the double-checked executable path; failure remains ordinary
-central evidence. `ProtectProc=invisible` hides other users' processes, while
-`ProcSubset=all` retains the read-only `/proc/sys` state needed by the startup
-condition. Startup requires `kernel.yama.ptrace_scope >= 1`, which protects the
-resolver from another same-UID process before Python begins. Its convergence
-persists that protection and raises a weak value to `1`, while preserving
-stronger host values of `2` or `3`. Mode-off removes the managed persistent
-setting without weakening the live kernel value. A client timeout, disconnect,
-malformed request, or failed response write fails closed for only that lookup;
-the resolver remains available for the next request. Its
-service declares `PartOf=mojosec.service`, so sensor restarts refresh an
-already-running resolver after framework deployments; a changed socket unit is
-also restarted. Node audit verifies the effective listener, service trigger,
-root ownership, mode, absence of drop-ins, live and persistent Yama posture,
-and helper sandbox.
-Mode-off convergence stops the resolver, disables the socket, and removes both
-unit files and the runtime socket. This supports the exact live JobEngine check
-without relaxing any Audit, receipt, cron-origin, or command-line requirement.
+One privileged command is absent from the central feed by design: the
+application account's own tty-less, unattributed `sudo
+/usr/local/sbin/mojo-firewall-broker` (target `root`, exact empty-argument
+path, login UID equal to the sensor's configured app UID), which the incident
+app's cron-launched JobEngine runs about once a minute. The sensor stamps it
+`local_disposition=app_user_firewall_broker_v1` and records it locally; the
+fixed classifier is shared with the receiver, whose routine-command fact
+additionally requires the untruncated broker `command_path`. Interactive,
+SSH-attributed, other-user, other-command, argument-bearing or truncated near
+misses are sent as ordinary Events. A diagnostic window uses the existing
+eventless local-only receipt contract and does not create an Incident or enter
+learning/feedback metrics. The sensor keeps no process table, proves no
+ancestry, runs no resolver and reads no Audit exec records (maestro #9769).
 
 Raw sudo observations are never sampled, rate-limited, or aggregated to reduce
 noise. An unexplained privileged action remains ordinary central evidence;

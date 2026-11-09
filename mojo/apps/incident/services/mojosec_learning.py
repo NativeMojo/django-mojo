@@ -7,6 +7,7 @@ import secrets
 from django.db import transaction
 
 from mojo.helpers import dates
+from mojo.helpers.request import is_signed_in_user
 from mojo.helpers.settings import settings
 from mojo.apps.incident.services.mojosec import (
     KIND_POLICY, LOCAL_ONLY_REPLAY_SCHEMA, UNKNOWN_KIND_POLICY,
@@ -80,8 +81,7 @@ def _bounded_int(value, field, minimum, maximum):
 
 
 def _assert_human_security_author(author, permission="manage_security"):
-    if (author is None or not hasattr(author, "is_request_user")
-            or not getattr(author, "is_authenticated", False)
+    if (not is_signed_in_user(author)
             or not author.has_permission([permission, "security"])):
         raise MojoSecLearningError("global human security authorization is required")
 

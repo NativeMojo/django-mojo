@@ -1,6 +1,7 @@
 # Approvals — resolving a mutating assistant action
 
-Every assistant tool that changes **shared** data is gated. When the model calls
+In the built-in Assistant and proposal-only MCP mode, tools that change
+**shared** data are gated. When the model calls
 one, the server does **not** run it. It creates a pending action, sends you an
 `approval` block, and waits for a real human decision.
 
@@ -8,7 +9,10 @@ Writes to the operator's own assistant state are the exception: a memory in the
 `user` tier, or a user-tier skill they own, is saved, updated or deleted
 immediately and the tool returns its ordinary result — no card, nothing for you
 to render. Global and group memories, global and group skills, and anyone else's
-skill still produce a card.
+skill still produce a card in all modes. A separately consented
+`mcp mcp:execute` connection can execute eligible ordinary tools directly;
+fresh-sign-in, preview/revision, generic model saves/deletes and operator-confirmation
+tools keep this approval flow. See [MCP](mcp.md#requesting-delegated-tool-execution).
 
 Your job as a client is small and exact:
 
@@ -17,8 +21,8 @@ Your job as a client is small and exact:
    WebSocket, when the card does not require step-up auth).
 3. Render the resolved block you get back.
 
-Nothing else in the chat can cause a mutation. In particular, an `action`
-quick-reply block cannot — see [Not the `action` block](#not-the-action-block).
+An `action` quick-reply block cannot cause a mutation — see
+[Not the `action` block](#not-the-action-block).
 
 ---
 
@@ -320,18 +324,26 @@ saves a round trip, and it cannot serve step-up cards at all.
 ## Cards can also come from a remote AI client
 
 A third transport can *propose*: an AI client connected over
-[MCP](mcp.md) calls the same tools, and one that changes shared data produces the
+[MCP](mcp.md) calls the same tools. A shared mutation on a plain `mcp` grant, or
+a protected tool on a delegated grant, produces the
 same `PendingAction` and the same `approval` block, bound to the operator whose
 account authorized that connection. Those cards live in their own conversation
 (titled `MCP: <client name>`) and reach the Admin the same way any other card
 does. The same exception applies there: that client can save the operator's own
 user-tier memories and skills directly, and those writes never reach your UI as a
-card.
+card. An explicitly consented `mcp mcp:execute` connection executes eligible
+ordinary tools with the operator's live permissions and returns the real result.
+That connection consent is not a human approval of a particular action, and
+direct calls have no single-use or exactly-once guarantee. Do not blindly retry
+an uncertain write.
 
-**Only an interactive session can resolve one.** An MCP token is refused at
+**MCP cannot resolve one.** A token bound to the exact MCP resource is refused at
 `POST /api/assistant/action` with a `401`, so a remote client can never approve
 its own proposal — it can only poll its own cards and wait. Nothing changes for
-your client: render and resolve them exactly as above.
+your client: render and resolve them exactly as above. The separate full-API
+grant's existing REST access is unchanged. MCP `approval_required` results also
+name `installation`, `approval_url` and `approval_location`: the client should
+explain that Admin hand-off, state that the action has not run, and stop.
 
 ---
 
@@ -339,6 +351,6 @@ your client: render and resolve them exactly as above.
 
 - [Block Rendering Guide](blocks.md) — every block type, including `approval`
 - [Assistant REST + WebSocket reference](README.md)
-- [Connecting an AI client over MCP](mcp.md) — the third proposing transport
+- [Connecting an AI client over MCP](mcp.md) — proposal and delegated modes
 - [Server-side protocol](../../django_developer/assistant/approvals.md) — the
   gates, the audit trail, and how to declare a mutating tool

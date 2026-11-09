@@ -6,6 +6,8 @@ class AppConfig(BaseAppConfig):
     name = 'mojo.apps.chat'
 
     def ready(self):
+        from .services.backend import read_backend
+        read_backend()
         # Write-time validation for the live moderation settings (global and
         # per group), on REST and Setting.set alike.
         from mojo.apps.account.models import Setting

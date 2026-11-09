@@ -18,6 +18,7 @@ def on_vault_data_store(request):
     group = request.group
     if not group:
         raise me.ValueException("Group required")
+    vault_service.require_group_writer(request, group)
 
     name = request.DATA.get("name")
     data = request.DATA.get("data")

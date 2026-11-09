@@ -85,9 +85,10 @@ search degrades to full-text only — nothing errors.
   Pages saved in the last 10 minutes are left to their own embed job, pages
   with a pending/running embed job are skipped, and each page is queued at
   most once an hour (job idempotency key `docit_kb.recon:<page>:<bucket>`).
-  **Operator prerequisite:** the deployment's cron runner must call
-  `mojo.helpers.cron.load_app_cron()` and then `run_now()` on a schedule —
-  nothing sweeps if cron is not wired up.
+  **Operator prerequisite:** something must tick `mojo.helpers.cron` —
+  on a deployed node the jobs scheduler process does (see
+  [Scheduled Tasks](../jobs/scheduled_tasks.md)); nothing sweeps if
+  `JOBS_SCHEDULER_CRON_TICK` is off and no other runner is wired up.
 - **Search** — `knowledge.search(query, book=None, limit=10, groups=None,
   max_distance=None)` runs two legs over published pages of active books:
   pgvector `CosineDistance` (when a provider is available) and Postgres FTS

@@ -107,6 +107,8 @@ actually does.
 | `request.acting_user` | the linked `User` | the linked `User` |
 | Authorization | the key's `permissions` dict | the member's, via `GroupMember` |
 | Attribution (`FK(User)` columns) | the linked member | the linked member |
+| Incident `Event.uid` / `Log.uid` | the linked member; unlinked: none (`None` / `0`) | the linked member |
+| Metrics `user-<id>` account | no identity match (the key is not a person, whatever its id); only an explicit `metrics` / `view_metrics` / `write_metrics` grant in the key's `permissions` reaches it | the linked member's own, by identity (the member's global grants are not consulted for an override session) |
 | Tenant boundary | the key's group | the key's group |
 
 **Reference mode** (the default) exists because most consumers only need
@@ -114,7 +116,10 @@ attribution: before this, an `ApiKey` could not be stored in any
 `ForeignKey("account.User")`, so apps hand-rolled resolvers that guessed a user
 from the key's *name*. With a link set, `request.acting_user` is what the REST
 layer stamps into `CREATED_BY_OWNER_FIELD`, so `created_by` / `note.user` and
-friends record a real member with no per-app code. It grants **no authority** —
+friends record a real member with no per-app code. Incident events and log rows
+follow the same rule: the key's own id is never filed as a user id, and an
+event names the key in `metadata.api_key_id` / `metadata.api_key_name` (#9556).
+It grants **no authority** —
 a reference-mode key with an empty `permissions` dict can still do nothing.
 
 **Override mode** is the opt-in: the key *becomes* the member, and permissions

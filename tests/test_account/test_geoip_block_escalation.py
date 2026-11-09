@@ -13,9 +13,9 @@ TESTIT_TIER = "extended"
 def test_block_escalates_threat_level_from_none(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.100").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.100").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.100", provider="test", threat_level=None,
+        ip_address="203.0.117.100", provider="test", threat_level=None,
     )
     assert geo.threat_level is None, "fixture must start with no threat_level"
 
@@ -33,9 +33,9 @@ def test_block_escalates_threat_level_from_none(opts):
 def test_block_escalates_threat_level_from_low(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.101").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.101").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.101", provider="test", threat_level="low",
+        ip_address="203.0.117.101", provider="test", threat_level="low",
     )
     geo.block(reason="test_escalate_from_low", ttl=600, broadcast=False)
     geo.refresh_from_db()
@@ -49,9 +49,9 @@ def test_block_escalates_threat_level_from_low(opts):
 def test_block_escalates_threat_level_from_medium(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.102").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.102").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.102", provider="test", threat_level="medium",
+        ip_address="203.0.117.102", provider="test", threat_level="medium",
     )
     geo.block(reason="test_escalate_from_medium", ttl=600, broadcast=False)
     geo.refresh_from_db()
@@ -65,9 +65,9 @@ def test_block_escalates_threat_level_from_medium(opts):
 def test_block_preserves_high(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.103").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.103").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.103", provider="test", threat_level="high",
+        ip_address="203.0.117.103", provider="test", threat_level="high",
     )
     geo.block(reason="test_preserve_high", ttl=600, broadcast=False)
     geo.refresh_from_db()
@@ -82,9 +82,9 @@ def test_block_never_downgrades_critical(opts):
     """block() must never downgrade 'critical' to 'high'."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.104").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.104").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.104", provider="test", threat_level="critical",
+        ip_address="203.0.117.104", provider="test", threat_level="critical",
     )
     geo.block(reason="test_no_downgrade", ttl=600, broadcast=False)
     geo.refresh_from_db()
@@ -99,9 +99,9 @@ def test_block_is_atomic_with_threat_level(opts):
     """threat_level must be updated in the same UPDATE as block fields."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.105").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.105").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.105", provider="test", threat_level=None,
+        ip_address="203.0.117.105", provider="test", threat_level=None,
     )
     geo.block(reason="test_atomic", ttl=600, broadcast=False)
 
@@ -119,9 +119,9 @@ def test_block_whitelisted_does_not_change_threat_level(opts):
     """Whitelisted IPs are not blocked, so threat_level must not change either."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.106").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.106").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.106", provider="test",
+        ip_address="203.0.117.106", provider="test",
         threat_level="low", is_whitelisted=True,
     )
     result = geo.block(reason="test_whitelisted", ttl=600, broadcast=False)

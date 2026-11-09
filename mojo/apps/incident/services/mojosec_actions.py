@@ -82,58 +82,25 @@ def proposal_ttl_seconds():
         "MOJOSEC_ACTION_PROPOSAL_TTL_SECONDS", 259200, 3600, MAX_TTL_SECONDS)
 
 
-def _cidr_list(name):
-    """A configured CIDR list, or None when the config is malformed.
-
-    None means "cannot decide" — and because blocking is the dangerous act,
-    the caller must fail every target closed, not open. Read raw: the list
-    coercion helpers swallow a wrong-typed value into the default, which
-    would make a typo'd protected list indistinguishable from "none
-    configured".
-    """
-    value = settings.get_static(name, None)
-    if value is None:
-        return []
-    if not isinstance(value, (list, tuple)):
-        return None
-    networks = []
-    for row in value:
-        if not isinstance(row, str):
-            return None
-        try:
-            networks.append(ipaddress.ip_network(row, strict=False))
-        except ValueError:
-            return None
-    return networks
-
-
 def validate_target(ip):
     """Canonicalize and safety-check one candidate block target.
 
-    Returns (canonical_ip_or_None, validation_state, reason).
+    Returns (canonical_ip_or_None, validation_state, reason). The decision is
+    `block_safety.check_block_target`, the same one every block path and the
+    firewall dispatch use (#8885); this keeps the recommendation lifecycle's
+    tuple and reason strings.
     """
-    from mojo.apps.account.models import GeoLocatedIP
+    from mojo.apps.incident.services import block_safety
 
-    try:
-        address = ipaddress.ip_address(str(ip).strip())
-    except ValueError:
+    canonical, code = block_safety.check_block_target(str(ip).strip())
+    if code == "invalid_network":
         return None, "invalid", "not_an_ip_address"
-    canonical = str(address)
-    if address.version != 4:
-        return canonical, "invalid", "unsupported_family"
-    if (address.is_private or address.is_loopback or address.is_link_local or
-            address.is_multicast or address.is_reserved or
-            address.is_unspecified or not address.is_global):
-        return canonical, "protected", "non_global_address"
-    for name in ("MOJOSEC_PROTECTED_CIDRS", "MOJOSEC_TRUSTED_PROXY_CIDRS"):
-        networks = _cidr_list(name)
-        if networks is None:
-            return canonical, "invalid", "protected_config_invalid"
-        if any(address in network for network in networks):
-            return canonical, "protected", name.lower()
-    geo = GeoLocatedIP.objects.filter(ip_address=canonical).first()
-    if geo is not None and geo.whitelist_active:
-        return canonical, "protected", "whitelisted"
+    if code == "unsupported_family":
+        return str(ipaddress.ip_address(str(ip).strip())), "invalid", code
+    if code == "protected_config_invalid":
+        return canonical, "invalid", code
+    if code:
+        return canonical, "protected", code
     return canonical, "validated", ""
 
 

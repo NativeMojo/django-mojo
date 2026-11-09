@@ -86,8 +86,8 @@ def test_registry_adds_bedrock_without_constructing_any_sdk(opts):
         and anthropic.api_key == "test-only-placeholder" and anthropic.client is None, \
         "the Anthropic constructor contract must remain unchanged and lazy"
     assert get_provider("unknown") is None, "unknown provider names must remain unsupported"
-    assert bedrock.capabilities == frozenset({"text", "images"}), \
-        f"the Bedrock adapter must advertise text and images only, got {bedrock.capabilities}"
+    assert bedrock.capabilities == frozenset({"text", "images", "tools", "stream"}), \
+        f"Bedrock adapter must advertise text, images, tools and stream, got {bedrock.capabilities}"
 
 
 @th.django_unit_test()
@@ -335,6 +335,389 @@ def test_sdk_errors_are_safe_bounded_and_never_use_guard_refusal_codes(opts):
             assert len(client.calls) == 1, "one accounted adapter call must make no hidden retry"
 
 
+STREAM_USAGE = {"inputTokens": 7, "outputTokens": 11, "cacheReadInputTokens": 3,
+                "cacheWriteInputTokens": 5, "totalTokens": 26}
+TOOLS = [{"name": "lookup_item", "description": "Look up a board item",
+          "input_schema": {"type": "object", "properties": {"id": {"type": "integer"}},
+                           "required": ["id"]}}]
+
+
+class _Raw:
+    """Stands in for the urllib3 response under botocore's EventStream."""
+
+    def __init__(self):
+        import threading
+        self.stopped = threading.Event()
+        self.shutdowns = 0
+
+    def shutdown(self):
+        self.shutdowns += 1
+        self.stopped.set()
+
+
+class _EventStream:
+    """Yields events in order; an exception item is raised at its position.
+
+    The ``"block"`` item waits until the socket is shut down, then fails the
+    read the way a shut-down urllib3 socket does.
+    """
+
+    def __init__(self, events):
+        self.events = list(events)
+        self._raw_stream = _Raw()
+        self.closed = False
+
+    def __iter__(self):
+        from urllib3.exceptions import ProtocolError
+        for item in self.events:
+            if item == "block":
+                self._raw_stream.stopped.wait(5)
+                raise ProtocolError("connection shut down")
+            if isinstance(item, BaseException):
+                raise item
+            yield item
+
+    def close(self):
+        self.closed = True
+
+
+class _StreamClient:
+    def __init__(self, events=None, error=None):
+        self.stream = _EventStream(_stream_events() if events is None else events)
+        self.error = error
+        self.calls = []
+
+    def converse_stream(self, **kwargs):
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return {"ResponseMetadata": {"RequestId": "bedrock-stream-1"}, "stream": self.stream}
+
+
+def _stream_events(parts=("Hel", "lo", " there"), stop="end_turn", tool_input=None,
+                   usage=True):
+    events = [
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {
+            "reasoningContent": {"text": "[REDACTED] private chain"}}}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+    ]
+    events += [{"contentBlockDelta": {"contentBlockIndex": 1, "delta": {"text": part}}}
+               for part in parts]
+    events.append({"contentBlockStop": {"contentBlockIndex": 1}})
+    if tool_input is not None:
+        events.append({"contentBlockStart": {"contentBlockIndex": 2, "start": {
+            "toolUse": {"toolUseId": "tooluse_abc-1", "name": "lookup_item"}}}})
+        events += [{"contentBlockDelta": {"contentBlockIndex": 2, "delta": {
+            "toolUse": {"input": piece}}}} for piece in tool_input]
+        events.append({"contentBlockStop": {"contentBlockIndex": 2}})
+    events.append({"messageStop": {"stopReason": stop}})
+    if usage:
+        events.append({"metadata": {"usage": dict(STREAM_USAGE), "metrics": {"latencyMs": 9}}})
+    return events
+
+
+def _stream(client, timeout=None, **kwargs):
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    parameters = {"messages": MESSAGES, "model": MODEL, "max_tokens": 32}
+    parameters.update(kwargs)
+    if timeout is not None:
+        parameters["timeout"] = timeout
+    return BedrockProvider(client=client).stream(**parameters)
+
+
+def _drain_rejected(stream, code="provider_rejected"):
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    seen = []
+    try:
+        for event in stream:
+            seen.append(event)
+        assert False, f"the stream should have failed with {code}, got {seen}"
+    except ProviderError as err:
+        assert err.code == code, f"stream failure must use {code}, got {err.code}"
+        assert "secret" not in str(err), f"raw provider text crossed the adapter: {err}"
+        return err, seen
+
+
+@th.django_unit_test()
+def test_stream_yields_ordered_text_deltas_then_one_validated_final(opts):
+    client = _StreamClient()
+    events = list(_stream(client, system="Be brief", reasoning_effort="low"))
+    deltas = [event["text"] for event in events if event["type"] == "text_delta"]
+    assert deltas == ["Hel", "lo", " there"], f"text deltas must arrive in provider order: {events}"
+    assert [event["type"] for event in events] == ["text_delta"] * 3 + ["final"], \
+        f"the stream must end with exactly one final record: {events}"
+    final = events[-1]["response"]
+    assert final == {"id": "bedrock-stream-1", "type": "message", "role": "assistant",
+                     "provider": "bedrock", "model": MODEL,
+                     "content": [{"type": "text", "text": "Hello there"}],
+                     "stop_reason": "end_turn", "usage": USAGE}, \
+        f"the final record must be exactly the call() response shape: {final}"
+    assert "REDACTED" not in repr(events) and "private chain" not in repr(events), \
+        "reasoning content must never be yielded"
+    request = client.calls[0]
+    assert request["system"] == [{"text": "Be brief"}] and "toolConfig" not in request \
+        and request["additionalModelRequestFields"]["reasoningConfig"][
+            "maxReasoningEffort"] == "low", \
+        f"converse_stream must receive the same validated request as converse: {request}"
+    assert client.stream.closed, "a finished stream must release its connection"
+
+
+@th.django_unit_test()
+def test_stream_tool_request_arrives_only_in_the_final_record(opts):
+    client = _StreamClient(_stream_events(
+        parts=("Let me check.",), stop="tool_use", tool_input=['{"id"', ': 42}']))
+    events = list(_stream(client, tools=TOOLS))
+    assert [event["type"] for event in events] == ["text_delta", "final"], \
+        f"tool requests must not be handed out before the answer validates: {events}"
+    final = events[-1]["response"]
+    assert final["stop_reason"] == "tool_use" and final["content"] == [
+        {"type": "text", "text": "Let me check."},
+        {"type": "tool_use", "id": "tooluse_abc-1", "name": "lookup_item",
+         "input": {"id": 42}}], f"the assembled tool request is wrong: {final}"
+    spec = client.calls[0]["toolConfig"]
+    assert spec == {"tools": [{"toolSpec": {
+        "name": "lookup_item", "description": "Look up a board item",
+        "inputSchema": {"json": TOOLS[0]["input_schema"]}}}]}, \
+        f"declared tools must translate to a Bedrock toolConfig: {spec}"
+    empty = _StreamClient(_stream_events(parts=(), stop="tool_use", tool_input=[]))
+    final = list(_stream(empty, tools=TOOLS))[-1]["response"]
+    assert final["content"] == [{"type": "tool_use", "id": "tooluse_abc-1",
+                                 "name": "lookup_item", "input": {}}], \
+        f"a tool request with no input must carry an empty object: {final}"
+
+
+@th.django_unit_test()
+def test_plain_tool_round_trip_translates_requests_and_results(opts):
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    response = _response()
+    response["stopReason"] = "tool_use"
+    response["output"]["message"]["content"] = [
+        {"text": "Checking."},
+        {"toolUse": {"toolUseId": "tooluse_1", "name": "lookup_item", "input": {"id": 7}}}]
+    client = _Client(response)
+    adapter = BedrockProvider(client=client)
+    first = adapter.call(MESSAGES, MODEL, 32, tools=TOOLS)
+    assert first["stop_reason"] == "tool_use" and first["content"][-1] == {
+        "type": "tool_use", "id": "tooluse_1", "name": "lookup_item", "input": {"id": 7}}, \
+        f"a Bedrock tool request must come back as a tool_use block: {first}"
+    transcript = MESSAGES + [
+        {"role": "assistant", "content": first["content"]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tooluse_1",
+                                      "content": "not found", "is_error": True}]}]
+    client.response = _response()
+    second = adapter.call(transcript, MODEL, 32, tools=TOOLS)
+    assert second["stop_reason"] == "end_turn" and second["content"] == [
+        {"type": "text", "text": "Final answer"}], f"the answer after a tool round is wrong: {second}"
+    wire = client.calls[1]["messages"]
+    assert wire[1] == {"role": "assistant", "content": [
+        {"text": "Checking."},
+        {"toolUse": {"toolUseId": "tooluse_1", "name": "lookup_item", "input": {"id": 7}}}]} \
+        and wire[2] == {"role": "user", "content": [{"toolResult": {
+            "toolUseId": "tooluse_1", "content": [{"text": "not found"}], "status": "error"}}]}, \
+        f"tool turns must translate to Bedrock toolUse/toolResult blocks: {wire}"
+    assert "toolConfig" in client.calls[1], "a tool transcript must carry its toolConfig"
+
+
+@th.django_unit_test()
+def test_invalid_tools_and_tool_transcripts_never_reach_bedrock(opts):
+    use = {"type": "tool_use", "id": "tooluse_1", "name": "lookup_item", "input": {"id": 1}}
+    result = {"type": "tool_result", "tool_use_id": "tooluse_1", "content": "ok"}
+    asked = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": [use]}]
+    cases = [
+        {"tools": [dict(TOOLS[0], cache_control={"type": "ephemeral"})]},
+        {"tools": [dict(TOOLS[0], name="bad name")]},
+        {"tools": [dict(TOOLS[0], description=" ")]},
+        {"tools": [dict(TOOLS[0], input_schema={"type": "array"})]},
+        {"tools": [dict(TOOLS[0], input_schema={"type": "object", "x": float("nan")})]},
+        {"tools": TOOLS + TOOLS},
+        {"tools": [dict(TOOLS[0], name=f"tool_{n}") for n in range(65)]},
+        {"tools": None, "messages": asked + [{"role": "user", "content": [result]}]},
+        {"tools": TOOLS, "messages": asked},
+        {"tools": TOOLS, "messages": asked + [{"role": "user", "content": "no answer"}]},
+        {"tools": TOOLS, "messages": asked + [{"role": "user", "content": [
+            dict(result, tool_use_id="tooluse_2")]}]},
+        {"tools": TOOLS, "messages": asked + [{"role": "user", "content": [result, result]}]},
+        {"tools": TOOLS, "messages": asked + [{"role": "user", "content": [
+            dict(result, content=" ")]}]},
+        {"tools": TOOLS, "messages": asked + [{"role": "user", "content": [
+            dict(result, is_error="yes")]}]},
+        {"tools": TOOLS, "messages": [{"role": "user", "content": "Hi"},
+                                      {"role": "assistant", "content": [
+                                          dict(use, name="not_declared")]}]},
+        {"tools": TOOLS, "messages": [{"role": "user", "content": "Hi"},
+                                      {"role": "assistant", "content": [
+                                          dict(use, id="bad id")]}]},
+        {"tools": TOOLS, "messages": [{"role": "user", "content": "Hi"},
+                                      {"role": "assistant", "content": [
+                                          dict(use, input=["not", "an", "object"])]}]},
+        {"tools": TOOLS, "messages": [{"role": "user", "content": [use]}]},
+    ]
+    for kwargs in cases:
+        client = _Client()
+        _call_rejected(client, **kwargs)
+        assert client.calls == [], f"an invalid tool request reached Converse: {kwargs}"
+        streamer = _StreamClient()
+        try:
+            _stream(streamer, **kwargs)
+            assert False, f"an invalid streamed tool request was dispatched: {kwargs}"
+        except Exception as err:
+            assert getattr(err, "code", None) == "provider_rejected", \
+                f"invalid streamed tool input must be provider_rejected, got {err!r}"
+        assert streamer.calls == [], f"an invalid tool request reached ConverseStream: {kwargs}"
+
+
+@th.django_unit_test()
+def test_unusable_tool_answers_are_rejected_with_their_usage(opts):
+    for content, stop in (
+            ([{"toolUse": {"toolUseId": "t1", "name": "not_declared", "input": {}}}], "tool_use"),
+            ([{"toolUse": {"toolUseId": "t1", "name": "lookup_item", "input": "{}"}}], "tool_use"),
+            ([{"toolUse": {"toolUseId": "t1", "name": "lookup_item", "input": {},
+                           "type": "server_tool_use"}}], "tool_use"),
+            ([{"text": "Visible"}], "tool_use"),
+            ([{"text": "Visible"}, {"toolUse": {"toolUseId": "t1", "name": "lookup_item",
+                                                "input": {}}}], "end_turn"),
+            ([{"text": "Visible"}], "malformed_tool_use")):
+        response = _response()
+        response["stopReason"] = stop
+        response["output"]["message"]["content"] = content
+        client = _Client(response)
+        _call_rejected(client, expected_usage=USAGE, tools=TOOLS)
+    response = _response()
+    response["stopReason"] = "tool_use"
+    response["output"]["message"]["content"] = [
+        {"toolUse": {"toolUseId": "t1", "name": "lookup_item", "input": {"id": float("nan")}}}]
+    _call_rejected(_Client(response), expected_usage=USAGE, tools=TOOLS)
+    for pieces in (['{"id": 1'], ['[1, 2]'], ['"text"'], ['{"id": NaN}'], ['{"id": Infinity}']):
+        stream = _stream(_StreamClient(_stream_events(stop="tool_use", tool_input=pieces)),
+                         tools=TOOLS)
+        _drain_rejected(stream)
+
+
+@th.django_unit_test()
+def test_stream_failures_reduce_to_safe_codes_and_release_the_connection(opts):
+    from botocore.exceptions import EventStreamError
+    from urllib3.exceptions import ProtocolError, ReadTimeoutError
+
+    delta = {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "Partial"}}}
+    cases = [
+        (EventStreamError({"Error": {"Code": "throttlingException", "Message": "secret"}},
+                          "ConverseStream"), "provider_rate_limited"),
+        (EventStreamError({"Error": {"Code": "modelStreamErrorException",
+                                     "Message": "secret"}}, "ConverseStream"),
+         "provider_unavailable"),
+        (EventStreamError({"Error": {"Code": "validationException", "Message": "secret"}},
+                          "ConverseStream"), "provider_rejected"),
+        (ReadTimeoutError(None, "https://secret.invalid", "secret read timeout"),
+         "provider_timeout"),
+        (ProtocolError("secret connection reset"), "provider_unavailable"),
+        ({"throttlingException": {"message": "secret"}}, "provider_rate_limited"),
+        (RuntimeError("secret raw exception"), "provider_failed"),
+    ]
+    for failure, code in cases:
+        client = _StreamClient([{"messageStart": {"role": "assistant"}}, delta, failure])
+        err, seen = _drain_rejected(_stream(client), code)
+        assert [event["text"] for event in seen] == ["Partial"], \
+            f"text before a mid-stream failure must already have streamed: {seen}"
+        assert err.usage is None and err.request_id == "bedrock-stream-1", \
+            f"mid-stream failure invented usage or lost the request id: {err.usage}/{err.request_id}"
+        assert client.stream.closed, f"a failed stream must release its connection ({code})"
+    for events in (_stream_events(usage=False), _stream_events()[:-2] + _stream_events()[-1:],
+                   _stream_events(stop="content_filtered")):
+        _drain_rejected(_stream(_StreamClient(events)))
+    over = _stream_events()
+    over[-1]["metadata"]["usage"]["outputTokens"] = 33
+    err, _ = _drain_rejected(_stream(_StreamClient(over)))
+    assert err.usage == dict(USAGE, output_tokens=33), \
+        f"an over-cap streamed answer must keep its billed usage: {err.usage}"
+
+
+@th.django_unit_test()
+def test_stream_deadline_and_interrupt_end_a_blocked_read(opts):
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    delta = {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "Partial"}}}
+    client = _StreamClient([{"messageStart": {"role": "assistant"}}, delta, "block"])
+    stream = _stream(client, timeout=0.2)
+    assert next(stream)["text"] == "Partial", "the first delta must stream before the deadline"
+    try:
+        next(stream)
+        assert False, "a read blocked past the deadline must fail"
+    except ProviderError as err:
+        assert err.code == "provider_timeout", f"the deadline must be provider_timeout, got {err.code}"
+        assert err.caller_stalled is False, \
+            "a deadline hit inside a blocked read is the provider's slowness"
+    assert client.stream._raw_stream.shutdowns >= 1 and client.stream.closed, \
+        "the deadline must shut the socket down and release the connection"
+
+    import time
+    client = _StreamClient([{"messageStart": {"role": "assistant"}}, delta, delta])
+    stream = _stream(client, timeout=0.2)
+    next(stream)
+    time.sleep(0.35)
+    try:
+        next(stream)
+        assert False, "a stream held past its deadline by the caller must fail"
+    except ProviderError as err:
+        assert err.code == "provider_timeout" and err.caller_stalled is True, \
+            "a deadline passed between reads must be marked as the caller's stall"
+
+    client = _StreamClient([{"messageStart": {"role": "assistant"}}, delta, "block"])
+    stream = _stream(client, timeout=30)
+    next(stream)
+    stream.interrupt()
+    try:
+        next(stream)
+        assert False, "an interrupted stream must stop"
+    except StopIteration:
+        pass
+    assert client.stream._raw_stream.shutdowns == 1 and client.stream.closed, \
+        "interrupt() must shut the socket down without waiting on the reader"
+
+
+@th.django_unit_test()
+def test_stream_dispatch_errors_raise_before_any_event(opts):
+    from botocore.exceptions import ClientError
+
+    error = ClientError({"Error": {"Code": "ThrottlingException", "Message": "secret"},
+                         "ResponseMetadata": {"RequestId": "stream-request",
+                                              "HTTPStatusCode": 429}}, "ConverseStream")
+    client = _StreamClient(error=error)
+    try:
+        _stream(client)
+        assert False, "a refused converse_stream must raise from stream() itself"
+    except Exception as err:
+        assert getattr(err, "code", None) == "provider_rate_limited" \
+            and "secret" not in str(err), f"dispatch error lost its safe code: {err!r}"
+    assert len(client.calls) == 1, "a dispatch failure must not retry"
+
+
+@th.django_unit_test()
+def test_check_request_validates_without_any_sdk_work(opts):
+    from mojo.helpers.llm_providers.base import ProviderError
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    made = []
+    adapter = BedrockProvider(region="us-east-1",
+                              client_factory=lambda *args, **kwargs: made.append(args))
+    adapter.check_request(MESSAGES, MODEL, 32, tools=TOOLS, timeout=10)
+    asked = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t1", "name": "lookup_item", "input": {}}]}]
+    for kwargs in ({"messages": asked, "tools": TOOLS}, {"tools": [{"name": "x"}]},
+                   {"max_tokens": 0}, {"timeout": 0}):
+        values = {"messages": MESSAGES, "model": MODEL, "max_tokens": 32, "timeout": 10}
+        values.update(kwargs)
+        try:
+            adapter.check_request(**values)
+            assert False, f"check_request accepted an invalid request: {kwargs}"
+        except ProviderError as err:
+            assert err.code == "provider_rejected", f"invalid request used {err.code}"
+    assert made == [], "check_request must never construct an AWS client"
+
+
 def _png():
     import io
     from PIL import Image
@@ -423,3 +806,59 @@ def test_image_requests_use_the_route_region(opts):
     BedrockProvider(region="eu-west-1", client_factory=factory).call(messages, MODEL, 32)
     assert clients == [("bedrock-runtime", "eu-west-1")], \
         f"an image request must use only the route's region, got {clients}"
+
+
+@th.django_unit_test()
+def test_image_blocks_stream_and_survive_a_tool_round(opts):
+    from mojo.helpers.llm_images import image_block
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    raw = _png()
+    image = image_block(raw, "image/png")
+    asked = [{"role": "user", "content": [image, {"type": "text", "text": "What is broken?"}]}]
+    wire_image = {"image": {"format": "png", "source": {"bytes": raw}}}
+
+    client = _StreamClient()
+    events = list(_stream(client, messages=asked))
+    assert events[-1]["type"] == "final" \
+        and events[-1]["response"]["content"] == [{"type": "text", "text": "Hello there"}], \
+        f"a streamed image request must answer like a text one: {events}"
+    assert client.calls[0]["messages"] == [{"role": "user", "content": [
+        wire_image, {"text": "What is broken?"}]}], \
+        f"converse_stream must receive the image as raw bytes: {client.calls[0]['messages']}"
+
+    use = {"type": "tool_use", "id": "tooluse_1", "name": "lookup_item", "input": {"id": 7}}
+    transcript = asked + [
+        {"role": "assistant", "content": [use]},
+        {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tooluse_1",
+                                      "content": "item 7 is open"}]}]
+    client = _Client()
+    result = BedrockProvider(client=client).call(transcript, MODEL, 32, tools=TOOLS)
+    assert result["content"] == [{"type": "text", "text": "Final answer"}], \
+        f"a tool round after an image turn must answer normally: {result}"
+    wire = client.calls[0]["messages"]
+    assert wire[0] == {"role": "user", "content": [wire_image, {"text": "What is broken?"}]} \
+        and wire[2] == {"role": "user", "content": [{"toolResult": {
+            "toolUseId": "tooluse_1", "content": [{"text": "item 7 is open"}]}}]} \
+        and "toolConfig" in client.calls[0], \
+        f"the image turn must be resent unchanged inside the tool loop: {wire}"
+    streamer = _StreamClient()
+    list(_stream(streamer, messages=transcript, tools=TOOLS))
+    assert streamer.calls[0]["messages"] == wire, \
+        "stream() and call() must translate the same image tool transcript identically"
+
+
+@th.django_unit_test()
+def test_images_inside_tool_results_never_reach_bedrock(opts):
+    from mojo.helpers.llm_images import image_block
+
+    image = image_block(_png(), "image/png")
+    use = {"type": "tool_use", "id": "tooluse_1", "name": "lookup_item", "input": {"id": 7}}
+    transcript = [{"role": "user", "content": "Hi"},
+                  {"role": "assistant", "content": [use]},
+                  {"role": "user", "content": [{"type": "tool_result",
+                                                "tool_use_id": "tooluse_1",
+                                                "content": [image]}]}]
+    client = _Client()
+    _call_rejected(client, messages=transcript, tools=TOOLS)
+    assert client.calls == [], "an image inside a tool result must not reach Converse"

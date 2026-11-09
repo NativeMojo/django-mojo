@@ -46,6 +46,9 @@ class OAuthGrant(models.Model, MojoModel):
     auth_time = models.BigIntegerField(default=0)
     is_active = models.BooleanField(default=True, db_index=True)
     revoked_reason = models.CharField(max_length=32, default="", blank=True)
+    # How consent was given: the browser consent page ("authorization_code")
+    # or a person approving a headless client's user code ("device_code").
+    flow = models.CharField(max_length=32, default="authorization_code")
 
     class Meta:
         ordering = ["-created"]
@@ -64,7 +67,7 @@ class OAuthGrant(models.Model, MojoModel):
             "default": {
                 "fields": [
                     "id", "resource", "scopes", "is_active", "revoked_reason",
-                    "created", "last_used", "refresh_expires",
+                    "flow", "created", "last_used", "refresh_expires",
                 ],
                 "graphs": {
                     "client": "default",

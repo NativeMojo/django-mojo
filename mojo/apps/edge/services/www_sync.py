@@ -359,6 +359,9 @@ def _referenced_releases(vhost_id):
     the oldest one there. An mtime-only prune would delete the release the
     live generation is symlinked at — the documented "rollback is a symlink
     flip" property, deleted from under itself.
+
+    The `www/<id>.prevN` fallback links count too: an open tab may still be
+    loading chunks from the release they name.
     """
     root = os.path.join(render.edge_root(), "generations")
     referenced = set()
@@ -367,15 +370,18 @@ def _referenced_releases(vhost_id):
     except OSError:
         return referenced
     for name in names:
-        link = render.www_dir(name, vhost_id)
-        if not os.path.islink(link):
-            continue
-        try:
-            resolved = os.path.realpath(link)
-        except OSError:
-            continue
-        if os.path.isdir(resolved):
-            referenced.add(resolved)
+        links = [render.www_dir(name, vhost_id)]
+        links += [render.www_fallback_dir(name, vhost_id, n)
+                  for n in render.FALLBACK_SLOTS]
+        for link in links:
+            if not os.path.islink(link):
+                continue
+            try:
+                resolved = os.path.realpath(link)
+            except OSError:
+                continue
+            if os.path.isdir(resolved):
+                referenced.add(resolved)
     return referenced
 
 

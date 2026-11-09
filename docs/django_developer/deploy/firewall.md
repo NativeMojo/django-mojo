@@ -29,8 +29,7 @@ ownership/modes, and oversized files. `converge` repairs an enrolled host and
 does not enroll a new one. `off` removes the grant and wrapper and records
 disabled enrollment; permanent set identity and existing kernel rules remain.
 The wrapper is a direct `/usr/bin/python3 -EP` script rather than a shell
-trampoline. That preserves safe-path and environment isolation while producing
-one canonical broker exec generation for MojoSec receipt correlation.
+trampoline, which preserves safe-path and environment isolation.
 
 ## Declare the complete fleet
 
@@ -61,16 +60,15 @@ The only context-free broker operation is stdin
 `sudo -n -- /usr/local/sbin/mojo-firewall-broker` with no broker arguments.
 It validates the sudo caller and protected enrollment/assets, returns a bounded
 schema/version/permanent-name proof, and emits a root-authored begin/result
-receipt pair for its own exact PID generation. Both receipts have no firewall
+receipt pair for its own exact PID generation to syslog
+(`SYSLOG_IDENTIFIER=mojo-firewall-broker`). Both receipts have no firewall
 children; the operation invokes neither the mutation dispatcher nor its host
-lock. MojoSec suppresses the corresponding sudo observation only when the pair
-and PID generation agree with exact cron JobEngine → sudo → broker lineage and
-the pinned engine origin. A failed status result or any incomplete proof remains
-an ordinary sudo Event. Mutation operations still require JobEngine context and
-independently recheck readiness immediately before broker work.
-On AL2023, Audit reports the resolved `/usr/sbin/xtables-nft-multi` or
-`/usr/sbin/ipset` executable behind the broker's fixed `/sbin/*` command. Proof
-accepts only those fixed pairs and still requires the exact recorded argv digest.
+lock. The receipts are operator evidence in the journal; MojoSec no longer
+parses or correlates them. The sensor records the application account's own
+tty-less, unattributed broker sudo as expected automation and raises every
+other sudo (see the MojoSec sensor guide). Mutation operations still require
+JobEngine context and independently recheck readiness immediately before
+broker work.
 
 The incident provider verifies the process's effective UID, the exact sudo
 operation, timeout, response shape, and permanent-name agreement. A background
@@ -103,6 +101,70 @@ Disabled historical IPSet rows produce an absence tombstone after validating
 their safe name; their old IPv6 or malformed member lists are not loaded.
 Present sets still require canonical IPv4 data. Model/save validation is
 unchanged.
+
+## Target safety
+
+No framework path may put a DROP for an unsafe address into the kernel. One
+predicate, `mojo/apps/incident/services/block_safety.py`, decides what is
+unsafe, and it runs at three boundaries:
+
+| Boundary | Where | What happens to an unsafe target |
+|---|---|---|
+| Desired-state write | `GeoLocatedIP._block_checked_locked`, reached by `block`, `block_checked`, the REST `block` action, threat escalation, the `block://` handler, the LLM and assistant tools and MojoSec execution | Refused with its code: block state unchanged (`is_blocked`, `blocked_until`, generation, `block_count`, firewall fields), no fence, no push-back from the block, no dispatch |
+| Desired-state build | `firewall_truth.permanent_snapshot`, `geolocated_snapshot_from_row`, `ipset_snapshot_from_row` | A blocked row is planned absent and flagged `firewall_sync_error="unsafe_target: <code>"`, keeping `is_blocked` so an operator can see and unblock it. A verified sync keeps that marker (only `firewall_pending` clears), so it stays visible until the row is unblocked or the target is safe again. A set keeps only its safe networks |
+| Dispatch | every present-direction call in `mojo/apps/incident/firewall.py`, the only caller of the root broker | Refused with `{"ok": false, "error": {"code": ...}}` and no broker request. It never repairs. Removals are never refused: unblocks, set removals and an empty network list always dispatch |
+
+Unsafe, with the refusal code, checked in this order:
+
+| Code | Meaning |
+|---|---|
+| `invalid_network` | Not an address |
+| `unsupported_family` | IPv6 (unchanged) |
+| `non_global_address` | In the pinned table `NON_GLOBAL_V4`: 0/8, 10/8, 100.64/10, 127/8, 169.254/16, 172.16/12, 192.0.0/24, 192.0.2/24, 192.168/16, 198.18/15, 198.51.100/24, 203.0.113/24, 224/4 and 240/4. It is pinned because `ipaddress.is_global` differs between Python versions |
+| `protected_config_invalid` | `MOJOSEC_PROTECTED_CIDRS` or `MOJOSEC_TRUSTED_PROXY_CIDRS` is malformed |
+| `mojosec_protected_cidrs` | Inside `MOJOSEC_PROTECTED_CIDRS` |
+| `mojosec_trusted_proxy_cidrs` | Inside `MOJOSEC_TRUSTED_PROXY_CIDRS` |
+| `whitelisted` | An active whitelist |
+
+Both CIDR settings are file-only and take a list or a comma-separated string of
+at most 64 IPv4 CIDRs; unset or empty means none. Anything else refuses every
+new block, logged with the setting's name. While it is malformed:
+
+- every present request refuses with `protected_config_invalid`: `block`,
+  `ipset_add`, `ipset_load`, `normalize_ip` and `normalize_ipset` with members,
+  and a geolocated request whose temporary source is present;
+- removals still dispatch, so an unblock never stalls on a config error;
+- the permanent aggregate's list is narrowed, not refused: it is checked
+  against `NON_GLOBAL_V4` and active whitelists only, as the desired-state
+  builder does. New blocks are already refused at the write, so the list holds
+  only rows written while the setting was valid, or legacy kernel state;
+- sync does not tear existing kernel state down because of the setting: what is
+  enforced stays as it is until the setting is fixed.
+
+**Sets are carved, not refused.** Operator, country and feed sets lose the
+unsafe ranges and every actively whitelisted address before they reach the
+kernel; the rest of the set still blocks. The stored `IPSet.data` keeps the
+operator's list, and the planned count and digest describe what is kept, so
+verification stays truthful. `sync_firewall` reports each carved set once per
+sync: one job-log line, one `mojo.log` line and one `firewall:ipset_carved`
+metric. One that would leave more than 250,000 networks refuses with
+`network_limit` rather than truncating.
+
+**Whitelists are repaired eventually, not atomically.** A whitelist visible when
+a block is written, or when dispatch re-reads desired state, prevents the
+block. An address whitelisted after that read can stay in a kernel set until
+the sync `whitelist()` publishes, or the hourly sync, succeeds. `whitelist()`
+and `unwhitelist()` publish that sync so the carve-out follows promptly;
+whitelist expiry is picked up by the hourly sync, and the stale window errs
+toward not blocking.
+
+Upgrading changes enforcement in two ways:
+
+- Blocked rows for non-global, protected or proxy addresses stop being enforced
+  at the next sync and are flagged `unsafe_target`.
+- Sets stop matching protected ranges and actively whitelisted addresses. For
+  example, a whitelisted partner address in a blocked country is no longer
+  dropped by the country set.
 
 ## Deployment and rollback
 

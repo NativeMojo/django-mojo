@@ -1453,11 +1453,25 @@ def report(refresh=False, elbv2_client=None, ec2_client=None, rds_client=None,
 
 # ── user data ───────────────────────────────────────────────────────────────
 
-def node_user_data(base_name, root=None):
+def node_user_data(base_name, root=None, systemd_dir=None, cron_dir=None):
     """The clone's first-boot script.
 
     Order is the whole point:
 
+    0. The profile check, FIRST (#9315). A clone whose disk carries no
+       non-empty ``var/profile`` is quarantined and powered off, and it never
+       takes its own hostname. The image is a copy of the source's disk, so a
+       source that booted ``settings.local`` would otherwise multiply.
+       Admission depends on this order: the join leg waits for exactly
+       ``expected_runner_id``, which is derived from THIS instance's id, and
+       the engine names its runner after the hostname. The AMI cannot carry
+       that hostname, and only a clone that passed the check is given it. So
+       an engine that starts on a markerless clone (the jobs cron, before the
+       quarantine below moves it aside) can only answer as the source or as
+       the stock EC2 name, never as the runner the join leg admits. Stopping
+       the app once is not enough either: the jobs cron restarts the engine
+       every minute and config-sync restarts the app, so the refusal has to
+       outlive this script. See ``_quarantine_lines``.
     1. IMDSv2 (token first — the launch forces ``HttpTokens=required``, so an
        unauthenticated metadata read would simply fail) for this instance's own
        id, and a hostname derived from it. Unique by construction, and derived
@@ -1482,6 +1496,11 @@ def node_user_data(base_name, root=None):
     return "\n".join([
         "#!/bin/bash",
         "set -u",
+        f'if [ ! -s "{safe_root}/var/profile" ]; then',
+        *_quarantine_lines(safe_root,
+                           str(systemd_dir or "/etc/systemd/system").replace('"', ""),
+                           str(cron_dir or "/etc/cron.d").replace('"', "")),
+        "fi",
         "TOKEN=$(curl -sS -X PUT "
         '"http://169.254.169.254/latest/api/token" '
         '-H "X-aws-ec2-metadata-token-ttl-seconds: 300" || true)',
@@ -1496,6 +1515,70 @@ def node_user_data(base_name, root=None):
         f'"{safe_root}/bin/jobman" restart || true',
         "",
     ])
+
+
+# Units the clone's quarantine gates. config-sync.timer would restart the app
+# when it next pulls a config; config-sync.service is what it starts.
+QUARANTINE_UNITS = ("mojo-asgi.service", "config-sync.service", "config-sync.timer")
+QUARANTINE_DROPIN = "zz-mojo-clone-refused.conf"
+
+
+def _quarantine_lines(root, systemd_dir, cron_dir):
+    """The refusal a markerless clone runs instead of booting (#9315).
+
+    Every piece has to hold after this script exits, because nothing here is
+    the only thing that starts the app:
+
+    * every cron file that names the project root moves out of the cron
+      directory, FIRST, so no new engine start is scheduled while the rest
+      runs. The jobs cron starts the engine every minute and the engine has
+      no profile gate of its own;
+    * a systemd drop-in puts ``ConditionFileNotEmpty=<root>/var/profile`` on
+      the app, config-sync and its timer — the same test as the shell's
+      ``! -s``, so an empty marker is refused too. A start from anywhere —
+      config-sync's own ``restart_app``, an operator, the next boot — is
+      skipped while the marker is missing or empty. A drop-in rather than ``systemctl mask``: node_setup installs
+      the units into /etc/systemd/system, and systemd refuses to mask a unit
+      whose file is already there;
+    * the engine is stopped, and each step is CHECKED — a failed stop is
+      reported as an incomplete quarantine, never as a clean one;
+    * the box powers off. It was never registered, so it serves nothing either
+      way; powered off it cannot join the job fleet even if a step above
+      failed. The add operation fails with ``clone_refused``; recovery is to
+      Terminate the clone, give the source a ``var/profile`` and add again.
+    """
+    quarantine_dir = f"{cron_dir.rstrip('/')}.mojo-quarantine"
+    units = " ".join(QUARANTINE_UNITS)
+    dropin = (f"'[Unit]' '# django-mojo capacity: this clone booted with no "
+              f"var/profile' 'ConditionFileNotEmpty={root.replace(chr(39), '')}/var/profile'")
+    return [
+        f'  echo "mojo clone: {root}/var/profile is missing; the app would boot '
+        'settings.local, so this node is quarantined, powered off and will not '
+        'join" >&2',
+        '  FAILED=""',
+        f'  mkdir -p "{quarantine_dir}" || FAILED="$FAILED quarantine-dir"',
+        f'  for CRON in "{cron_dir}"/*; do',
+        f'    [ -f "$CRON" ] && grep -qF -- "{root}" "$CRON" || continue',
+        f'    mv -f "$CRON" "{quarantine_dir}/" || FAILED="$FAILED cron:${{CRON##*/}}"',
+        "  done",
+        f"  for UNIT in {units}; do",
+        f'    mkdir -p "{systemd_dir}/$UNIT.d" && printf "%s\\n" {dropin} '
+        f'> "{systemd_dir}/$UNIT.d/{QUARANTINE_DROPIN}" '
+        '|| FAILED="$FAILED dropin:$UNIT"',
+        "  done",
+        '  systemctl daemon-reload || FAILED="$FAILED daemon-reload"',
+        f"  systemctl stop {units} || true",
+        '  systemctl disable config-sync.timer || true',
+        f'  "{root}/bin/jobman" stop || FAILED="$FAILED jobman-stop"',
+        f"  for UNIT in {units}; do",
+        '    systemctl is-active --quiet "$UNIT" && FAILED="$FAILED active:$UNIT"',
+        "  done",
+        '  if [ -n "$FAILED" ]; then',
+        '    echo "mojo clone: quarantine incomplete:$FAILED; powering off" >&2',
+        "  fi",
+        "  systemctl poweroff || shutdown -h now || true",
+        "  exit 1",
+    ]
 
 
 def expected_node_id(base_name, instance_id):
@@ -3624,6 +3707,8 @@ def _run_add_node(record):
         facts = ec2_helper.instance_facts(instance_id) or {}
         if facts.get("state") == "running":
             break
+        if facts.get("state") in ("stopping", "stopped"):
+            return _fail(record, "clone_refused", _refused_message(instance_id))
         if facts.get("state") in ("terminated", "shutting-down"):
             return _fail(record, "launch_failed",
                          f"{instance_id} stopped before it finished booting.")
@@ -3636,6 +3721,14 @@ def _run_add_node(record):
     _advance(record, "booting",
              f"waiting for {runner_id} to join the edge channel")
     if not _await_runner(runner_id, RUNNER_TIMEOUT):
+        # A clone that powered itself off is the first-boot quarantine
+        # (node_user_data), not a slow boot: say what the operator must fix.
+        try:
+            state = (ec2_helper.instance_facts(instance_id) or {}).get("state")
+        except Exception:
+            state = None
+        if state in ("stopping", "stopped"):
+            return _fail(record, "clone_refused", _refused_message(instance_id))
         return _fail(record, "runner_missing",
                      f"{instance_id} is running but never joined the job fleet "
                      f"as {runner_id}. It is NOT registered behind the "
@@ -3656,8 +3749,9 @@ def _run_add_node(record):
     # DEPLOY_CHANNEL: that is a fleet-wide broadcast, and redeploying the whole
     # fleet because one node was added is precisely the blast radius this
     # feature exists to avoid.
+    _write_operation(record)
     _publish_deploy_node(runner_id, row.sha, row.framework_version,
-                         migrate=False, deployment_id=row.pk)
+                         migrate=False, deployment_id=row.pk, capacity_operation=record["id"])
 
     # ── proving ────────────────────────────────────────────────────────────
     _advance(record, "proving",
@@ -3725,6 +3819,13 @@ def _run_add_node(record):
     return _finish(record,
                    f"{instance_id} is serving as {node_id}",
                    healthy=True)
+
+
+def _refused_message(instance_id):
+    return (f"{instance_id} powered itself off on first boot: the source's disk "
+            f"has no var/profile, so the clone would have run settings.local. "
+            f"It quarantined itself and is NOT registered behind the balancer. "
+            f"Terminate it, give the source node a var/profile, then add again.")
 
 
 def _await_runner(runner_id, timeout):
@@ -4308,3 +4409,60 @@ def _run_resize_database(record):
     return _fail(record, "resize_timeout",
                  f"{resource} did not settle on {to_class}. Check the RDS "
                  f"console.")
+
+
+def health_inventory(fleet_spec, deadline, ec2_client=None, elbv2_client=None, *, inventory_reader=None):
+    """Narrow response-only EC2/ELB read, independent of capacity mutations/data tiers."""
+    from mojo.helpers.aws.provider_call import DeadlineProviderClient
+    from mojo.deploy.provision.spec import names
+    if fleet_spec is None:
+        return {"instances": {}, "complete": False, "reasons": ["identity_unavailable"],
+                "serving": {"groups": [], "complete": False, "reasons": ["identity_unavailable"]}}
+    reader = inventory_reader or ec2_helper.fleet_inventory_bounded
+    inventory = reader(
+        fleet_spec.project, fleet_spec.env, fleet=fleet_spec.fleet,
+        client=ec2_client, region=fleet_spec.region, deadline=deadline)
+    serving = {"groups": [], "complete": False, "reasons": []}
+    inventory["serving"] = serving
+    if not provision_spec.wants_balancer(fleet_spec):
+        serving.update(complete=True, status="not_applicable")
+        return inventory
+    resolved = names(fleet_spec)
+    # Only this selected environment's named balancer; never whole-account ELB.
+    client = DeadlineProviderClient("elbv2", deadline, region=fleet_spec.region,
+                                    client=elbv2_client)
+    from mojo.helpers.aws.provider_call import provider_caller
+    def call(operation, **kwargs):
+        return provider_caller.call(
+            "elbv2." + operation, lambda: getattr(client, operation)(**kwargs),
+            iam_action="elasticloadbalancing:" + "".join(part.title() for part in operation.split("_")))
+    try:
+        if time.monotonic() >= deadline:
+            serving["reasons"].append("deadline_exceeded")
+            inventory["complete"] = False
+            return inventory
+        balancers = call("describe_load_balancers", Names=[resolved["balancer"]]).get("LoadBalancers") or []
+        if len(balancers) != 1:
+            serving["reasons"].append("balancer_missing_or_ambiguous")
+            inventory["complete"] = False
+            return inventory
+        page = call("describe_target_groups", LoadBalancerArn=balancers[0]["LoadBalancerArn"], PageSize=20)
+        groups = page.get("TargetGroups") or []
+        if page.get("NextMarker") or len(groups) > elbv2_helper.DEFAULT_MAX_GROUPS:
+            serving["reasons"].append("serving_group_limit")
+        for group in groups[:elbv2_helper.DEFAULT_MAX_GROUPS]:
+            result = call("describe_target_health", TargetGroupArn=group["TargetGroupArn"])
+            targets = result.get("TargetHealthDescriptions") or []
+            if len(targets) > elbv2_helper.MAX_TARGETS:
+                serving["reasons"].append("serving_target_limit")
+            serving["groups"].append({"name": group.get("TargetGroupName"), "targets": [
+                {"id": (row.get("Target") or {}).get("Id"),
+                 "state": (row.get("TargetHealth") or {}).get("State")}
+                for row in targets[:elbv2_helper.MAX_TARGETS]
+                if (row.get("Target") or {}).get("Id") in inventory["instances"]]})
+        serving["complete"] = not serving["reasons"]
+    except ProviderCallError as exc:
+        serving["reasons"].append("provider_denied" if exc.denied else exc.provider_code)
+        serving["failure"] = exc.detail()
+    inventory["complete"] = inventory["complete"] and serving["complete"]
+    return inventory

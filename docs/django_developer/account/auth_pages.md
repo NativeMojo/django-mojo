@@ -163,6 +163,9 @@ credentials before enabling a provider, or its button dead-ends on the
 provider's error page.
 
 The OAuth callback URL is the auth page itself (`/auth?code=xxx&state=yyy`).
+That landing renders a branded "Signing you in" view instead of the sign-in
+form while the completion runs — see
+[OAuth callback pending view](#oauth-callback-pending-view).
 The `mbp` pass and `mbs` hosted-session cookies use `SameSite=Lax` so they are included on the OAuth
 redirect back from the provider.
 
@@ -175,13 +178,13 @@ placing a file with the same path in your project's `TEMPLATES` directories.
 
 | Template | Purpose |
 |----------|---------|
-| `auth_base.html` | Base layout: overlay, card, hero include, script setup |
+| `auth_base.html` | Base layout: overlay, OAuth callback pending view, card, hero include, script setup |
 | `auth_hero.html` | Left panel partial — override to swap imagery/messaging |
 | `login.html` | Login page — extends base; all views + methods from auth config |
 | `register.html` | Registration page — extends base; redirects to `/passkey` when `passkey_prompt != off` |
 | `passkey_enroll.html` | Standalone passkey enrollment page |
 | `oauth_consent.html` | OAuth 2.1 consent screen — extends base; see [oauth_server.md](oauth_server.md) |
-| `bouncer_challenge.html` | Hosted Continue/recovery shell (default branded, opt-in override per group) |
+| `bouncer_challenge.html` | Hosted Continue/recovery page ("One quick check"), themed by the hosted sign-in theme and the tenant's branding and custom CSS |
 | `bouncer_decoy.html` | Explicit scanner honeypot |
 | `bouncer_review_result.html` | No-JavaScript review receipt/error page |
 
@@ -262,7 +265,9 @@ Two things not to do:
 
 This rule is codebase-wide, not a property of one file. Every shipped template
 that interpolates a value into a `<script>` string literal carries `|escapejs`
-(`auth_base.html`, `bouncer_challenge.html`, `contact.html`, `login.html`);
+(`auth_base.html`, `contact.html`, `login.html`); `bouncer_challenge.html`
+interpolates nothing into a script — its config travels in a `json_script`
+data block;
 `auth_base.html` also keeps the same note as a `{% comment %}` beside its block.
 
 A `<style>` block is raw-text too — and there is no `escapecss` filter. So a
@@ -270,8 +275,11 @@ A `<style>` block is raw-text too — and there is no `escapecss` filter. So a
 it must instead be a value that is provably **not attacker-influenced** (admin-set
 config, a per-render hex nonce, a conf-file-only setting). The three that ship
 this way — `auth_base.html`'s `custom_css|safe`, `bouncer_challenge.html`'s
-`accent_color`, and `bouncer_decoy.html`'s `accent_color` — are enumerated in
-a reviewed allowlist; adding another is a security decision, not a formatting one.
+`custom_css|safe` (the same tenant stylesheet, loaded the same way), and
+`bouncer_decoy.html`'s `accent_color` — are enumerated in a reviewed allowlist;
+adding another is a security decision, not a formatting one. The challenge's
+own page `<style>` interpolates nothing: the tenant accent is an autoescaped
+`style` attribute on `<body>`.
 
 Both rules are enforced by a standing audit:
 `test_shipped_templates_raw_text_interpolations_are_safe`
@@ -326,8 +334,35 @@ same semantic form markup:
     --mat-border: #d9d4ca;
     --mat-text: #171923;
     --mat-muted: #696b73;
+    /* OAuth callback pending view */
+    --mat-track: #e3ded4;          /* dark: #1c2534 */
+    --mat-danger-text: #c62828;    /* dark: #ef9a9a */
+    --mat-success-strong: #2e7d32;
+    --mat-pending-shadow: …;       /* disc shadow, per appearance */
+    /* bouncer challenge failure ring */
+    --mat-warn: #d9952b;           /* dark: #e0a43a */
+    --mat-warn-text: #8a5a12;      /* dark: #f0c27a */
 }
 ```
+
+The tenant accent (`theme.accent_color`) is set inline on `<body>`
+(`style="--mat-accent:…"`), so any token **derived** from the accent is declared
+on `body` or a descendant, never on `:root` — a `:root` `color-mix()` resolves
+against the default accent and ignores the tenant's. `--mat-accent-hover` lives
+on `body` for that reason; the pending view's darker accent shade
+(`--mat-pending-strong`) lives on `.mat-pending`, and the bouncer challenge's
+(`--mbg-strong`) on `.mbg`. Browsers without `color-mix()` (Safari/WebView before
+16.2) fall back to the plain accent for both through an
+`@supports not (color: color-mix(…))` block, so the primary button never turns
+transparent behind its white text. Because `body` declares its
+own `--mat-accent-hover`, custom CSS that overrides it must target `body` too —
+a `:root { --mat-accent-hover: … }` value is shadowed by the `body` rule.
+
+The stylesheet is served with a day-long public cache, so `auth_base.html` and
+`bouncer_challenge.html` load it as `mojo-auth-theme.css?v=<first 10 hex of its
+SHA-256>`, the same rule as `mojo-auth.js` and `mojo-hosted-bouncer.js`. A `?v=`
+that does not match the served file is answered `no-store`. Change the CSS and the version together —
+`tests/test_auth/hosted_script_version.py` fails with the value to set.
 
 ### Custom CSS — runtime overrides
 
@@ -366,10 +401,16 @@ For QA and previews, `?auth_theme=<preset>&auth_appearance=<mode>` may override
 those two enum values for the current auth journey. Unknown values fall back to
 configuration, and the override is propagated across hosted auth pages.
 
-The bouncer challenge resolves the same group theme. It uses `app_title` and
-`logo_url` for the destination identity, `accent_color` for its progress and
-challenge controls, and `auth_provider_name` in the "Secure sign-in via …"
-explanation.
+The bouncer challenge resolves the same group theme and loads the same
+stylesheet. It uses `app_title` and `logo_url` for the destination identity
+(an explicitly set `BOUNCER_CHALLENGE_LOGO_URL` fills in an empty `logo_url`, and
+an explicitly set `BOUNCER_CHALLENGE_BRAND` replaces an `app_title` that is still
+the code default; a configured tenant title wins; otherwise the sign-in page's
+own values: no logo, "DJANGO MOJO"),
+`accent_color` for its ring and buttons, `appearance` (and the
+`?auth_appearance=` override) for light/dark/system, the tenant's
+`custom_css_url` / `custom_css`, and `auth_provider_name` in the "Secure
+sign-in via …" footer.
 
 ---
 
@@ -454,6 +495,23 @@ Methods rendered are those listed in the resolved auth config's
 - Forgot password (code or link method; auto-routes via SMS when identity is phone)
 - Reset code entry / set new password (from `?token=pr:...`)
 - Accept an invitation: choose a password (from `?token=iv:...`)
+
+#### Magic-link request confirmation
+
+The hosted magic-link view permits one pending request at a time. A successful
+API response replaces the email form with a **Check your inbox** state showing
+the submitted address as plain text. **Resend Login Link** remains disabled
+for 60 seconds, then becomes available; **Use a different email** restores the
+form. Request errors restore the controls and show the usual error message.
+
+The last submitted address and resend deadline are stored in `sessionStorage`
+under `mat_magic_sent:<group_uuid>` (`default` for unscoped pages), so a reload
+in the same tab retains an unexpired wait. Storage failures leave the current
+page functional, but the wait then lasts only for that page load. No login
+token is stored by this flow. The countdown is a convenience, not a security
+limit: server-side send limits still apply, and the generic API response does
+not prove account existence or inbox delivery. See
+[Magic Login Links](../../web_developer/account/magic_login.md).
 
 #### A reset link survives a cold bouncer challenge
 
@@ -567,11 +625,92 @@ including the first nested error, before a readable `error`. Machine codes
 without an explanation receive a retry/support fallback. The original error
 object remains available for diagnostics; enforcement and API responses are
 unchanged. Deploy `mojo-auth.js` together with `auth_base.html`, whose version
-query follows the script's SHA-256 so browsers fetch the updated formatter.
+query follows the script's SHA-256 so browsers fetch the updated formatter. The
+theme stylesheet `mojo-auth-theme.css` is versioned by the same rule.
 
 - Session check on load (auto-redirect if already authenticated)
-- OAuth callback handling (`?code=...&state=...`)
+- OAuth callback handling (`?code=...&state=...`) — see the pending view below
 - Magic link token handling (`?token=ml:...`)
+
+### Signed-out landing (`?signed_out=1`)
+
+An app on its own host signs people in through the hosted `/auth` page, which
+stores its access and refresh tokens in the **auth host's** `localStorage`. The
+app's sign-out clears only the app's storage, so without help the next "Sign in"
+refreshes the hosted page's tokens and signs the same person back in, which on
+a shared machine is the previous person.
+
+`/auth?signed_out=1` handles this. `_auth_context` sets `signed_out = True` and
+forces `skip_session_check`, and `auth_base.html` calls `MojoAuth.logout()`
+**before** the session check, then shows "You're signed out." above the normal
+form with the same `redirect`. The page never navigates by itself. The bot
+challenge forwards `signed_out` with the other params, so the landing survives a
+cold challenge.
+
+Split-host apps should send signed-out visitors to
+`/auth?redirect=<app url>&signed_out=1&force_reauth=1`; `force_reauth=1` keeps an
+older django-mojo, which ignores `signed_out`, showing the form. Same-origin apps
+(the packaged Admin) do not need it: their sign-out already clears the same
+storage. The landing does not revoke tokens server-side; `POST /api/auth/sessions/revoke`
+ends every session of the account.
+
+### OAuth callback pending view
+
+When a page built on `auth_base.html` loads with `?code=` **and** `?state=`
+(the return from Google, Apple or GitHub), `_auth_context` sets
+`oauth_callback = True` and the template renders, in the first byte of HTML:
+
+- `mat-oauth-pending` on `<body>` — the render-blocking theme stylesheet hides
+  `.mat-page` and shows `#mat-pending` full screen, so the sign-in form never
+  paints, even if no script runs;
+- `#mat-pending` with `data-state="pending"`: the tenant brand (logo or
+  `brand_name`), an animated glyph, a `role="status" aria-live="polite"` status
+  line, and a "Secure sign-in" footer;
+- `inert aria-hidden="true"` on `#mat-page` and `aria-hidden="true"` on the idle
+  `#mat-overlay`, so the hidden form is out of the keyboard and screen-reader
+  order.
+
+The page script makes the **one** `completeOAuthLogin` call (the single-fire
+contract from #315), then immediately removes `code`/`state` from the URL with
+`history.replaceState`, so a reload never re-posts a spent code. The call drives
+`data-state`:
+
+| `data-state` | When | Shows |
+|---|---|---|
+| `pending` | On landing | Spinner, "Signing you in…", "Confirming your account with <Provider>" |
+| `slow` | Still pending after 15 s | "Still signing you in…" and a **Start over** link; the spinner keeps going and a late result still succeeds or fails normally |
+| `success` | Completion succeeded | "Welcome back, <first name>" ("Welcome, <first name>" when `is_new_user`) with initials from `user.display_name`; no name → plain check and "You're signed in" (`data-named="0"`) |
+| `redirect` | 0.9 s later | "Taking you to <destination>…" (the brand name for a same-origin destination, the host otherwise) with a progress bar while `_mat.redirect()` and any cross-origin handoff run |
+| `failure` | Completion refused or threw | "We couldn't finish signing in", the sanitized server message, **Try again with <Provider>**, and **Use a different sign-in method** |
+
+- **Try again** calls `MojoAuth.startOAuthLogin(provider)` — a fresh provider
+  redirect, never the old code. It is hidden for a 429 and for a geofence
+  refusal (retrying cannot help), and when the provider is unknown (blocked
+  `sessionStorage`, unless exactly one OAuth method is enabled).
+- **Use a different sign-in method** ends the view in place: the form returns,
+  the failure message stays in `#mat-message`, and focus moves to the first
+  control of the active view.
+- **Start over** is a plain link to a fresh `/auth` (or `/register`) carrying
+  `group_uuid`/`redirect`/`next`/`returnTo`/`back`/`force_reauth`/theme params,
+  never `code`/`state`. A late result after it is clicked is ignored; tokens
+  already saved still sign the person in on the fresh page. If the page script
+  never ran, CSS alone reveals it 15 s after load
+  (`.mat-pending[data-state="pending"] .mat-pending-slow-actions`) —
+  `PENDING_SLOW_MS` in `auth_base.html` must equal that delay.
+- A temporary-password result, a refused destination, or a refused handoff
+  code ends the view through `_mat.hideOverlay()` and shows the normal page:
+  the password-change view for a temporary password, the error message for a
+  refusal.
+- Restored from the back/forward cache while the view has not ended, the page
+  reloads (no code in the URL any more) instead of showing a frozen spinner.
+- `prefers-reduced-motion`: no ripples, flash or pulsing, a slower spinner,
+  instant entrances; the 15 s reveal is unchanged.
+
+Only the OAuth callback uses this view. Password, passkey, SMS, magic-link and
+reset sign-ins keep the `.mat-overlay` "Signed in!" overlay. A consumer
+override of `auth_base.html` keeps its own behavior: an older copy is
+unchanged, and a copy that has the new script but no `#mat-pending` falls back
+to the inline "Completing sign-in…" message.
 
 ### Registration page (`/register`)
 
@@ -854,8 +993,12 @@ bot evidence, active signatures, historical `blocked` devices, and streaming
 freezes show honest recovery with a review form; a check never clears those
 restrictions. Scanner decoys remain confined to their explicit routes.
 
-Retry is manual and hidden after three errors; 429 shows a bounded wait before
-retrying. Restart reloads for a new descriptor. Review requires a signed,
+Try again is manual and hidden after three errors; 429 counts down a bounded
+wait on the disabled button. Restart reloads for a new descriptor and stays
+reachable in every failed state — a quiet "Start over", or the primary "Try
+again" when Try again is hidden. The reference shows once with a copy button.
+Review is a separate step that never starts open; a sent request shows the
+server's receipt and reference. Review requires a signed,
 host-bound 30-minute ticket, a valid email, and an optional note of at most 500
 characters. Its independent limit is 30 requests per IP per 300 seconds. The
 form works without cookies or JavaScript and returns an HTML receipt in that
@@ -871,9 +1014,12 @@ external support for storage outages; gated `/contact` is not a fallback.
 
 Hosted v2 `mbp` and HttpOnly session cookie `mbs` share cookie scope and survive
 IP changes within one browser session. Legacy passes retain IP-prefix binding.
-Deploy Python workers, templates, and `mobile-1` scripts as a coherent pool:
-old workers cannot validate v2 passes. No migrations are required. Keep version
-queries in static-cache keys and honor `no-store` on descriptor-bearing HTML.
+Deploy Python workers, templates, and content-hashed scripts as a coherent
+pool: old workers cannot validate v2 passes. No migrations are required. Keep
+version queries in static-cache keys and honor `no-store` on descriptor-bearing
+HTML and on static files whose `?v=` does not match their content.
+(`mobile-1` remains the diagnostic `hosted_gate.version` label; it is no longer
+a script cache key.)
 
 Before production, validate physical iPhone Safari, physical Android Chrome,
 and the actual Maestro app WebView, including stationary taps, network changes,

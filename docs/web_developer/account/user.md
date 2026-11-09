@@ -398,7 +398,7 @@ GET /api/user?org=5
 
 ## Disable Lifecycle
 
-Admins manage user `is_active` state through two named POST_SAVE_ACTIONS. Writing the bare `is_active` field directly still works (`{"is_active": false}`), but does not populate the disable namespace or emit audit events — the actions below are the recommended path for any new code.
+Admins manage user `is_active` state through two named POST_SAVE_ACTIONS. Writing the bare `is_active` field directly still works (`{"is_active": false}`), but does not populate the disable namespace or emit audit events — the actions below are the recommended path for any new code. Like the actions, a direct write that changes `is_active` signs the user out everywhere: their signing key is replaced, so every session token and emailed link dies.
 
 ### Disable a user
 
@@ -429,9 +429,11 @@ is no propagation delay to plan around.
 
 Effect: `is_active=True`. Appends a history entry to `disable.history` (FIFO cap 20) with the prior disable context plus `reactivated_at`, `reactivated_by_user_id`, `reactivated_by_username`, `reactivated_note`.
 
-**Reactivation does not restore old sessions.** Because disable rotated the
-user's `auth_key`, tokens issued before the disable remain invalid after
-reactivation — the user must log in again to get a working token.
+**Reactivation does not restore old sessions.** Reactivation replaces the
+user's `auth_key` again, so every session token and emailed link from before
+or during the disable stays invalid — the user must log in again to get a
+working token. A pending invite link dies too: re-send it after
+reactivating, and the new email carries a working link.
 
 ### Read disable state
 

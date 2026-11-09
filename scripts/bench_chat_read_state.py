@@ -1,0 +1,938 @@
+#!/usr/bin/env python
+"""Reproducible, LOCAL PostgreSQL chat cursor benchmark (#8954).
+
+    uv run python scripts/bench_chat_read_state.py --list-cells
+    uv run python scripts/bench_chat_read_state.py --duration 60 --output testproject/var/chat-matrix.json
+    uv run python scripts/bench_chat_read_state.py --cells h420000-burst20,site20 --duration 180
+
+Run after bin/create_testproject, with no concurrent test session in this checkout.
+The script refuses a remote, mismatched, or non-generated test database. It never
+flushes a database/Redis, restarts a server, or kills a process. Only fixtures with
+this invocation's random prefix are removed. --keep-fixtures leaves those rows
+for inspection; the JSON identifies them precisely.
+
+This is an instrumented in-process public-service benchmark, not HTTP, websocket,
+notification delivery, or a soak test. Send validation, policy, moderation,
+transactional persistence and sender advancement run. Room rate_limit=0 avoids
+the unrelated Redis rate limiter; message/read transports and the host read hook
+are disabled through explicit service seams. Committed read-state callbacks still
+fetch their fresh database position. There is no process-wide settings mutation.
+
+Fixtures use a deliberate raw QuerySet bulk-create bypass BEFORE cursor traffic,
+with explicit positions and an atomic room head. This is fixture construction,
+not a supported application writer and not measured application send throughput.
+Fixed operation probes and legacy history reconstruction are reported separately
+from independently scheduled offered traffic. SQL instrumentation adds Python
+overhead; reported processing latency includes it. No SQL parameters, message
+content, credentials, or full settings are written to the artifact.
+"""
+
+import argparse
+import copy
+import hashlib
+import json
+import math
+import os
+import queue
+import re
+import resource
+import subprocess
+import sys
+import threading
+import time
+import uuid
+from collections import Counter, defaultdict
+from pathlib import Path
+
+
+REPO = Path(__file__).resolve().parent.parent
+TESTPROJECT = REPO / "testproject"
+HISTORIES = (21000, 105000, 420000)
+SCALES = (1, 5, 20)
+GATES = {"send_p95_ms_lt": 250, "read_p95_ms_lt": 100,
+         "count_p95_ms_lt": 100, "snapshot_p95_ms_lt": 100,
+         "late_queue_slope_per_second_lte": 0.1}
+sys.path.insert(0, str(REPO))
+sys.path.insert(0, str(TESTPROJECT / "config"))
+
+
+def cells():
+    result = []
+    for history in HISTORIES:
+        for scale in SCALES:
+            result.append(dict(name=f"h{history}-steady{scale}", kind="traffic",
+                               history=history, members=25, sends_per_hour=250 * scale,
+                               sends_per_second=250 * scale / 3600, scale=scale))
+            result.append(dict(name=f"h{history}-burst{scale}", kind="traffic",
+                               history=history, members=25, burst_per_5_minutes=75 * scale,
+                               sends_per_second=75 * scale / 300, scale=scale))
+    for scale in SCALES:
+        result.append(dict(name=f"site{scale}", kind="site", scale=scale,
+                           histories=[21000 * scale, 18000 * scale, 7000 * scale],
+                           members=[18, 23, 26], sends_per_hour=582 * scale,
+                           sends_per_second=582 * scale / 3600))
+    result.extend([dict(name="barrier32", kind="barrier", history=420000, members=32),
+                   dict(name="sparse", kind="sparse", histories=list(HISTORIES), members=25)])
+    return result
+
+
+def percentile(values, fraction):
+    if not values:
+        return None
+    ordered = sorted(values)
+    return round(ordered[max(0, math.ceil(len(ordered) * fraction) - 1)] * 1000, 3)
+
+
+def latency(values):
+    return {"samples": len(values), **{
+        f"p{int(p * 100)}_ms": percentile(values, p) for p in (0.5, 0.95, 0.99)}}
+
+
+def source_identity(allow_dirty):
+    def git(*args):
+        return subprocess.check_output(["git", *args], cwd=REPO, text=True).strip()
+    dirty = git("status", "--porcelain", "--untracked-files=normal").splitlines()
+    relevant = [line for line in dirty if line[3:].startswith(("mojo/", "scripts/bench_chat_read_state.py"))]
+    if relevant and not allow_dirty:
+        raise RuntimeError("Commit benchmark/framework source before evidence runs; --allow-dirty is development only")
+    hashes = {}
+    for path in sorted((REPO / "mojo/apps/chat").rglob("*.py")) + [Path(__file__).resolve()]:
+        hashes[str(path.relative_to(REPO))] = hashlib.sha256(path.read_bytes()).hexdigest()
+    return dict(commit=git("rev-parse", "HEAD"), branch=git("branch", "--show-current"),
+                dirty_source=relevant, committed_source=not relevant, source_sha256=hashes)
+
+
+def setup_database():
+    generated = TESTPROJECT / "config/settings/local/db.py"
+    if not generated.exists() or not generated.read_text().startswith("# Generated by bin/create_testproject"):
+        raise RuntimeError("Run bin/create_testproject: generated per-checkout database configuration is required")
+    if os.environ.get("DJANGO_SETTINGS_MODULE", "settings") != "settings":
+        raise RuntimeError("DJANGO_SETTINGS_MODULE must use this checkout's generated settings")
+    os.environ.setdefault("DJANGO_SETTINGS_MODULE", "settings")
+    import django
+    django.setup()
+    from django.conf import settings
+    from django.db import connection
+    from testit.testenv import slug
+    expected = "mojo_test_" + slug(str(REPO))
+    config = connection.settings_dict
+    if connection.vendor != "postgresql" or config["NAME"] != expected:
+        raise RuntimeError("Refusing anything except the generated per-checkout PostgreSQL database")
+    if config.get("HOST", "") not in ("localhost", "127.0.0.1", "::1", "", "/tmp", "/var/run/postgresql"):
+        raise RuntimeError("Refusing a non-local database host")
+    import settings as loaded
+    if not Path(loaded.__file__).resolve().is_relative_to(TESTPROJECT / "config"):
+        raise RuntimeError("Loaded Django settings do not belong to this checkout")
+    if not settings.MOJO_TEST_MODE:
+        raise RuntimeError("The generated test project's MOJO_TEST_MODE must be enabled")
+    with connection.cursor() as cursor:
+        cursor.execute("SELECT current_database(), version(), current_user, inet_server_addr(), inet_server_port()")
+        name, version, role, address, port = cursor.fetchone()
+    if name != expected:
+        raise RuntimeError("Live database identity differs from the generated test project")
+    return dict(name=name, role=role, host=config.get("HOST"), port=port,
+                server_address=str(address) if address else None, version=version,
+                settings_file=str(generated), expected_name=expected,
+                redis_index=getattr(settings, "REDIS_DB_INDEX", None),
+                server_config=str(TESTPROJECT / "config/dev_server.conf"))
+
+
+class SQLProbe:
+    """Django connection-local instrumentation; parameters stay in memory only."""
+    def __init__(self):
+        self.statements = Counter()
+        self.seconds = Counter()
+        self.tables = defaultdict(set)
+        self.plans = {}
+
+    def __call__(self, execute, sql, params, many, context):
+        normalized = re.sub(r"\s+", " ", sql).strip()
+        fingerprint = hashlib.sha256(normalized.encode()).hexdigest()[:20]
+        tables = re.findall(r'(?i)(?:FROM|JOIN|UPDATE|INTO)\s+"?([a-z_][a-z_0-9]*)', normalized)
+        start = time.perf_counter()
+        try:
+            return execute(sql, params, many, context)
+        finally:
+            self.statements[fingerprint] += 1
+            self.seconds[fingerprint] += time.perf_counter() - start
+            self.tables[fingerprint].update(tables)
+            if normalized.upper().startswith("SELECT") and "FOR UPDATE" not in normalized.upper():
+                self.plans.setdefault(fingerprint, (sql, params))
+
+
+class Metrics:
+    def __init__(self):
+        self.lock = threading.Lock()
+        self.offered = Counter()
+        self.completed = Counter()
+        self.failed = Counter()
+        self.rejected = Counter()
+        self.processing = defaultdict(list)
+        self.end_to_end = defaultdict(list)
+        self.sql_count = defaultdict(Counter)
+        self.sql_seconds = defaultdict(Counter)
+        self.sql_tables = defaultdict(lambda: defaultdict(set))
+        self.plan_inputs = defaultdict(dict)
+        self.errors = Counter()
+        self.expected_read_seq = defaultdict(int)
+        self.sent = Counter()
+        self.worker_pids = set()
+        self.ready = 0
+        self.samples = []
+
+    def offer(self, kind):
+        with self.lock:
+            self.offered[kind] += 1
+
+    def record(self, kind, started, offered_at, probe, error=None):
+        finished = time.perf_counter()
+        with self.lock:
+            self.completed[kind] += int(error is None)
+            self.failed[kind] += int(error is not None)
+            self.processing[kind].append(finished - started)
+            self.end_to_end[kind].append(finished - offered_at)
+            self.sql_count[kind].update(probe.statements)
+            self.sql_seconds[kind].update(probe.seconds)
+            for fingerprint, tables in probe.tables.items():
+                self.sql_tables[kind][fingerprint].update(tables)
+            for fingerprint, inputs in probe.plans.items():
+                self.plan_inputs[kind].setdefault(fingerprint, inputs)
+            if error:
+                self.errors[f"{kind}:{type(error).__name__}"] += 1
+
+    def acknowledge(self, fixture, user_id, seq):
+        with self.lock:
+            key = (fixture.room.pk, user_id)
+            self.expected_read_seq[key] = max(self.expected_read_seq[key], seq)
+
+    def summary(self, elapsed):
+        kinds = set(self.offered) | set(self.processing)
+        return dict(operations={kind: dict(
+            offered=self.offered[kind], completed=self.completed[kind], failed=self.failed[kind],
+            rejected=self.rejected[kind], completed_per_second=round(self.completed[kind] / elapsed, 4),
+            processing=latency(self.processing[kind]), offered_to_completion=latency(self.end_to_end[kind]),
+            sql_count=sum(self.sql_count[kind].values()),
+            sql_seconds=round(sum(self.sql_seconds[kind].values()), 6),
+            sql_fingerprints={fingerprint: dict(count=count,
+                seconds=round(self.sql_seconds[kind][fingerprint], 6),
+                tables=sorted(self.sql_tables[kind][fingerprint]))
+                for fingerprint, count in self.sql_count[kind].items()}) for kind in sorted(kinds)},
+            errors_by_class=dict(self.errors), backlog_samples=self.samples)
+
+
+def make_users(prefix, count):
+    from mojo.apps.account.models import User
+    return [User.objects.create(username=f"{prefix}_{i}", password="!",
+        display_name=f"{prefix}_{i}", email=f"{prefix}_{i}@example.invalid",
+        is_active=True) for i in range(count)]
+
+
+class Fixture:
+    def __init__(self, prefix, history, members, label, users=None):
+        from django.db import models, transaction
+        from django.utils import timezone
+        from mojo.apps.chat.models import ChatRoom, ChatMembership, ChatMessage
+        self.label = label
+        self.history = history
+        self.prefix = f"{prefix}_{label}"
+        self.users = list(users[:members]) if users is not None else make_users(self.prefix, members)
+        self.room = ChatRoom.objects.create(name=self.prefix, kind="group", user=self.users[0],
+                                            rules={"rate_limit": 0})
+        self.count_room_ids = [self.room.pk]
+        self.members = ChatMembership.objects.bulk_create([
+            ChatMembership(room=self.room, user=user) for user in self.users], read_backend="cursor")
+        # Use a deterministic entitlement boundary before every seeded row.
+        ChatMembership.objects.filter(room=self.room).update(joined_at=timezone.now())
+        start = time.perf_counter()
+        with transaction.atomic():
+            for offset in range(0, history, 2000):
+                batch = [ChatMessage(room=self.room, user_id=self.users[i % members].pk,
+                            body="Local benchmark fixture", room_seq=i + 1)
+                         for i in range(offset, min(history, offset + 2000))]
+                models.QuerySet.bulk_create(ChatMessage.objects.all(), batch, batch_size=2000)
+            ChatRoom.objects.filter(pk=self.room.pk).update(message_seq=history, read_state_generation=1)
+        self.seed_seconds = time.perf_counter() - start
+        self.room.refresh_from_db()
+        self.last_seed = ChatMessage.objects.filter(room=self.room, room_seq=history).get()
+        self.reset()
+        from django.db import connection
+        # Statistics maintenance is outside every timed operation. No VACUUM,
+        # buffer eviction, cluster restart or database-wide reset is performed.
+        with connection.cursor() as cursor:
+            for model in (ChatRoom, ChatMembership, ChatMessage):
+                cursor.execute("ANALYZE " + connection.ops.quote_name(model._meta.db_table))
+        self.seed_storage = storage([self])
+
+    def reset(self):
+        from mojo.apps.chat.models import ChatRoom, ChatMessage, ChatMembership, ChatUnreadException
+        ChatMessage.objects.filter(room=self.room, room_seq__gt=self.history).delete()
+        ChatUnreadException.objects.filter(membership__room=self.room).delete()
+        ChatRoom.objects.filter(pk=self.room.pk).update(message_seq=self.history)
+        ChatMembership.objects.filter(room=self.room).update(
+            last_read_seq=0, last_read_message_id=None, last_read_at=None, unread_exception_count=0)
+        self.room.refresh_from_db()
+        for member in self.members:
+            member.refresh_from_db()
+
+    def info(self):
+        return dict(room_id=self.room.pk, prefix=self.prefix, seeded_messages=self.history,
+                    members=len(self.members), seed_seconds=round(self.seed_seconds, 3),
+                    seed_method="raw QuerySet bulk fixture only; not application sends",
+                    storage_after_seed=self.seed_storage)
+
+
+def perform(kind, fixture, index=0, target=None, key=None):
+    from mojo.apps.chat.services import messages, read_state
+    user = fixture.users[index % len(fixture.users)]
+    room = copy.copy(fixture.room)
+    if kind == "send":
+        message, error = messages.send_message(room, user, "Local benchmark traffic",
+            client_key=key, broadcast=False, read_backend="cursor",
+            read_handler=None, read_publisher=False)
+        if error or message is None:
+            raise RuntimeError("Public send service refused benchmark traffic")
+        return message
+    if kind == "read":
+        result = read_state.mark_through(room, user, copy.copy(fixture.members[index % len(fixture.members)]),
+            target.pk, backend="cursor", handler=None, publisher=False)
+        if result.target is None:
+            raise RuntimeError("Public read service rejected an entitled fixture target")
+        if result.target.pk != target.pk or result.target.room_seq != target.room_seq:
+            raise RuntimeError("Public read service acknowledged a different fixture target")
+        return result
+    if kind == "count":
+        return read_state.unread_counts(user, room_ids=fixture.count_room_ids, backend="cursor")
+    if kind == "snapshot":
+        return read_state.recipient_positions(room, backend="cursor")
+    raise ValueError("Unknown benchmark operation")
+
+
+def measured(metrics, kind, fixture, index=0, target=None, key=None, offered_at=None):
+    from django.db import connection
+    metrics.offer(kind)
+    offered_at = offered_at or time.perf_counter()
+    start = time.perf_counter()
+    probe, error, result = SQLProbe(), None, None
+    try:
+        with connection.execute_wrapper(probe):
+            result = perform(kind, fixture, index, target, key)
+        return result
+    except Exception as exc:
+        error = exc
+        raise
+    finally:
+        metrics.record(kind, start, offered_at, probe, error)
+
+
+def explain_metrics(metrics):
+    from django.db import connection
+    result = {}
+    for kind, inputs in metrics.plan_inputs.items():
+        if kind == "send":
+            continue
+        result[kind] = {}
+        for fingerprint, (sql, params) in inputs.items():
+            try:
+                with connection.cursor() as cursor:
+                    cursor.execute("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql, params)
+                    result[kind][fingerprint] = cursor.fetchone()[0]
+            except Exception as exc:
+                result[kind][fingerprint] = {"unavailable": type(exc).__name__}
+    return result
+
+
+def plan_work(plans):
+    """Comparable actual scan work without serializing query text or values."""
+    result = []
+    def visit(node, kind, fingerprint):
+        if isinstance(node, list):
+            for child in node:
+                visit(child, kind, fingerprint)
+        elif isinstance(node, dict):
+            if "Relation Name" in node:
+                result.append(dict(operation=kind, fingerprint=fingerprint,
+                    relation=node["Relation Name"], node=node.get("Node Type"),
+                    actual_rows=node.get("Actual Rows"), actual_loops=node.get("Actual Loops"),
+                    rows_removed_by_filter=node.get("Rows Removed by Filter", 0),
+                    shared_hit_blocks=node.get("Shared Hit Blocks", 0),
+                    shared_read_blocks=node.get("Shared Read Blocks", 0)))
+            for key in ("Plan", "Plans"):
+                if key in node:
+                    visit(node[key], kind, fingerprint)
+    for kind, fingerprints in plans.items():
+        for fingerprint, plan in fingerprints.items():
+            visit(plan, kind, fingerprint)
+    return result
+
+
+def fixed_probes(fixture, samples):
+    from django.db import connection
+    from mojo.apps.chat.models import ChatMembership
+    from mojo.apps.chat.services.messages import visible_messages
+    metrics, cold = Metrics(), {}
+    started = time.perf_counter()
+    for kind in ("count", "snapshot", "read", "send"):
+        for i in range(samples):
+            index = i % len(fixture.members)
+            if kind == "read":
+                ChatMembership.objects.filter(pk=fixture.members[index].pk).update(
+                    last_read_seq=0, last_read_message_id=None, last_read_at=None)
+            before = time.perf_counter()
+            measured(metrics, kind, fixture, index, fixture.last_seed, f"probe-{i}")
+            if i == 0:
+                cold[kind] = round((time.perf_counter() - before) * 1000, 3)
+    result = metrics.summary(time.perf_counter() - started)
+    result["first_touch_processing_ms"] = cold
+    result["cold_cache_limit"] = "First touch only; OS/PostgreSQL buffers are not evicted or restarted"
+    result["query_plans_with_buffers"] = explain_metrics(metrics)
+    result["actual_relation_query_work"] = plan_work(result["query_plans_with_buffers"])
+    fixture.reset()
+    # Old receipt/history reconstruction, on the identical seeded data. This
+    # deliberately measures the old SELECT work without materializing receipts.
+    user, member = fixture.users[0], fixture.members[0]
+    old = visible_messages(fixture.room, member).exclude(user=user).exclude(read_receipts__user=user)
+    legacy = {}
+    for label, action in (("legacy_unread_count", old.count),
+                          ("legacy_mark_read_history_enumeration", lambda: len(list(old.values_list("pk", flat=True))))):
+        probe = SQLProbe()
+        start = time.perf_counter()
+        with connection.execute_wrapper(probe):
+            rows = action()
+        legacy[label] = dict(processing_ms=round((time.perf_counter() - start) * 1000, 3),
+                             result_rows=rows, sql_count=sum(probe.statements.values()),
+                             sql_seconds=round(sum(probe.seconds.values()), 6))
+        for sql, params in probe.plans.values():
+            with connection.cursor() as cursor:
+                cursor.execute("EXPLAIN (ANALYZE, BUFFERS, FORMAT JSON) " + sql, params)
+                legacy[label]["plan_with_buffers"] = cursor.fetchone()[0]
+    result["legacy_same_seed_comparator"] = legacy
+    result["interpretation"] = "Fixed probes are additional operation samples, never offered-rate throughput"
+    return result
+
+
+def postgres_cpu(pids):
+    if not pids:
+        return dict(seconds=None, reason="No worker backend process IDs")
+    try:
+        output = subprocess.check_output(["ps", "-p", ",".join(str(p) for p in sorted(pids)),
+                                           "-o", "pid=,time="], text=True)
+        total = 0.0
+        for line in output.splitlines():
+            _pid, stamp = line.split()
+            days, clock = stamp.split("-", 1) if "-" in stamp else ("0", stamp)
+            parts = [float(v) for v in clock.split(":")]
+            seconds = sum(part * 60 ** power for power, part in enumerate(reversed(parts)))
+            total += int(days) * 86400 + seconds
+        return dict(seconds=round(total, 3), method="ps cputime of this run's worker PostgreSQL backends",
+                    precision="OS process accounting; often 0.01 or 1 second resolution")
+    except (OSError, ValueError, subprocess.CalledProcessError) as exc:
+        return dict(seconds=None, reason=type(exc).__name__)
+
+
+class Observer(threading.Thread):
+    def __init__(self, application_name):
+        super().__init__(daemon=True)
+        self.application_name = application_name
+        self.stop_event = threading.Event()
+        self.wait_samples = Counter()
+        self.lock_wait_samples = 0
+        self.peak_connections = 0
+        self.error = None
+
+    def run(self):
+        from django.db import connection
+        try:
+            while not self.stop_event.is_set():
+                with connection.cursor() as cursor:
+                    cursor.execute("SELECT wait_event_type, wait_event, COUNT(*) FROM pg_stat_activity "
+                        "WHERE datname=current_database() AND application_name=%s GROUP BY 1,2",
+                        [self.application_name])
+                    rows = cursor.fetchall()
+                self.peak_connections = max(self.peak_connections, sum(r[2] for r in rows))
+                for wait_type, event, count in rows:
+                    if wait_type:
+                        self.wait_samples[f"{wait_type}:{event}"] += count
+                    if wait_type == "Lock":
+                        self.lock_wait_samples += count
+                self.stop_event.wait(0.1)
+        except Exception as exc:
+            self.error = type(exc).__name__
+        finally:
+            connection.close()
+
+
+class Load:
+    def __init__(self, fixtures, args, prefix):
+        self.fixtures = fixtures
+        self.args = args
+        self.prefix = prefix
+        self.metrics = Metrics()
+        self.queue = queue.Queue(maxsize=args.queue_capacity)
+        self.threads = []
+        self.sequence = 0
+        self.halt = threading.Event()
+
+    def offer(self, kind, fixture, index=0, target=None, offered_at=None, key=None, fanout=False):
+        self.metrics.offer(kind)
+        try:
+            self.queue.put_nowait((kind, fixture, index, target,
+                offered_at or time.perf_counter(), key, fanout))
+        except queue.Full:
+            with self.metrics.lock:
+                self.metrics.rejected[kind] += 1
+
+    def worker(self):
+        from django.db import connection
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SELECT set_config('application_name', %s, false)", [self.prefix])
+                cursor.execute("SET statement_timeout = '10s'")
+                cursor.execute("SET lock_timeout = '5s'")
+                cursor.execute("SELECT pg_backend_pid()")
+                pid = cursor.fetchone()[0]
+            with self.metrics.lock:
+                self.metrics.worker_pids.add(pid)
+                self.metrics.ready += 1
+            while not self.halt.is_set():
+                try:
+                    task = self.queue.get(timeout=0.1)
+                except queue.Empty:
+                    continue
+                kind, fixture, index, target, offered_at, key, fanout = task
+                probe, error = SQLProbe(), None
+                started = time.perf_counter()
+                try:
+                    with connection.execute_wrapper(probe):
+                        result = perform(kind, fixture, index, target, key)
+                    if kind == "send":
+                        with self.metrics.lock:
+                            self.metrics.sent[fixture.room.pk] += 1
+                        self.metrics.acknowledge(fixture, result.user_id, result.room_seq)
+                        if fanout:
+                            delivered_at = time.perf_counter()
+                            for recipient in range(len(fixture.users)):
+                                self.offer("read", fixture, recipient, result, delivered_at)
+                            # Two extra valid ack events: an exact duplicate and
+                            # an intentionally stale real target. Neither rewinds.
+                            self.offer("read", fixture, 0, result, delivered_at)
+                            self.offer("read", fixture, 1, fixture.last_seed, delivered_at)
+                            self.offer("snapshot", fixture, offered_at=delivered_at)
+                    elif kind == "read":
+                        # The oracle comes from the offered immutable message,
+                        # never the implementation's returned cursor. Otherwise
+                        # a lost advancement returning its old prefix passes.
+                        self.metrics.acknowledge(fixture, fixture.users[index].pk, target.room_seq)
+                except Exception as exc:
+                    error = exc
+                finally:
+                    self.metrics.record(kind, started, offered_at, probe, error)
+                    self.queue.task_done()
+        except Exception as exc:
+            with self.metrics.lock:
+                self.metrics.errors[f"worker_setup:{type(exc).__name__}"] += 1
+        finally:
+            connection.close()
+
+    def start(self):
+        for i in range(self.args.workers):
+            thread = threading.Thread(target=self.worker, name=f"chat-bench-{i}", daemon=True)
+            thread.start()
+            self.threads.append(thread)
+        deadline = time.monotonic() + 15
+        while self.metrics.ready < self.args.workers and time.monotonic() < deadline:
+            if not any(t.is_alive() for t in self.threads):
+                break
+            time.sleep(0.02)
+        if self.metrics.ready != self.args.workers:
+            self.close()
+            raise RuntimeError("Not all database load workers connected")
+
+    def sample(self, start):
+        with self.metrics.lock:
+            self.metrics.samples.append(dict(second=round(time.perf_counter() - start, 3),
+                queued=self.queue.qsize(), outstanding=self.queue.unfinished_tasks,
+                offered=sum(self.metrics.offered.values()), completed=sum(self.metrics.completed.values()),
+                failed=sum(self.metrics.failed.values())))
+
+    def close(self):
+        self.halt.set()
+        for thread in self.threads:
+            thread.join(timeout=12)
+
+    def run(self, rate):
+        self.start()
+        observer = Observer(self.prefix)
+        observer.start()
+        cpu_before = postgres_cpu(self.metrics.worker_pids)
+        client_before = resource.getrusage(resource.RUSAGE_SELF)
+        started = time.perf_counter()
+        next_send, next_poll, next_sample = started, started, started
+        send_number = 0
+        try:
+            while True:
+                now = time.perf_counter()
+                if now - started >= self.args.duration:
+                    break
+                while next_send <= now and next_send < started + self.args.duration:
+                    fixture = self.fixtures[send_number % len(self.fixtures)]
+                    self.offer("send", fixture, send_number % len(fixture.users),
+                               offered_at=next_send, key=f"traffic-{send_number}", fanout=True)
+                    send_number += 1
+                    next_send = started + send_number / rate
+                if next_poll <= now:
+                    # Each call is one user's batched room-count helper. This
+                    # is deliberately reported as N calls, not one SQL snapshot.
+                    polled_users = set()
+                    for fixture in self.fixtures:
+                        for index in range(len(fixture.users)):
+                            user_id = fixture.users[index].pk
+                            if user_id in polled_users:
+                                continue
+                            polled_users.add(user_id)
+                            self.offer("count", fixture, index, offered_at=next_poll)
+                    next_poll += 1 / self.args.poll_hz
+                if next_sample <= now:
+                    self.sample(started)
+                    next_sample += 1
+                time.sleep(min(0.01, max(0.0005, min(next_send, next_poll) - time.perf_counter())))
+            self.sample(started)
+            at_end = dict(queued=self.queue.qsize(), outstanding=self.queue.unfinished_tasks)
+            deadline = time.monotonic() + self.args.drain_seconds
+            while self.queue.unfinished_tasks and time.monotonic() < deadline:
+                time.sleep(0.02)
+            drained = self.queue.unfinished_tasks == 0
+            if not drained:
+                # Stop workers before reading invariants or deleting fixtures.
+                # Statement/lock timeouts bound any already-running operation.
+                self.close()
+            elapsed = time.perf_counter() - started
+            cpu_after = postgres_cpu(self.metrics.worker_pids)
+            client_after = resource.getrusage(resource.RUSAGE_SELF)
+            summary = self.metrics.summary(elapsed)
+            summary.update(duration_offering_seconds=self.args.duration, elapsed_with_drain_seconds=round(elapsed, 3),
+                planned_send_rate_per_second=rate, offered_sends=send_number,
+                read_ack_policy="one per member per delivered message + one duplicate + one stale target",
+                poll_policy=f"{self.args.poll_hz}/second for every unique user (one batched helper call per user)",
+                backlog_at_offering_end=at_end, drained=drained,
+                backlog_after_drain=self.queue.unfinished_tasks, queue_capacity=self.args.queue_capacity,
+                workers=self.args.workers, postgres_backend_cpu_before=cpu_before,
+                postgres_backend_cpu_after=cpu_after,
+                postgres_backend_cpu_seconds=(round(cpu_after["seconds"] - cpu_before["seconds"], 3)
+                    if cpu_before["seconds"] is not None and cpu_after["seconds"] is not None else None),
+                benchmark_process_cpu_seconds=round(client_after.ru_utime + client_after.ru_stime
+                    - client_before.ru_utime - client_before.ru_stime, 3))
+            summary["query_plans_with_buffers"] = explain_metrics(self.metrics)
+            summary["actual_relation_query_work"] = plan_work(summary["query_plans_with_buffers"])
+            summary["invariants"] = invariants(self.fixtures, self.metrics)
+            summary["gates"] = traffic_gates(summary)
+            return summary
+        finally:
+            observer.stop_event.set()
+            observer.join(timeout=2)
+            self.close()
+            # Actual waits shorter than the sampling interval can be missed.
+            self.observation = dict(sample_interval_seconds=0.1,
+                lock_wait_backend_samples=observer.lock_wait_samples,
+                wait_backend_samples=dict(observer.wait_samples),
+                peak_worker_backends=observer.peak_connections, error=observer.error)
+
+
+def queue_slope(samples):
+    late = samples[len(samples) // 2:]
+    if len(late) < 2:
+        return None
+    xs = [s["second"] for s in late]
+    ys = [s["queued"] for s in late]
+    center_x, center_y = sum(xs) / len(xs), sum(ys) / len(ys)
+    denominator = sum((x - center_x) ** 2 for x in xs)
+    return round(sum((x - center_x) * (y - center_y) for x, y in zip(xs, ys)) / denominator, 6) if denominator else None
+
+
+def traffic_gates(summary):
+    operations = summary["operations"]
+    gates = dict(zero_errors=not summary["errors_by_class"] and all(
+        not op["failed"] and not op["rejected"] for op in operations.values()),
+        all_offered_completed=all(op["offered"] == op["completed"] for op in operations.values()),
+        drained=summary["drained"], invariants=all(summary["invariants"]["checks"].values()))
+    slope = queue_slope(summary["backlog_samples"])
+    summary["late_queue_slope_per_second"] = slope
+    gates["no_sustained_queue_growth"] = slope is not None and slope <= GATES["late_queue_slope_per_second_lte"]
+    history_work = [node for node in summary["actual_relation_query_work"]
+                    if node["relation"] == "chat_chatmessage"]
+    gates["bounded_normal_history_query_work"] = all(
+        node["operation"] == "read" and node["node"] != "Seq Scan"
+        and node["actual_rows"] is not None
+        and node["actual_rows"] + node["rows_removed_by_filter"] <= 1 for node in history_work)
+    gates["no_normal_receipt_queries"] = all(
+        "chat_chatreadreceipt" not in query["tables"]
+        for operation in operations.values() for query in operation["sql_fingerprints"].values())
+    for kind in ("send", "read", "count", "snapshot"):
+        value = operations.get(kind, {}).get("processing", {}).get("p95_ms")
+        gates[f"{kind}_p95"] = value is not None and value < GATES[f"{kind}_p95_ms_lt"]
+    return gates
+
+
+def invariants(fixtures, metrics):
+    from django.db.models import Count, Max, Min
+    from mojo.apps.chat.models import ChatRoom, ChatMessage, ChatMembership, ChatReadReceipt, ChatUnreadException
+    checks, rooms = {}, []
+    for fixture in fixtures:
+        room = ChatRoom.objects.get(pk=fixture.room.pk)
+        qs = ChatMessage.objects.filter(room=room)
+        shape = qs.aggregate(rows=Count("pk"), distinct_positions=Count("room_seq", distinct=True),
+                             max_seq=Max("room_seq"), min_seq=Min("room_seq"))
+        expected = fixture.history + metrics.sent[room.pk]
+        prefix = str(room.pk)
+        checks[prefix + ":no_lost_messages_or_positions"] = (
+            shape["rows"] == shape["distinct_positions"] == shape["max_seq"] == room.message_seq == expected
+            and shape["min_seq"] == 1)
+        members = list(ChatMembership.objects.filter(room=room))
+        # Fixtures start at zero. Every successful ack/own-send records its
+        # immutable target under the metrics lock before task_done; after drain
+        # their exact maximum detects both lost reads and over-cleared unread.
+        checks[prefix + ":exact_ack_or_own_send_cursors"] = all(
+            0 <= m.last_read_seq <= room.message_seq
+            and m.last_read_seq == metrics.expected_read_seq[(room.pk, m.user_id)] for m in members)
+        checks[prefix + ":consistent_exception_cache"] = all(
+            m.unread_exception_count == ChatUnreadException.objects.filter(membership=m).count() for m in members)
+        receipts = ChatReadReceipt.objects.filter(message__room=room).count()
+        checks[prefix + ":no_normal_receipts"] = receipts == 0
+        rooms.append(dict(room_id=room.pk, room_head=room.message_seq, expected_messages=expected,
+                          shape=shape, cursor_rows=len(members), receipt_rows=receipts,
+                          exception_rows=ChatUnreadException.objects.filter(membership__room=room).count()))
+    return dict(checks=checks, rooms=rooms)
+
+
+def newer_unread_probe(fixture):
+    from mojo.apps.chat.models import ChatMembership
+    from mojo.apps.chat.services import read_state
+    reader = 1
+    old = perform("send", fixture, 0, key="newer-probe-old")
+    perform("read", fixture, reader, old)
+    newer = perform("send", fixture, 0, key="newer-probe-new")
+    perform("read", fixture, reader, old)
+    perform("read", fixture, reader, fixture.last_seed)
+    member = ChatMembership.objects.get(pk=fixture.members[reader].pk)
+    eligible = read_state.unread_message_ids(member, [old.pk, newer.pk])
+    position = read_state.unread_counts(fixture.users[reader], [fixture.room.pk], backend="cursor")[fixture.room.pk]
+    return dict(passed=old.pk not in eligible and newer.pk in eligible and position.unread_count >= 1,
+                newer_still_unread=newer.pk in eligible, old_still_read=old.pk not in eligible,
+                unread_count=position.unread_count)
+
+
+def barrier_probe(fixture, args, prefix):
+    from django.db import connection
+    metrics = Metrics()
+    barrier = threading.Barrier(32)
+    def sender(index):
+        try:
+            with connection.cursor() as cursor:
+                cursor.execute("SET lock_timeout = '10s'")
+                cursor.execute("SET statement_timeout = '15s'")
+            barrier.wait(timeout=20)
+            message = measured(metrics, "send", fixture, index, key=f"barrier-{index}")
+            with metrics.lock:
+                metrics.sent[fixture.room.pk] += 1
+            metrics.acknowledge(fixture, message.user_id, message.room_seq)
+        except Exception as exc:
+            with metrics.lock:
+                metrics.errors[f"barrier:{type(exc).__name__}"] += 1
+        finally:
+            connection.close()
+    started = time.perf_counter()
+    threads = [threading.Thread(target=sender, args=(i,)) for i in range(32)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join(timeout=40)
+    result = metrics.summary(time.perf_counter() - started)
+    result["invariants"] = invariants([fixture], metrics)
+    result["checks"] = dict(all_32_sends_completed=metrics.completed["send"] == 32,
+                            no_errors=not metrics.errors, invariants=all(result["invariants"]["checks"].values()))
+    return result
+
+
+def sparse_probe(fixture, samples):
+    from mojo.apps.chat.models import ChatMessage, ChatMembership, ChatUnreadException
+    result = []
+    for count in (1, 100, 1000):
+        fixture.reset()
+        member = fixture.members[0]
+        rows = list(ChatMessage.objects.filter(room=fixture.room, room_seq__lte=count).order_by("room_seq"))
+        ChatUnreadException.objects.bulk_create([ChatUnreadException(
+            membership=member, room_seq=row.room_seq, message_id=row.pk) for row in rows])
+        ChatMembership.objects.filter(pk=member.pk).update(last_read_seq=fixture.history,
+                                                         unread_exception_count=count)
+        metrics = Metrics()
+        started = time.perf_counter()
+        for _ in range(samples):
+            measured(metrics, "count", fixture)
+        measured(metrics, "read", fixture, target=rows[-1])
+        member.refresh_from_db()
+        item = metrics.summary(time.perf_counter() - started)
+        item.update(history=fixture.history, sparse_rows_before=count,
+                    sparse_rows_after=ChatUnreadException.objects.filter(membership=member).count(),
+                    cached_after=member.unread_exception_count,
+                    read_target_below_prefix=rows[-1].room_seq <= member.last_read_seq,
+                    query_plans_with_buffers=explain_metrics(metrics))
+        item["passed"] = item["sparse_rows_after"] == item["cached_after"] == 0 and not metrics.errors
+        result.append(item)
+    fixture.reset()
+    return result
+
+
+def storage(fixtures):
+    from django.db import connection
+    from mojo.apps.chat.models import ChatMessage, ChatMembership, ChatReadReceipt, ChatUnreadException
+    tables = [m._meta.db_table for m in (ChatMessage, ChatMembership, ChatReadReceipt, ChatUnreadException)]
+    result = {}
+    with connection.cursor() as cursor:
+        for table in tables:
+            cursor.execute("SELECT pg_relation_size(%s::regclass), pg_indexes_size(%s::regclass), "
+                           "pg_total_relation_size(%s::regclass)", [table] * 3)
+            heap, indexes, total = cursor.fetchone()
+            result[table] = dict(heap_bytes=heap, indexes_bytes=indexes, total_bytes=total,
+                                 scope="whole isolated test table, including non-benchmark test rows")
+            cursor.execute("SELECT indexrelid::regclass::text, pg_relation_size(indexrelid) "
+                           "FROM pg_index WHERE indrelid=%s::regclass", [table])
+            result[table]["indexes"] = {name: size for name, size in cursor.fetchall()}
+            cursor.execute("SELECT n_live_tup, n_dead_tup, last_analyze, last_autoanalyze "
+                           "FROM pg_stat_user_tables WHERE relid=%s::regclass", [table])
+            row = cursor.fetchone()
+            result[table]["estimated_live_dead_and_analyze"] = dict(zip(
+                ("estimated_live_rows", "estimated_dead_rows", "last_analyze", "last_autoanalyze"), row)) if row else None
+        cursor.execute("SELECT xact_commit, xact_rollback, blks_read, blks_hit, tup_returned, "
+                       "tup_fetched, tup_inserted, tup_updated, tup_deleted, deadlocks, "
+                       "blk_read_time, blk_write_time FROM pg_stat_database WHERE datname=current_database()")
+        names = [column[0] for column in cursor.description]
+        result["pg_stat_database"] = dict(zip(names, cursor.fetchone()))
+    return result
+
+
+def history_shape_check(results):
+    shapes = defaultdict(dict)
+    for cell in results:
+        spec = cell["cell"]
+        if spec["kind"] != "traffic":
+            continue
+        for kind in ("count", "snapshot", "read"):
+            fingerprints = cell["traffic"]["operations"].get(kind, {}).get("sql_fingerprints", {})
+            shapes[(spec["scale"], "burst" if "burst" in spec["name"] else "steady", kind)][spec["history"]] = sorted(fingerprints)
+    return [dict(scale=key[0], traffic=key[1], operation=key[2], histories=sorted(value),
+                 comparable=len(value) > 1, same_sql_fingerprints=len({tuple(v) for v in value.values()}) == 1)
+            for key, value in sorted(shapes.items())]
+
+
+def save_artifact(path, report):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(json.dumps(report, indent=2, default=str) + "\n")
+    temporary.replace(path)
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__.splitlines()[0], formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    parser.add_argument("--cells", help="comma-separated names from --list-cells; omitted runs the complete matrix")
+    parser.add_argument("--list-cells", action="store_true")
+    parser.add_argument("--duration", type=float, default=180, help="offered traffic seconds per cell")
+    parser.add_argument("--workers", type=int, default=32)
+    parser.add_argument("--queue-capacity", type=int, default=4096)
+    parser.add_argument("--poll-hz", type=float, default=1, help="room-count polls per second per member")
+    parser.add_argument("--drain-seconds", type=float, default=30)
+    parser.add_argument("--probe-samples", type=int, default=40, help="additional fixed probes per operation/history")
+    parser.add_argument("--output", type=Path, default=TESTPROJECT / "var/chat-read-state-benchmark.json")
+    parser.add_argument("--keep-fixtures", action="store_true")
+    parser.add_argument("--allow-dirty", action="store_true", help="development only; evidence marked uncommitted")
+    args = parser.parse_args()
+    available = cells()
+    if args.list_cells:
+        print(json.dumps(available, indent=2))
+        return 0
+    if min(args.duration, args.workers, args.queue_capacity, args.poll_hz, args.drain_seconds, args.probe_samples) <= 0:
+        parser.error("durations, workers, capacity, polling and sample counts must be positive")
+    selected = set(args.cells.split(",")) if args.cells else {c["name"] for c in available}
+    unknown = selected - {c["name"] for c in available}
+    if unknown:
+        parser.error("Unknown cells: " + ",".join(sorted(unknown)))
+    prefix = "bench8954_" + uuid.uuid4().hex[:12]
+    report = dict(protocol_version=1, started_utc=time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
+        source=source_identity(args.allow_dirty), database=setup_database(), fixture_prefix=prefix,
+        configuration={k: str(v) if isinstance(v, Path) else v for k, v in vars(args).items()},
+        predeclared_gates=GATES, limitations=["in-process instrumented public-service processing; no HTTP/ASGI/network delivery",
+            "read publisher and host hook disabled; consumer must measure full callback and transport",
+            "no buffer eviction: first-touch costs are not a guaranteed physically cold database",
+            "SQL wrapper and queue instrumentation add Python overhead to measured latency",
+            "short cells report actual sample counts; this is not a long-duration soak"],
+        fixtures=[], probes=[], cells=[], passed=False)
+    fixtures = {}
+    save_artifact(args.output, report)
+    def fixture(history, members=25, label=None, users=None):
+        key = (history, members, label or "hot")
+        if key not in fixtures:
+            value = Fixture(prefix, history, members, f"{key[2]}_{history}_{members}", users=users)
+            fixtures[key] = value
+            report["fixtures"].append(value.info())
+            report["probes"].append(dict(fixture=value.info(), operations=fixed_probes(value, args.probe_samples)))
+            save_artifact(args.output, report)
+        fixtures[key].reset()
+        return fixtures[key]
+    try:
+        report["storage_before_fixtures"] = storage([])
+        for spec in available:
+            if spec["name"] not in selected:
+                continue
+            print(f"{spec['name']}: preparing isolated fixtures", flush=True)
+            cell = {"cell": spec}
+            if spec["kind"] in ("traffic", "site"):
+                if spec["kind"] == "traffic":
+                    current = [fixture(spec["history"], spec["members"])]
+                else:
+                    shared_users = make_users(f"{prefix}_siteusers{spec['scale']}", 26)
+                    current = [fixture(h, m, f"site{i}", users=shared_users)
+                               for i, (h, m) in enumerate(zip(spec["histories"], spec["members"]))]
+                    for value in current:
+                        value.count_room_ids = [f.room.pk for f in current]
+                load = Load(current, args, prefix)
+                print(f"{spec['name']}: offering {spec['sends_per_second']:.6f} sends/s for {args.duration:g}s", flush=True)
+                cell["traffic"] = load.run(spec["sends_per_second"])
+                cell["traffic"]["database_wait_observation"] = load.observation
+                cell["newer_unread_probes"] = [newer_unread_probe(f) for f in current]
+                cell["passed"] = all(cell["traffic"]["gates"].values()) and all(p["passed"] for p in cell["newer_unread_probes"])
+            elif spec["kind"] == "barrier":
+                current = [fixture(spec["history"], spec["members"])]
+                cell["barrier"] = barrier_probe(current[0], args, prefix)
+                cell["passed"] = all(cell["barrier"]["checks"].values())
+            else:
+                current = [fixture(h) for h in spec["histories"]]
+                cell["sparse"] = [item for f in current for item in sparse_probe(f, args.probe_samples)]
+                cell["passed"] = all(item["passed"] for item in cell["sparse"])
+            cell["fixture_ids"] = [f.room.pk for f in current]
+            cell["storage"] = storage(current)
+            report["cells"].append(cell)
+            save_artifact(args.output, report)
+            print(f"{spec['name']}: {'PASS' if cell['passed'] else 'FAIL'}", flush=True)
+        report["history_query_shape_comparisons"] = history_shape_check(report["cells"])
+        report["passed"] = (report["source"]["committed_source"] and bool(report["cells"])
+            and all(c["passed"] for c in report["cells"])
+            and all(c["same_sql_fingerprints"] for c in report["history_query_shape_comparisons"]))
+    except Exception as exc:
+        report["fatal_error_class"] = type(exc).__name__
+        # Do not serialize database exception text: it can contain SQL values.
+        raise
+    finally:
+        report["finished_utc"] = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+        if not args.keep_fixtures:
+            from mojo.apps.account.models import User
+            from mojo.apps.chat.models import ChatRoom
+            ChatRoom.objects.filter(name__startswith=prefix + "_").delete()
+            User.objects.filter(username__startswith=prefix + "_").delete()
+        report["storage_after_cleanup"] = storage(list(fixtures.values()))
+        report["storage_cleanup_note"] = "DELETE removes this run's rows; relation/index allocation can remain until normal vacuum/reuse"
+        report["fixtures_retained"] = args.keep_fixtures
+        save_artifact(args.output, report)
+    print(f"{'PASS' if report['passed'] else 'FAIL'}: {args.output.resolve()}")
+    return 0 if report["passed"] else 1
+
+
+if __name__ == "__main__":
+    sys.exit(main())

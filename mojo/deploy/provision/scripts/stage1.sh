@@ -23,6 +23,8 @@
 #   4. render the JUST-INSTALLED framework's cron/systemd templates into
 #      var/deploy. A fresh node has no previous post-deploy render to inherit.
 #   5. ec2_deploy.sh — the project: nginx vhosts, systemd units, var/ layout.
+#      var/profile = "prod" is written just before it too: it starts the
+#      config-sync timer and the jobs cron, which must not see settings.local.
 #      Note it does an unconditional `cp -f` of the shipped nginx config, so
 #      anything written into /etc/nginx before this point is lost here.
 #   6. var/profile = "prod" — BEFORE config_sync. settings/helper.py defaults
@@ -107,6 +109,14 @@ rm -f "${PROJ_PATH}/var/app.tar.gz"
 
 [ -f "${PROJ_PATH}/aws/ec2_bootstrap.sh" ] || \
     die "the archive has no aws/ec2_bootstrap.sh — is this a django-mojo project?"
+
+# The profile goes down right after the untar (#9315): ec2_bootstrap.sh
+# enables crond with a per-minute bin/cron.py, and ec2_deploy.sh starts the
+# config-sync timer; any of them imports settings, which would load
+# settings.local without this file. Step 6 writes it again, with its final
+# owner and mode, after ec2_deploy.sh's var/ ownership sweep.
+mkdir -p "${PROJ_PATH}/var"
+echo prod > "${PROJ_PATH}/var/profile"
 
 # The commit that tarball came from. A tarball carries no history, so this is
 # the only record of which commit this node runs — `provision configure` reads

@@ -231,6 +231,16 @@ or a group deleted together with its rooms.
 Group topics protected by `REALTIME_GROUP_TOPIC_PERMISSIONS` are unaffected and
 still check every delivery.
 
+The re-check runs the whole subscribe rule, including a project's
+`REALTIME_SUBSCRIBE_HANDLER`. A project that restricts a user therefore stops
+their chat delivery at the next re-check (every frame with
+`WS_SUBSCRIPTION_RECHECK_SECONDS = 0`), or at once if it calls
+`realtime.disconnect_user` after the restriction commits: every later
+subscribe asks the hook again. The hook is never asked per frame inside the
+window, so delivery stays free of SQL. Non-chat topics are checked only at
+subscribe and last until the socket drops. See
+[Chat permissions](../chat/permissions.md#a-projects-own-rule-for-who-takes-part-realtime_subscribe_handler).
+
 ## Activity Timeout and Keepalive
 
 An authenticated socket is closed when no frame **from the client** has
@@ -260,6 +270,48 @@ sending their own `{"type": "ping"}`, which the server answers with
 These are application frames on purpose: uvicorn answers protocol-level
 WebSocket pings itself (`bin/asgi_prod` configures no `--ws-ping-*`), so those
 never reach the handler.
+
+### Why a socket closed (#10231)
+
+Every socket writes one line to `realtime.log` when it is cleaned up:
+
+```
+[<connection id> -> user:42 -> 203.0.113.7]: disconnected reason=idle_timeout code=1000 initiator=server connected=61.3s idle=60.1s auth=yes
+```
+
+- `reason` is the first cause recorded. A disconnect or a failed send that
+  the socket saw while the handler was still waiting to receive counts from
+  when it happened, so a later timeout does not replace it:
+
+  | reason | initiator | meaning |
+  |---|---|---|
+  | `client_closed` | `client` | a disconnect with an ordinary close-frame code: the peer (the client, or a proxy in between) sent a close frame |
+  | `connection_lost` | `unknown` | a disconnect with 1006 or 1015 (no close frame: the transport dropped), or receiving failed because the transport was closed |
+  | `no_status` | `unknown` | a disconnect with 1005: a close frame with no code, as a browser's plain `close()` sends, or, with uvicorn's wsproto backend, a dropped transport |
+  | `service_restart` | `unknown` | a disconnect with 1012; uvicorn sends it when the worker shuts down, and a peer may send it too |
+  | `stream_ended` | `unknown` | the receive stream ended with no disconnect event |
+  | `idle_timeout` | `server` | no frame from the client for `WS_IDLE_TIMEOUT` |
+  | `auth_timeout` | `server` | not authenticated within `WS_UNAUTH_TIMEOUT` |
+  | `too_many_connections` | `server` | over `WS_MAX_CONNECTIONS`, at sign-in or a presence refresh |
+  | `server_disconnect` | `server` | a `disconnect` message published to the connection |
+  | `server_close` | `server` | `close_connection()` called without a named cause |
+  | `send_failed` | `unknown` | sending to the client failed |
+  | `error` | `unknown` | the handler raised |
+  | `handler_stopped` | `server` | the handler was cancelled, e.g. a worker shutting down |
+
+- `code` is the code from the ASGI disconnect event, or the code the server
+  sent when it closed first; `none` when there was none. ASGI sends a
+  disconnect event for a client close, a lost transport and a server shutdown
+  alike, so the initiator is `client` only for an ordinary close-frame code.
+- `connected` is seconds since the socket was accepted. `idle` is seconds since
+  the last frame received from the client, valid JSON or not.
+- The line never holds frame contents, the token or the client's close-reason
+  text. The cause words come from a fixed list in the handler.
+- A worker that is killed outright (SIGKILL, out of memory) runs no cleanup, so
+  its sockets write no line. A `connected` line with no `disconnected` line for
+  the same connection id is the sign of that.
+- The `timeout due to no activity ...` line is still written before an idle
+  close.
 
 ## Redis Architecture
 

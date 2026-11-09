@@ -125,6 +125,13 @@ default). When access is gone it drops the message and unsubscribes the
 connection from that topic, exactly as for protected group topics above. See
 [Chat](../chat/README.md#incoming-events-subscribe-to-chatroom_id).
 
+An app's server may also apply its own rule for who takes part in a topic (for
+example, an account limited to support chat). A subscribe it refuses gets the
+same `Access denied to topic: ...` error, and an open chat subscription it
+stops is dropped and unsubscribed at the next re-check, or the server closes
+the socket. Your own `user:<id>` channel, subscribed at connect, is not
+affected.
+
 ## Unsubscribing
 
 ```json

@@ -287,6 +287,34 @@ def test_load_app_cron(opts):
 
 
 @th.django_unit_test()
+def test_load_app_cron_warns_about_overfiring_schedules(opts):
+    """The loader wires warn_overfiring_schedules over the live registry
+    (maestro item #9773). Swaps the shared registry and reads the module-level
+    dedupe set, which is why it lives in this serial tier."""
+    from mojo.decorators.cron import schedule
+    from mojo.helpers import cron
+
+    def every_minute_of_three():
+        pass
+
+    existing = list(getattr(schedule, 'scheduled_functions', []))
+    schedule.scheduled_functions = []
+    name = cron._qualified_name(every_minute_of_three)
+    cron._overfire_warned.discard(name)
+    try:
+        schedule(minutes="*", hours="3")(every_minute_of_three)
+        with patch('mojo.helpers.cron.apps.get_app_configs', return_value=[]):
+            cron.load_app_cron()
+        assert name in cron._overfire_warned, \
+            "load_app_cron must run the over-fire check over the registry it just loaded"
+        assert schedule.scheduled_functions[0]['func'] is every_minute_of_three, \
+            "An over-firing schedule is warned about, never refused"
+    finally:
+        cron._overfire_warned.discard(name)
+        schedule.scheduled_functions[:] = existing
+
+
+@th.django_unit_test()
 def test_run_now(opts):
     """Test the run_now function (moved from tests/test_helpers/cron.py,
     item #2558 — patches mojo.helpers.cron.datetime and _write_heartbeat and

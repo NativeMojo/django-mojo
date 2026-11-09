@@ -1,13 +1,42 @@
 # Packaged Admin Security client
 
-The packaged Portal is **portal-mojo 0.2.18**, source revision
-`60c2f40c2b9c8f79bad328c4897bb10bea4b9979` (the `v0.2.18` tag).
+The packaged Portal is **portal-mojo 0.2.22**, source revision
+`a758fdf3d45877df629405377778179fa6cbb0bc` (tag `v0.2.22`). It is a clean canonical
+macOS arm64 build with Node **24.21.0** and npm **11.19.0**.
 
-- Manifest SHA-256: `2ef2bf81d681cdb0ab2b94197a1f6b33391b4bc0f7dc39349287282f331a1b58`
-- Lockfile SHA-256: `291fc4f7bd7f55a38e264847650d38c08cb229b18e685e792c606b1c4118351a`
-- Inventory: 127 files
+- Manifest SHA-256: `1a26ef9695ed4094de0af267aeec35b50f1f33e8d2c90a0640ca8b17910e7c4a`
+- Lockfile SHA-256: `426f33cc5f5527b7b33a2a268c33892ebe53116ab8346a61f97277e716b70d60`
+- Inventory: 160 files
 
-New in this build:
+See [the packaging guide](../../django_developer/account/admin.md) for the
+platform-bound reproducibility proof and offline replacement procedure.
+
+This build simplifies navigation and Domains flows, separates **AI Assistant**
+setup from **MCP connections**, and uses focused dialogs for Conversations,
+Skills and Memory. Memory distinguishes personal, global and selected group
+audiences; group read access does not imply permission to edit. The Admin
+Dashboard is unchanged. Existing REST permissions and source-session protection
+remain authoritative.
+
+Included from earlier builds:
+
+- **Passkeys** (user detail and My account) no longer crashes for users who
+  hold a passkey. `transports` on `/api/account/passkeys` rows is a JSON list
+  of strings (`[]` when none).
+- **Set temporary password** is back in the user header menu and Security
+  section (`sys.users` or `sys.manage_users`). It confirms first, calls
+  `POST /api/account/admin/user/password/temporary` with fresh auth, and shows
+  the generated password once in a copyable dialog.
+
+Included from the earlier Assistant Setup build:
+
+- **Assistant → Setup** is an owner-only page for the encrypted, write-only API
+  key, enablement, automatic latest compatible Sonnet selection and manual model
+  pins. It shows the resolved runtime model and catalogue freshness, using the
+  [Assistant setup API](admin_portal/assistant.md); the browser never discovers provider models
+  directly.
+
+Included from the earlier 0.2.18 build:
 
 - **Users → Sys Perms** shows every system permission a user holds, including
   custom keys outside the catalog, and can grant or remove them.
@@ -139,3 +168,11 @@ Use a global `view_admin` + `view_security` operator without
 complete evidence with secret-only scrubbing, legacy links, and session recovery only. Do not submit RuleSet,
 recommendation, or IPSet confirmations; live-preview API calls reach the real
 installation.
+
+## Protected health snapshot read
+
+`GET /api/account/admin/health/snapshot` reads the five-minute schema2 publication
+without collecting. Optional `evidence_cursor` traverses bounded durable failed/
+expired job evidence. Entry requires current global platform permission; AWS and
+jobs facts use independent source grants. See [the full health snapshot contract](health_snapshot.md)
+for immutable identity/generation/digest, per-slot expiry, limits and denial behavior.

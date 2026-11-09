@@ -300,6 +300,16 @@ The job is registered automatically when `mojo.apps.fileman` is in `INSTALLED_AP
 
 ## Access Control
 
+Authorize a request against a file with the framework predicate, which checks
+the file's own group, the owner and API-key tenant bounds:
+
 ```python
-can_access = file_instance.can_be_accessed_by(user=request.user, group=request.group)
+original_group = request.group
+try:
+    allowed = File.rest_check_permission(request, "VIEW_PERMS", file_instance)  # "SAVE_PERMS" to share
+finally:
+    request.group = original_group  # the check rebinds request.group to the file's group
 ```
+
+`file_instance.can_be_accessed_by(user, group)` is not an authorization check
+for a request: it trusts the group it is given and passes any public file.

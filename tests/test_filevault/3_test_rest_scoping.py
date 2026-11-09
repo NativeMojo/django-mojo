@@ -63,30 +63,19 @@ def _decode_token_payload(token):
     return json.loads(urlsafe_b64decode(payload_b64).decode("utf-8"))
 
 
-def _ensure_file_manager(FileManager):
-    """A filesystem-backed system default FileManager (required by upload_file)."""
+def _ensure_file_manager(FileManager, group):
+    """The group's own filesystem-backed filevault manager (required by
+    upload_file), so uploads never derive from the system default: fileman
+    packages running in parallel create and delete system defaults (#7538)."""
     from mojo.helpers import paths
-    base_path = str(paths.VAR_ROOT / "filevault-tests")
-    sys_manager = FileManager.objects.filter(
-        user=None, group=None, is_default=True, is_active=True).first()
-    if sys_manager is None or sys_manager.backend_type != FileManager.FILE_SYSTEM:
-        sys_manager, _ = FileManager.objects.get_or_create(
-            user=None, group=None, name="Test FileManager (file)",
-            defaults={
-                "backend_type": FileManager.FILE_SYSTEM,
-                "backend_url": "file:///",
-                "is_default": True,
-                "is_active": True,
-            })
-        sys_manager.backend_type = FileManager.FILE_SYSTEM
-        sys_manager.backend_url = "file:///"
-        sys_manager.is_default = True
-        sys_manager.is_active = True
-    sys_manager.set_settings({"base_path": base_path})
-    sys_manager.save()
-    FileManager.objects.filter(
-        user=None, group=None, is_default=True
-    ).exclude(pk=sys_manager.pk).update(is_default=False)
+    FileManager.objects.filter(group=group).delete()
+    manager = FileManager(user=None, group=group, use="filevault",
+                          name=f"{group.name}_vault_fm",
+                          is_default=True, is_active=True)
+    manager.set_backend_url("file:///", group.get_uuid(), "filevault")
+    manager.save()
+    manager.set_settings({"base_path": str(paths.VAR_ROOT / "filevault-tests")})
+    manager.save()
 
 
 @th.django_unit_setup()
@@ -126,7 +115,7 @@ def setup_dm047(opts):
     ms_b.save()
     ms_b.add_permission("view_vault")
 
-    _ensure_file_manager(FileManager)
+    _ensure_file_manager(FileManager, group_a)
 
     normal = vault_service.upload_file(
         file_obj=_make_file_obj(b"tenant A secret file", "a-file.txt"),

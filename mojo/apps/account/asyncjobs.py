@@ -2,6 +2,11 @@ import requests
 from mojo.helpers import dates, logit
 
 
+def produce_health_snapshot(job):
+    from mojo.apps.account.services.health_snapshot import produce_snapshot
+    return produce_snapshot(job)
+
+
 def prune_notifications(job):
     from mojo.apps.account.models.notification import Notification
     Notification.objects.filter(expires_at__lt=dates.utcnow()).delete()

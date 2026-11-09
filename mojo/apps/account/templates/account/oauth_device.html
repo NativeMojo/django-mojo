@@ -1,0 +1,262 @@
+{% extends "account/auth_base.html" %}
+
+{% block page_title %}{{ page_title|default:"Connect a device" }}{% endblock %}
+
+{% block subtitle_block %}{% endblock %}
+
+{% block content %}
+{% if error %}
+<!-- VIEW: this installation is not offering device sign-in -->
+<div id="view-oauth-error" class="mat-view is-active">
+    <p class="mat-view-title">{{ error_title }}</p>
+    <p class="mat-view-sub">{{ error_message }}</p>
+</div>
+{% else %}
+{% comment %}
+   Three views, one at a time. Nothing about a request is rendered by the
+   server: the facts arrive from device/lookup after the person has signed in,
+   and are written with textContent only — never as markup.
+
+   A user code in the URL only fills the box. The person still presses
+   Continue, then reads the request and presses Approve; nothing is approved
+   by following a link.
+{% endcomment %}
+<!-- VIEW: enter or confirm the code -->
+<div id="view-device-code" class="mat-view is-active">
+    <p class="mat-view-title">Enter the code shown on your device</p>
+    <p class="mat-view-sub">Only continue if you started this sign-in yourself.</p>
+    <div class="mat-field">
+        <input class="mat-input" type="text" id="device-user-code" name="user_code"
+               autocomplete="off" autocapitalize="characters" spellcheck="false"
+               maxlength="16" placeholder="XXXX-XXXX" value="{{ prefill_code }}" />
+    </div>
+    <button class="mat-btn mat-btn-primary" type="button" id="btn-device-continue">
+        <span class="mat-btn-text">Continue</span>
+        <span class="mat-spinner"></span>
+    </button>
+</div>
+
+<!-- VIEW: consent, with the facts about the requesting machine -->
+<div id="view-device-consent" class="mat-view">
+    <p class="mat-view-title"><span id="device-client-name"></span> wants access</p>
+    {% comment %}
+       First, before any reassuring fact: when a web page started this
+       request, the IP and location below are the reader's OWN browser, so
+       they prove nothing. That is the shape of a phishing link.
+    {% endcomment %}
+    <p class="mat-message is-visible is-error" id="device-browser-warning" style="display:none">
+        <strong>A website started this request, not a device.</strong>
+        If a website or a message sent you here, deny it &mdash; approving
+        would give whoever started it access to your account. The address and
+        location below are your own browser&rsquo;s, so they prove nothing.
+    </p>
+    <p class="mat-view-sub">Code <strong id="device-code-echo"></strong> &mdash; make sure it matches the code on your device.</p>
+    <p class="mat-view-sub" id="device-client-identity"></p>
+    <p class="mat-view-sub">Access to: <span id="device-resource"></span></p>
+    <div id="device-access-lines"></div>
+    <p class="mat-view-sub">Requested from <span id="device-requester-ip"></span><span id="device-requester-location"></span>, <span id="device-requester-age"></span></p>
+    <p class="mat-view-sub">The device describes itself as: <span id="device-requester-ua"></span></p>
+    <p class="mat-message is-visible is-error" id="device-network-warning" style="display:none">
+        This request came from a different network than the one you're using now.
+        If you didn't start it yourself, deny it.
+    </p>
+    <p class="mat-message is-visible is-info" id="device-permission-warning" style="display:none">
+        Your account can't use the Assistant's tools yet, so this connection
+        won't work until an administrator grants that access.
+    </p>
+    <p class="mat-view-sub" id="device-identity-row">Signed in as <strong id="device-identity"></strong></p>
+    <div class="mat-field">
+        <label class="mat-label" for="device-ttl">Keep this connection for</label>
+        <select class="mat-input" id="device-ttl"></select>
+    </div>
+    <button class="mat-btn mat-btn-primary" type="button" id="btn-device-approve">
+        <span class="mat-btn-text">Approve</span>
+        <span class="mat-spinner"></span>
+    </button>
+    <div class="mat-footer-links">
+        <span class="mat-footer-link"><button type="button" id="btn-device-deny">Deny</button></span>
+    </div>
+</div>
+
+<!-- VIEW: done -->
+<div id="view-device-done" class="mat-view">
+    <p class="mat-view-title" id="device-done-title"></p>
+    <p class="mat-view-sub" id="device-done-sub"></p>
+</div>
+{% endif %}
+{% endblock %}
+
+{% block switcher %}{% endblock %}
+
+{% block page_script %}
+{% if not error %}
+<script nonce="{{ csp_nonce }}">
+(function () {
+    {% comment %}
+       Every value interpolated into a JS string literal carries |escapejs —
+       see the note in account/auth_base.html. Like the consent page, no cookie
+       is read: every POST authenticates with the Authorization header alone,
+       which is what makes it CSRF-proof by construction.
+    {% endcomment %}
+    var m = window._mat;
+    var cfg = window._matConfig;
+    var PAGE_RETURN = "{{ page_return|escapejs }}";
+    var AUTH_URL = "{{ auth_url|default:'/auth'|escapejs }}";
+    var LOOKUP_URL = "{{ lookup_url|escapejs }}";
+    var APPROVE_URL = "{{ approve_url|escapejs }}";
+    var DENY_URL = "{{ deny_url|escapejs }}";
+
+    var codeInput = document.getElementById("device-user-code");
+    var continueBtn = document.getElementById("btn-device-continue");
+    var approveBtn = document.getElementById("btn-device-approve");
+    var denyBtn = document.getElementById("btn-device-deny");
+    var currentCode = "";
+
+    function toLogin(code) {
+        var back = PAGE_RETURN;
+        if (code) {
+            back = back.split("?")[0] + "?user_code=" + encodeURIComponent(code);
+        }
+        var sep = AUTH_URL.indexOf("?") === -1 ? "?" : "&";
+        window.location.assign(AUTH_URL + sep + "redirect=" + encodeURIComponent(back));
+    }
+
+    // Only an interactive session may look up or approve a code. Anything else
+    // is sent to sign in; the server refuses it again, so this is convenience,
+    // not the boundary.
+    if (!MojoAuth.isAuthenticated() || MojoAuth.getTokenType() !== "bearer") {
+        toLogin(codeInput && codeInput.value);
+        return;
+    }
+
+    function show(id) {
+        var views = document.querySelectorAll(".mat-view");
+        for (var i = 0; i < views.length; i++) {
+            views[i].classList.toggle("is-active", views[i].id === id);
+        }
+    }
+
+    function setText(id, value) {
+        document.getElementById(id).textContent = value || "";
+    }
+
+    function post(url, body) {
+        return fetch(cfg.apiBase + url, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "Authorization": "Bearer " + MojoAuth.getToken()
+            },
+            body: JSON.stringify(body)
+        }).then(function (resp) {
+            return resp.json().catch(function () { return {}; }).then(function (data) {
+                return { status: resp.status, ok: resp.ok, body: data };
+            });
+        });
+    }
+
+    function failed(result, btn) {
+        m.setLoading(btn, false);
+        if (result.status === 440 || result.status === 401) {
+            // A stale or missing login: sign in again and come back to this code.
+            toLogin(currentCode);
+            return;
+        }
+        m.showMessage((result.body && result.body.error)
+            || "We couldn't complete that request. Please try again.", "error");
+    }
+
+    function age(seconds) {
+        if (seconds < 90) { return "just now"; }
+        return Math.round(seconds / 60) + " minutes ago";
+    }
+
+    function render(facts) {
+        currentCode = facts.user_code;
+        setText("device-client-name", facts.client_name);
+        setText("device-code-echo", facts.user_code);
+        setText("device-client-identity", facts.client_verified_url
+            ? "Verified from " + facts.client_verified_url
+            : "(unverified name — registered by the client itself)");
+        setText("device-resource", facts.requested_resource);
+        var lines = document.getElementById("device-access-lines");
+        lines.textContent = "";
+        (facts.access_lines || []).forEach(function (line) {
+            var p = document.createElement("p");
+            p.className = "mat-view-sub";
+            p.textContent = line;
+            lines.appendChild(p);
+        });
+        var who = facts.requester || {};
+        setText("device-requester-ip", who.ip || "an unknown address");
+        setText("device-requester-location", who.location ? " (" + who.location + ")" : "");
+        setText("device-requester-age", age(who.age_seconds || 0));
+        setText("device-requester-ua", who.user_agent || "unknown");
+        document.getElementById("device-browser-warning").style.display =
+            facts.started_in_browser ? "" : "none";
+        document.getElementById("device-network-warning").style.display =
+            facts.network_mismatch && !facts.started_in_browser ? "" : "none";
+        document.getElementById("device-permission-warning").style.display =
+            facts.missing_permission ? "" : "none";
+        var select = document.getElementById("device-ttl");
+        select.textContent = "";
+        (facts.lifetime_options || []).forEach(function (days) {
+            var option = document.createElement("option");
+            option.value = String(days);
+            option.textContent = days + " days";
+            option.selected = days === facts.lifetime_default;
+            select.appendChild(option);
+        });
+        show("view-device-consent");
+    }
+
+    fetch(cfg.apiBase + "/api/account/user/me", {
+        headers: { "Authorization": "Bearer " + MojoAuth.getToken() }
+    }).then(function (resp) {
+        if (!resp.ok) { toLogin(codeInput.value); return null; }
+        return resp.json();
+    }).then(function (data) {
+        if (!data) return;
+        setText("device-identity", (data.data && (data.data.email || data.data.username)) || "");
+    }).catch(function () { toLogin(codeInput.value); });
+
+    continueBtn.addEventListener("click", function () {
+        m.setLoading(continueBtn, true);
+        m.hideMessage();
+        post(LOOKUP_URL, { user_code: codeInput.value }).then(function (result) {
+            if (!result.ok || !result.body || !result.body.data) {
+                failed(result, continueBtn);
+                return;
+            }
+            m.setLoading(continueBtn, false);
+            render(result.body.data);
+        }).catch(function () { failed({}, continueBtn); });
+    });
+
+    approveBtn.addEventListener("click", function () {
+        m.setLoading(approveBtn, true);
+        m.hideMessage();
+        post(APPROVE_URL, {
+            user_code: currentCode,
+            ttl_days: document.getElementById("device-ttl").value
+        }).then(function (result) {
+            if (!result.ok) { failed(result, approveBtn); return; }
+            setText("device-done-title", "Device connected");
+            setText("device-done-sub", "You can close this page and return to your device.");
+            show("view-device-done");
+        }).catch(function () { failed({}, approveBtn); });
+    });
+
+    denyBtn.addEventListener("click", function () {
+        m.hideMessage();
+        post(DENY_URL, { user_code: currentCode }).then(function (result) {
+            if (!result.ok) { failed(result, approveBtn); return; }
+            setText("device-done-title", "Request denied");
+            setText("device-done-sub", "The device was not connected. You can close this page.");
+            show("view-device-done");
+        }).catch(function () { failed({}, approveBtn); });
+    });
+})();
+</script>
+{% endif %}
+{% endblock %}

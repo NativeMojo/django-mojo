@@ -661,6 +661,7 @@ of the refused step.
 | `image_timeout` / `image_failed` | The AMI never became available. **Nothing was launched** |
 | `launch_failed` / `launch_timeout` | The instance exists but never reached `running`. It is **not** registered |
 | `runner_missing` | Running, but never joined the job fleet. **Not registered** — it is serving nothing |
+| `clone_refused` | The source's disk has no `var/profile`, so the clone quarantined itself and powered off rather than run `settings.local`. **Not registered**. Terminate it, give the source a `var/profile`, then add again |
 | `no_converged_deployment` | The node joined, but no deployment has ever converged here, so there is no proven commit to install. **Not registered** |
 | `proof_timeout` | The node did not prove it runs the fleet's commit. **Deliberately not registered** |
 | `never_healthy` | Registered, but the balancer never reported it healthy. Drain it and investigate |

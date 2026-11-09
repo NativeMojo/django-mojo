@@ -536,3 +536,24 @@ def test_toggle_without_reload_then_disabled(opts):
                       "the root comparison route must itself be a 404")
     finally:
         _clear_shadowing_rows()
+
+
+@th.django_unit_test("member MCP admission preserves tool and approval boundaries")
+def test_member_mcp_wire(opts):
+    from mojo.apps.account.services.oauth_server import tokens
+
+    grant = tokens.create_grant(
+        opts.plain, opts.oauth_client, ["mcp", "mcp:execute"], RESOURCE, 1700000000)
+    headers = _auth(tokens.mint_access_token(grant))
+    with th.server_settings(BASE_URL=BASE, ASSISTANT_MCP_ENABLED=True,
+                            ASSISTANT_MCP_MEMBER_TOOLS=["list_skills", "write_memory"]):
+        response = opts.client.post(MCP_PATH, _rpc(1, "initialize"), headers=headers)
+        assert_eq(response.status_code, 200, "member grant must connect")
+        response = opts.client.post(MCP_PATH, _rpc(2, "tools/list"), headers=headers)
+        assert_eq(response.response.result.tools, [],
+                  "the allowlist cannot grant a tool permission or expose approvals")
+        for name in ("list_skills", "write_memory", "get_system_health", "list_pending_actions"):
+            response = opts.client.post(
+                MCP_PATH, _rpc(3, "tools/call", {"name": name, "arguments": {}}),
+                headers=headers)
+            assert_true(response.response.result.isError, f"direct call to {name} escaped the gate")

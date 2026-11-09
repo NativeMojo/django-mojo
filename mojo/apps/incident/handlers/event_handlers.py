@@ -392,6 +392,20 @@ class BlockHandler:
             result = (checked.get("status") == "verified" and
                       checked.get("ok") is True)
 
+            # A refused target (#8885) leaves the incident open, with the
+            # reason on its history so an operator can see why.
+            if checked.get("outcome") == "refused" and event.incident_id:
+                try:
+                    from mojo.apps.incident.models import Incident
+                    code = (checked.get("error") or {}).get("code") or "refused"
+                    Incident.objects.get(pk=event.incident_id).add_history(
+                        "handler:block",
+                        note=f"IP {ip} not blocked: refused ({code})")
+                except Exception:
+                    logger.exception(
+                        "BlockHandler: refusal note failed for %s",
+                        event.incident_id)
+
             # Record action on incident and resolve it
             if result and event.incident_id:
                 try:
@@ -731,6 +745,17 @@ def execute_handler(job):
         handler_url = urlparse(spec)
         handler_type = handler_url.scheme
         params = {k: v[0] for k, v in parse_qs(handler_url.query).items()}
+
+        freshness = payload.get("require_fresh_mojosec_scanner")
+        if freshness is not None:
+            if freshness is not True or handler_type != "block" or mode != "governed":
+                return False
+            from mojo.apps.incident.services.mojosec_rule_facts import field_value
+            if field_value(event, "mojosec_scanner_confirmed") is not True:
+                if incident:
+                    incident.add_history("handler:block", note=(
+                        "MojoSec default block skipped: scanner evidence is no longer fresh or valid"))
+                return False
 
         handler_cls = HANDLER_MAP.get(handler_type)
         if not handler_cls:

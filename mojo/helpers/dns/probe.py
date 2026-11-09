@@ -29,10 +29,14 @@ Example:
         ...
 """
 
+import ipaddress
+import math
 import re
 import time
 
 try:
+    import dns.exception as dns_exception
+    import dns.nameserver as dns_nameserver
     import dns.resolver as dns_resolver
     DNS_AVAILABLE = True
 except ImportError:
@@ -50,6 +54,162 @@ DEFAULT_INTERVAL = 5
 # Matches each quoted chunk of a TXT rdata rendered as text:
 #   "chunk one" "chunk two"
 _TXT_CHUNK_RE = re.compile(r'"((?:[^"\\]|\\.)*)"')
+
+# The bounded address reader is separate from the legacy authority probes.
+MAX_RESOLVED_ADDRESSES = 16
+_MAX_ADDRESS_NAMESERVERS = 16
+_HOST_LABEL_RE = re.compile(r"[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\Z")
+
+
+class BoundedResolveError(Exception):
+    """A stable DNS failure code, without resolver text or host details."""
+
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+        self.__suppress_context__ = True
+
+
+def _address_budget(deadline, clock):
+    try:
+        now = clock()
+        if (isinstance(deadline, bool) or not isinstance(deadline, (int, float))
+                or not math.isfinite(deadline) or not math.isfinite(now)):
+            raise ValueError()
+        remaining = deadline - now
+    except Exception:
+        raise BoundedResolveError("invalid_deadline") from None
+    if remaining <= 0:
+        raise BoundedResolveError("deadline_exceeded") from None
+    return remaining
+
+
+def _address_hostname(hostname):
+    if not isinstance(hostname, str) or not hostname or len(hostname) > 254:
+        raise BoundedResolveError("invalid_hostname")
+    # Scoped IPv6 needs interface lookup and is not a plain numeric endpoint.
+    if "%" in hostname:
+        raise BoundedResolveError("invalid_hostname")
+    try:
+        return str(ipaddress.ip_address(hostname)), True
+    except ValueError:
+        pass
+    try:
+        name = hostname.removesuffix(".").encode("idna").decode("ascii").lower()
+    except UnicodeError:
+        raise BoundedResolveError("invalid_hostname") from None
+    if (not name or len(name) > 253
+            or not all(_HOST_LABEL_RE.fullmatch(label) for label in name.split("."))):
+        raise BoundedResolveError("invalid_hostname")
+    return name, False
+
+
+def _address_resolver(resolver_factory):
+    try:
+        resolver = resolver_factory()
+    except Exception:
+        raise BoundedResolveError("resolver_unavailable") from None
+    try:
+        nameservers = resolver.nameservers
+        if not isinstance(nameservers, (list, tuple)):
+            raise BoundedResolveError("resolver_unsupported")
+        if not nameservers:
+            raise BoundedResolveError("resolver_unavailable")
+        if (len(nameservers) > _MAX_ADDRESS_NAMESERVERS
+                or not callable(resolver.resolve)):
+            raise BoundedResolveError("resolver_unsupported")
+        for nameserver in nameservers:
+            # DoH/DoT/DoQ can bootstrap names or perform TLS work outside the
+            # DNS query lifetime. Only the ordinary numeric DNS transport fits.
+            if type(nameserver) is dns_nameserver.Do53Nameserver:
+                nameserver = nameserver.address
+            if (not isinstance(nameserver, str) or len(nameserver) > 45
+                    or "%" in nameserver):
+                raise BoundedResolveError("resolver_unsupported")
+            ipaddress.ip_address(nameserver)
+    except BoundedResolveError:
+        raise
+    except Exception:
+        raise BoundedResolveError("resolver_unsupported") from None
+    return resolver
+
+
+def resolve_addresses(hostname, deadline, *, resolver_factory=None, clock=None):
+    """Resolve A and AAAA under one absolute monotonic deadline.
+
+    Return at most 16 canonical numeric addresses, deduplicated and sorted
+    IPv4 first, then numerically within each family. Private addresses remain
+    usable: callers own address policy. Numeric literals and ``localhost``
+    (including a trailing dot) do not query DNS. All paths require an unexpired
+    deadline. Names use IDNA, bounded host labels, no search suffixes, and only
+    numeric DNS/53 nameservers; encrypted/custom resolver transports are refused.
+
+    ``resolver_factory`` returns a fresh dnspython-compatible resolver without
+    performing network work. ``clock`` defaults to ``time.monotonic``. Each A/
+    AAAA query receives the remaining lifetime and socket timeout; late results
+    and partial results on lookup failure are rejected. No system socket lookup
+    or detached work is used as a fallback. Errors are ``BoundedResolveError``
+    with a stable ``code`` (also the exception text), never raw resolver details.
+    """
+    if clock is None:
+        clock = time.monotonic
+    _address_budget(deadline, clock)
+    name, numeric = _address_hostname(hostname)
+    if numeric:
+        _address_budget(deadline, clock)
+        return [name]
+    if name == "localhost":
+        _address_budget(deadline, clock)
+        return ["127.0.0.1", "::1"]
+    if not DNS_AVAILABLE:
+        raise BoundedResolveError("resolver_unavailable")
+    if resolver_factory is None:
+        resolver_factory = dns_resolver.Resolver
+    _address_budget(deadline, clock)
+    resolver = _address_resolver(resolver_factory)
+    addresses = set()
+    answer_count = 0
+    for rtype, version in (("A", 4), ("AAAA", 6)):
+        remaining = _address_budget(deadline, clock)
+        try:
+            resolver.timeout = remaining
+            resolver.lifetime = remaining
+            # Absolute names and search=False prevent system search expansion.
+            answers = resolver.resolve(name + ".", rtype, lifetime=remaining, search=False)
+        except (dns_resolver.NXDOMAIN, dns_resolver.NoAnswer):
+            _address_budget(deadline, clock)
+            continue
+        except dns_exception.Timeout:
+            _address_budget(deadline, clock)
+            raise BoundedResolveError("dns_timeout") from None
+        except Exception:
+            _address_budget(deadline, clock)
+            raise BoundedResolveError("dns_lookup_failed") from None
+        _address_budget(deadline, clock)
+        try:
+            if answers is None or isinstance(answers, (str, bytes, dict)):
+                raise BoundedResolveError("dns_answer_invalid")
+            for answer in answers:
+                _address_budget(deadline, clock)
+                answer_count += 1
+                if answer_count > MAX_RESOLVED_ADDRESSES:
+                    raise BoundedResolveError("dns_answer_overflow")
+                value = getattr(answer, "address", answer)
+                if not isinstance(value, str) or len(value) > 45 or "%" in value:
+                    raise BoundedResolveError("dns_answer_invalid")
+                address = ipaddress.ip_address(value)
+                if address.version != version:
+                    raise BoundedResolveError("dns_answer_invalid")
+                addresses.add(address)
+        except BoundedResolveError:
+            raise
+        except Exception:
+            raise BoundedResolveError("dns_answer_invalid") from None
+    _address_budget(deadline, clock)
+    if not addresses:
+        raise BoundedResolveError("dns_no_answer")
+    ordered = sorted(addresses, key=lambda item: (item.version, int(item)))
+    return [str(address) for address in ordered]
 
 
 def normalize_name(name):

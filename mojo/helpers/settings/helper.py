@@ -1,4 +1,6 @@
 import importlib
+import re
+import sys
 from objict import objict
 UNKNOWN = Ellipsis
 
@@ -24,15 +26,81 @@ def _warn_coercion(name, value, kind, default):
         f"setting {name!r}: cannot coerce {type(value).__name__} value to "
         f"{kind}; using default {shown!r}")
 
-def load_settings_profile(context):
-    from mojo.helpers import modules, paths
-    # Set default profile
+REQUIRED_PROFILE_KEY = "MOJO_REQUIRED_PROFILE"
+_REQUIRED_PROFILE_LINE = re.compile(r"^\s*MOJO_REQUIRED_PROFILE\s*=\s*(.*?)\s*$")
+_PROFILE_NAME = re.compile(r"^[A-Za-z0-9_-]+$")
+
+
+def required_profile_from_text(text):
+    """Read MOJO_REQUIRED_PROFILE out of django.conf text, without the parser.
+
+    Returns ("absent", None), ("set", name) or ("malformed", None). The last
+    matching line wins, as in the conf loader; one pair of matching quotes is
+    stripped. The conf parser is never called: it evals f-string values. Only
+    a plain profile name counts — anything else leaves the guard dormant.
+    """
+    value = None
+    for line in text.splitlines():
+        match = _REQUIRED_PROFILE_LINE.match(line)
+        if match:
+            value = match.group(1)
+    if value is None:
+        return "absent", None
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1]
+    if not _PROFILE_NAME.match(value):
+        return "malformed", None
+    return "set", value
+
+
+def resolve_profile(var_root, stderr=None):
+    """The settings profile for this tree: var_root/profile, else "local".
+
+    With MOJO_REQUIRED_PROFILE = <name> in var_root/django.conf (opt-in, set
+    by the deployment's own operator), a missing, empty or different marker
+    raises ImproperlyConfigured instead of falling back to "local". Without
+    the key this is exactly the old behaviour, and writes nothing.
+    """
+    stderr = sys.stderr if stderr is None else stderr
     profile = "local"
-    # Check if a profile file exists and override profile
-    profile_file = paths.VAR_ROOT / "profile"
+    profile_file = var_root / "profile"
+    marker = None
     if profile_file.exists():
         with open(profile_file, 'r') as file:
-            profile = file.read().strip()
+            marker = file.read().strip()
+        profile = marker
+
+    conf_file = var_root / "django.conf"
+    try:
+        text = conf_file.read_text(errors="replace")
+    except OSError:
+        text = ""
+    state, required = required_profile_from_text(text)
+    if state == "malformed":
+        stderr.write(
+            f"django-mojo: {REQUIRED_PROFILE_KEY} in {conf_file} is not a plain "
+            "profile name; the line is ignored and the profile is not enforced\n")
+    elif state == "set" and marker != required:
+        if marker is None:
+            found = "is missing"
+        elif not marker:
+            found = "is empty"
+        else:
+            shown = marker if _PROFILE_NAME.match(marker) else "an unexpected value"
+            found = f"reads {shown[:64]}"
+        from django.core.exceptions import ImproperlyConfigured
+        raise ImproperlyConfigured(
+            f"django-mojo refused to start: {conf_file} sets "
+            f"{REQUIRED_PROFILE_KEY} = {required}, but {profile_file} {found}. "
+            f"Fix: echo {required} > {profile_file} && "
+            f"chown ec2-user:www {profile_file} && chmod 640 {profile_file}, "
+            "then restart mojo-asgi (use your deployment's users if different).")
+    return profile
+
+
+def load_settings_profile(context):
+    from mojo.helpers import modules, paths
+    profile = resolve_profile(paths.VAR_ROOT)
     modules.load_module_to_globals("settings.defaults", context)
     modules.load_module_to_globals(f"settings.{profile}", context)
 

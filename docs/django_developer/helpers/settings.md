@@ -48,6 +48,41 @@ from mojo.helpers.settings import load_settings_profile
 load_settings_profile(context)
 ```
 
+`load_settings_profile` loads `settings.defaults`, then `settings.<profile>`.
+The profile comes from `resolve_profile(VAR_ROOT)` in
+`mojo.helpers.settings.helper`: the stripped contents of `var/profile`, or
+`local` when that file does not exist. Every process imports settings this
+way: ASGI, the job engine, `manage.py` (and so `migrate`) and `bin/cron.py`.
+Stage 1 and the skeleton's `ec2_deploy.sh` write `prod` before the app
+starts; a golden-image clone missing the marker gets it on first boot, after
+which `mojo-asgi` and the job engines are restarted onto it.
+
+### Requiring a profile (opt-in)
+
+A deployment can make a missing or wrong marker fatal by adding one line to
+its own `var/django.conf`:
+
+```
+MOJO_REQUIRED_PROFILE = prod
+```
+
+- With the key, a `var/profile` that is missing, empty or different raises
+  `ImproperlyConfigured("django-mojo refused to start: ...")`, naming both
+  files, what was found and the fix (write the profile, `chown ec2-user:www`,
+  `chmod 640`, restart `mojo-asgi`).
+- Without the key (every install until its operator adds it), behaviour is
+  exactly as before: `local` when the marker is missing, with no output.
+- The key is read with one anchored regex, never through the conf parser
+  (which evaluates f-string values). The last matching line wins, one pair of
+  quotes is stripped, and a commented line is ignored. A value that is not a
+  plain profile name (`[A-Za-z0-9_-]+`) writes one warning line to stderr and
+  leaves the guard off.
+- An unreadable `django.conf` counts as no key. Admin config overrides cannot
+  set this key.
+
+Before adding it to a fleet, check every node first; see
+[Requiring the production profile](../deploy/README.md#requiring-the-production-profile).
+
 ## Defining Settings in Django settings.py
 
 ```python
@@ -326,3 +361,9 @@ at import time (e.g. mverify's `PAYMENTS_GEOFENCE_RULES`).
 For the framework-recognized setting names (without values), see:
 
 - [settings_reference.md](settings_reference.md)
+
+Health snapshots read the existing frozen installation identity and file-only
+`MOJO_ENVIRONMENT` (or explicit `HEALTH_SNAPSHOT_ENVIRONMENT_ID`). They never
+initialize identity. `MOJO_HEALTH_PUBLICATION_STATE` is an internal protected
+generation/configuration counter, unavailable through generic Settings/Setup
+writes; no snapshot history is stored in it. See [health snapshots](../account/health_snapshot.md).

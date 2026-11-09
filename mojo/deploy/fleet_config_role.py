@@ -16,7 +16,11 @@ import uuid
 
 PATH = "/etc/mojo/fleet-config-role.json"
 MAX_BYTES = 512
-FIELDS = {"revision", "digest", "request_service_required", "installed_at"}
+LEGACY_FIELDS = {"revision", "digest", "request_service_required", "installed_at"}
+FIELDS = LEGACY_FIELDS | {"request_service_profile"}
+DEFAULT_PROFILE = "opt_api_asgi_v1"
+REQUEST_PROFILES = {"opt_api_asgi_v1": "/opt/api/var/asgi.sock",
+                    "run_mojo_asgi_v1": "/run/mojo/asgi.sock"}
 REVISION = re.compile(r"^[a-f0-9]{32,64}$")
 DIGEST = re.compile(r"^[a-f0-9]{64}$")
 
@@ -40,14 +44,16 @@ def _open_parent(path, required_uid):
     return parent
 
 
-def write(revision, digest, required, path=PATH, *, required_uid=0):
+def write(revision, digest, required, path=PATH, *, required_uid=0,
+          request_service_profile=DEFAULT_PROFILE):
     """Atomically publish sealed role evidence; return False on any failure.
 
     required_uid is a filesystem test seam. Production always requires uid 0.
     The role is non-secret and mode 0644 permits the job account to verify it.
     """
     if (os.geteuid() != required_uid or not _valid_identity(revision, digest)
-            or type(required) is not bool):
+            or type(required) is not bool or type(request_service_profile) is not str
+            or request_service_profile not in REQUEST_PROFILES):
         return False
     parent = None
     temporary = None
@@ -60,10 +66,12 @@ def write(revision, digest, required, path=PATH, *, required_uid=0):
         parent = _open_parent(path, required_uid)
         previous = read(revision, digest, path, required_uid=required_uid)
         installed_at = time.time()
-        if previous and previous["request_service_required"] is required:
+        if (previous and previous["request_service_required"] is required
+                and previous["request_service_profile"] == request_service_profile):
             installed_at = previous["installed_at"]
         raw = json.dumps({"revision": revision, "digest": digest,
                           "request_service_required": required,
+                          "request_service_profile": request_service_profile,
                           "installed_at": installed_at},
                          sort_keys=True, allow_nan=False).encode("ascii")
         temporary = ".fleet-role-" + uuid.uuid4().hex
@@ -113,9 +121,14 @@ def read(revision, digest, path=PATH, *, required_uid=0):
                 or after.st_ctime_ns != before.st_ctime_ns):
             return None
         value = json.loads(raw)
-        if (not isinstance(value, dict) or set(value) != FIELDS
+        if (not isinstance(value, dict) or set(value) not in (FIELDS, LEGACY_FIELDS)
                 or value["revision"] != revision or value["digest"] != digest
                 or type(value["request_service_required"]) is not bool):
+            return None
+        if "request_service_profile" not in value:
+            value["request_service_profile"] = DEFAULT_PROFILE
+        if (type(value["request_service_profile"]) is not str
+                or value["request_service_profile"] not in REQUEST_PROFILES):
             return None
         installed_at = value["installed_at"]
         if (type(installed_at) not in (int, float) or not math.isfinite(installed_at)

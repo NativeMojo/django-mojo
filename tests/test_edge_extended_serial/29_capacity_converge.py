@@ -47,10 +47,15 @@ def test_converge_targets_only_the_new_runner(opts):
     from mojo.apps.edge.asyncjobs import _publish_deploy_node
     from mojo.apps.edge.services import deploy, platform_deploy
 
+    from mojo.apps.aws.services import capacity
     row = _converged_row()
+    operation = capacity._new_operation(capacity.ACTION_ADD_NODE, "i-source", None, "testit_capacity", {
+        "runner_id": NEW_RUNNER, "instance_id": "i-new"})
+    operation["phase"] = "converging"
+    capacity._persist(operation)
     with mock.patch.object(jobs, "publish", return_value="job-1") as published:
         _publish_deploy_node(NEW_RUNNER, row.sha, row.framework_version,
-                             migrate=False, deployment_id=row.pk)
+                             migrate=False, deployment_id=row.pk, capacity_operation=operation["id"])
 
     assert published.call_count == 1, \
         f"the join leg published {published.call_count} jobs, not one"

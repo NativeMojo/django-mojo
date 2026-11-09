@@ -12,9 +12,13 @@ def on_link(request, pk=None):
 @md.POST('link/create')
 @md.requires_auth()
 def on_create_link(request):
-    from django.core.exceptions import ObjectDoesNotExist
     from mojo.apps import shortlink
-    from mojo.apps.fileman.models import File
+    from mojo.apps.shortlink.services.access import (
+        require_create_perms, require_group_access, shareable_file)
+    from mojo.models.rest import _resolve_stamp_actor
+
+    require_group_access(request)
+    require_create_perms(request)
 
     data = request.DATA
     original_url = data.get("url", "")
@@ -22,10 +26,7 @@ def on_create_link(request):
     file = None
 
     if file_id not in [None, ""]:
-        try:
-            file = File.objects.get(pk=int(file_id))
-        except (ValueError, TypeError, ObjectDoesNotExist):
-            return {"status": False, "error": "Invalid file id"}
+        file = shareable_file(request, file_id)
 
     short_link = shortlink.shorten(
         url=original_url,
@@ -38,7 +39,7 @@ def on_create_link(request):
         resolve_file=data.get_typed("resolve_file", True, bool),
         bot_passthrough=data.get_typed("bot_passthrough", False, bool),
         is_protected=data.get_typed("is_protected", False, bool),
-        user=request.user,
+        user=_resolve_stamp_actor(request),
         group=request.group,
         base_url=data.get("base_url", None),
     )

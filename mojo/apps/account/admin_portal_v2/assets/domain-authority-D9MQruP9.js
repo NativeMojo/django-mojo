@@ -1,0 +1,1 @@
+import{g as t,aU as i,cl as n,bg as r,e1 as h}from"./index-DfPBLt_R.js";const a=()=>`${t().uid}:${i()}`;async function S(e,o=!1){if(a()!==e||!t().authenticated)throw new Error("Session changed. Reopen this task.");const s=await n("/api/user","me");if(a()!==e||!r(s,h,null)||o&&s.is_superuser!==!0)throw new Error("DNS authority changed. Reopen this task.")}export{a as d,S as r};

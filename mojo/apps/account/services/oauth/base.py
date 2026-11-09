@@ -22,6 +22,15 @@ class OAuthProvider:
         - get_auth_url()  -> str
         - exchange_code() -> dict with keys: access_token, refresh_token (opt), id_token (opt)
         - get_profile()   -> dict with keys: uid, email, display_name
+
+    A provider that needs per-sign-in secrets (a PKCE verifier, an OIDC nonce)
+    overrides begin_state(). Its result is stored in the server-side state
+    record, and only then are get_auth_url, exchange_code and get_profile
+    called with an extra ``state_data`` argument holding that record.
+
+    A profile may carry ``email_verified`` (bool). When present, the email
+    links to an existing account only if it is True; see
+    rest/oauth.py _find_or_create_user. Without the key, today's rule holds.
     """
 
     name = None
@@ -64,8 +73,18 @@ class OAuthProvider:
 
     # --- Subclass contract ---
 
+    def begin_state(self):
+        """Extra values to keep in the state record for this sign-in.
+
+        Never sent to the browser; only the opaque state key is.
+        """
+        return {}
+
     def get_auth_url(self, state, redirect_uri):
-        """Return the provider's authorization URL."""
+        """Return the provider's authorization URL.
+
+        Providers overriding begin_state() also take ``state_data=None``.
+        """
         raise NotImplementedError
 
     def exchange_code(self, code, redirect_uri):

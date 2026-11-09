@@ -2,7 +2,7 @@ from django.db import models, transaction
 from mojo.models import MojoModel, MojoSecrets
 from mojo.helpers import crypto, dates, logit
 from mojo.helpers.request import (
-    is_key_backed_session, is_request_user, restricted_identity)
+    is_key_backed_session, is_request_user, is_signed_in_user, restricted_identity)
 from mojo.apps import metrics
 from mojo.helpers.settings import settings
 from mojo import errors as merrors
@@ -23,6 +23,13 @@ WEBHOOK_SECRET_TOKEN_LEN = 48
 WEBAPP_URL_KEYS = ("webapp_base_url", "webapp_auth_path")
 WEBAPP_URL_PERMS = ["manage_groups", "groups"]
 _ABSENT = object()
+
+# A parent that carries this key, set to true, under metadata["protected"] lets
+# a person who manages it as a member create groups directly under it, with no
+# global permission (#9107). Only a system admin's allow_member_subgroups
+# action (#9126), the protected-metadata gate, or server code through
+# set_protected_metadata can set it; it does not pass to descendants.
+SUBGROUP_POLICY_KEY = "allow_member_subgroups"
 
 GROUP_LAST_ACTIVITY_FREQ = settings.get_static("GROUP_LAST_ACTIVITY_FREQ", 300)
 METRICS_TIMEZONE = settings.get_static("METRICS_TIMEZONE", "America/Los_Angeles")
@@ -67,7 +74,7 @@ class Group(MojoSecrets, MojoModel):
         # for group"), so it is handed back here.
         ALLOW_SAVE_FIELDS = ["uuid"]
         POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate',
-                             'revoke_group_tokens']
+                             'revoke_group_tokens', 'allow_member_subgroups']
         GRAPHS = {
             "simple": {
                 "extra": ["timezone", "short_name", "thumbnail"],
@@ -227,7 +234,7 @@ class Group(MojoSecrets, MojoModel):
     def user_has_permission(self, user, perms, check_user=True):
         if check_user and user.has_permission(perms):
             return True
-        if not hasattr(user, "is_request_user"):
+        if not is_signed_in_user(user):
             return False
         ms = self.get_member_for_user(user, check_parents=True)
         if ms is not None:
@@ -328,11 +335,13 @@ class Group(MojoSecrets, MojoModel):
         from mojo.apps.account.services import group_hierarchy
         # An existing row is locked from here to the write, so what is
         # compared is what is replaced: a save that began before another one
-        # finished waits for it, then sees its result.
+        # finished waits for it, then sees its result. The lock is NO KEY
+        # (group_hierarchy.lock_rows): it excludes other writers of this row,
+        # not the inserts of rows that reference it (#9734).
         with transaction.atomic():
             row, old_parent_id, stored_metadata = None, None, {}
             if self.pk is not None:
-                row = type(self).objects.select_for_update().filter(pk=self.pk).values_list(
+                row = group_hierarchy.lock_rows(type(self).objects.filter(pk=self.pk)).values_list(
                     "metadata", "parent_id").first()
             # A REST save: its permission was judged before this lock, on
             # rows that may have changed since. It is judged again below.
@@ -400,8 +409,11 @@ class Group(MojoSecrets, MojoModel):
         if self.last_activity and not dates.is_today(self.last_activity, METRICS_TIMEZONE):
             metrics.record("group_activity_day", category="group", min_granularity="days")
         if self.last_activity is None or dates.has_time_elsapsed(self.last_activity, seconds=GROUP_LAST_ACTIVITY_FREQ):
-            self.last_activity = dates.utcnow()
-            self.atomic_save()
+            # One column only: a full save of this (possibly stale) copy would
+            # undo a concurrent disable or token-epoch bump (#10297).
+            now = dates.utcnow()
+            type(self).objects.filter(pk=self.pk).update(last_activity=now)
+            self.last_activity = now
 
     def get_metadata(self):
         # converts our local metadata into an objict
@@ -420,6 +432,15 @@ class Group(MojoSecrets, MojoModel):
             meta.protected = objict.fromdict(meta.get("protected") or {})
         meta.protected[key] = value
         self.save(update_fields=["metadata", "modified"])
+
+    def allows_member_subgroups(self):
+        """True when this group's own row opts it into member-created
+        sub-groups: metadata["protected"][SUBGROUP_POLICY_KEY] is exactly
+        True. Anything else, a truthy string or number included, is False.
+        Not inherited: a parent's or ancestor's value says nothing here."""
+        metadata = self.metadata if isinstance(self.metadata, dict) else {}
+        protected = metadata.get("protected")
+        return isinstance(protected, dict) and protected.get(SUBGROUP_POLICY_KEY) is True
 
     # ------------------------------------------------------------------
     # Group-scoped token epoch (bulk revocation, no migration)
@@ -480,7 +501,7 @@ class Group(MojoSecrets, MojoModel):
         # — has no member row, and `.members.filter(user=<ApiKey>)` makes Django
         # raise 'Must be "User" instance.'. Treat it as "no membership" so every
         # caller (guarded or not) degrades to deny/None instead of crashing.
-        if not hasattr(user, "is_request_user"):
+        if not is_signed_in_user(user):
             return None
         # DM-048: a group under a deactivated ancestor is effectively inactive —
         # no membership (direct OR inherited) may resolve from it. One check
@@ -860,6 +881,42 @@ class Group(MojoSecrets, MojoModel):
             request=self.active_request,
         )
 
+    def on_action_allow_member_subgroups(self, value):
+        """Switch the sub-group policy (SUBGROUP_POLICY_KEY, #9107) on or off.
+
+        A system admin's switch (#9126): the person's own global
+        manage_groups or groups, as for disable/reactivate. Off removes the
+        key. The row is read again under its lock first, so the write does
+        not put back protected metadata loaded before someone else's change.
+        """
+        if not self._has_global_permission(WEBAPP_URL_PERMS):
+            raise merrors.PermissionDeniedException(
+                "admin tier (groups / manage_groups) required to change sub-group creation")
+        if not isinstance(value, bool):
+            raise merrors.ValueException("allow_member_subgroups must be true or false")
+        from mojo.apps.account.services import group_hierarchy
+        with transaction.atomic():
+            group_hierarchy.lock_rows(type(self).objects.filter(pk=self.pk)).first()
+            self.refresh_from_db()
+            changed = self.allows_member_subgroups() != value
+            if changed:
+                metadata = self.metadata if isinstance(self.metadata, dict) else {}
+                protected = metadata.get("protected")
+                if not isinstance(protected, dict):
+                    protected = {}
+                if value:
+                    protected[SUBGROUP_POLICY_KEY] = True
+                else:
+                    protected.pop(SUBGROUP_POLICY_KEY, None)
+                metadata["protected"] = protected
+                self.metadata = metadata
+                self.save(update_fields=["metadata", "modified"])
+        if changed:
+            username = getattr(self.active_user, "username", "unknown")
+            self.log(f"{username} turned member sub-group creation {'on' if value else 'off'}",
+                     kind="group:subgroup_policy_changed")
+        return {"status": True, "allow_member_subgroups": value}
+
     def _has_global_permission(self, perms):
         """True only for a signed-in person whose OWN global permissions hold
         one of `perms`, or a superuser.
@@ -968,8 +1025,14 @@ class Group(MojoSecrets, MojoModel):
         save(), for a move and for a new group: this row and the chains of
         every parent involved are locked by then, and the new parent is read
         again (see _parent_as_stored).
+
+        A new group admitted only by its parent's sub-group policy (see
+        on_rest_handle_create) is judged by _guard_policy_create instead.
         """
         if created or not self.pk:
+            if self.__dict__.get("_subgroup_policy_parent_id") is not None:
+                self._guard_policy_create(locked)
+                return
             if self.parent_id is None or self._has_global_permission(WEBAPP_URL_PERMS):
                 return
             if not self._may_manage_tree_position(self._parent_as_stored(locked)):
@@ -995,6 +1058,23 @@ class Group(MojoSecrets, MojoModel):
                 and self._may_manage_tree_position(new_parent)):
             self._refuse_parent_change(stored_parent_id, "Moving a group to another parent")
 
+    def _guard_policy_create(self, locked):
+        """Judge again a create that the parent's sub-group policy admitted.
+
+        The parent must still be the one admitted, still carry the policy,
+        still be effectively active, and the caller must still manage it as a
+        member. Under `locked` the parent and its ancestors are locked by
+        save() and the parent is read again, so a policy switched off, a
+        deactivation or a move that landed first is seen here, and one that
+        comes later waits for this write. Member rows are not locked.
+        """
+        parent = self._parent_as_stored(locked)
+        if parent is None or parent.pk != self._subgroup_policy_parent_id \
+                or not parent.allows_member_subgroups() \
+                or not parent.is_effectively_active() \
+                or not self._may_manage_tree_position(parent):
+            self._refuse_parent_change(None, "Creating a group under this parent")
+
     def _refuse_parent_change(self, stored_parent_id, what):
         logit.warning(
             f"group:parent_change_refused group={self.pk} "
@@ -1003,6 +1083,18 @@ class Group(MojoSecrets, MojoModel):
         raise merrors.PermissionDeniedException(
             f"{what} requires manage_group as a member of every parent "
             "involved, or the global manage_groups (or groups) permission")
+
+    def on_rest_save(self, request, data_dict):
+        # The sub-group switch is an action and runs after the fields are
+        # saved, so a body that also carries fields, a create, or a nested
+        # save of this group is judged here, before anything is written.
+        if isinstance(data_dict, dict) and "allow_member_subgroups" in data_dict:
+            if not self._has_global_permission(WEBAPP_URL_PERMS):
+                raise merrors.PermissionDeniedException(
+                    "admin tier (groups / manage_groups) required to change sub-group creation")
+            if not isinstance(data_dict["allow_member_subgroups"], bool):
+                raise merrors.ValueException("allow_member_subgroups must be true or false")
+        return super().on_rest_save(request, data_dict)
 
     def on_rest_pre_save(self, changed_fields, created):
         self._guard_webapp_url_and_tree(created)
@@ -1173,6 +1265,78 @@ class Group(MojoSecrets, MojoModel):
         if group is not None and not group.is_effectively_active():
             return None
         return group
+
+    @classmethod
+    def on_rest_handle_create(cls, request):
+        """POST /api/group. Group has no tenant field, so the base create
+        gate is the caller's GLOBAL permission. One exception (#9107): a
+        parent the platform opted in (allows_member_subgroups) admits a create
+        directly under it by a person who manages it as a member. Every other
+        create, and every refusal, takes the base path unchanged."""
+        parent = None
+        if cls.get_rest_meta_prop("CAN_CREATE", True) and not cls.rest_check_permission(
+                request, ["CREATE_PERMS", "SAVE_PERMS", "VIEW_PERMS"]):
+            parent = cls._parent_admitting_member_create(request)
+        if parent is None:
+            return super().on_rest_handle_create(request)
+        # The base steps, with the admitted parent put on the new row before
+        # on_rest_save runs: save() judges the create against it again under
+        # its locks (_guard_policy_create). create_from_request cannot carry
+        # it, since the model constructor takes fields only.
+        cls.rest_resolve_request_graph(request, "default")
+        instance = cls()
+        instance._subgroup_policy_parent_id = parent.pk
+        instance.on_rest_save(request, request.DATA)
+        instance.on_rest_created()
+        if cls.get_rest_meta_prop("LOG_CHANGES", False):
+            instance.log(kind="model:created", log=f"{request.user.username} created {instance.pk}")
+        instance.log(
+            kind="group:subgroup_created",
+            log=f"{request.user.username} created {instance.pk} under parent {parent.pk} "
+                "by the parent's sub-group policy")
+        return instance.on_rest_get(request)
+
+    @classmethod
+    def _parent_admitting_member_create(cls, request):
+        """The parent whose sub-group policy admits this create, or None.
+
+        A person only (the bar _has_global_permission uses): a group API key
+        or group token never takes this path. The parent is read from the
+        body's `parent` / `parent_id`, converted the way on_rest_save converts
+        it; two spellings that disagree, or one that is not an id, admit
+        nothing. request.group is never read, so a `group=` naming an opted-in
+        parent cannot lend it to another one.
+        """
+        # is_authenticated first: the signed-out user is an objict, which
+        # answers every attribute, is_request_user's marker included.
+        if not getattr(request.user, "is_authenticated", False) \
+                or is_key_backed_session(request) or not is_request_user(request):
+            return None
+        data = request.DATA
+        parent_id = None
+        for name in ("parent", "parent_id"):
+            if name not in data:
+                continue
+            value = data.get(name)
+            if isinstance(value, bool) or not isinstance(value, (int, str)):
+                return None
+            try:
+                value = int(value)
+            except ValueError:
+                return None
+            if parent_id is not None and value != parent_id:
+                return None
+            parent_id = value
+        if not parent_id:
+            return None
+        parent = cls.objects.filter(pk=parent_id).first()
+        if parent is None or not parent.allows_member_subgroups() \
+                or not parent.is_effectively_active():
+            return None
+        if not parent.user_has_permission(
+                request.user, cls.RestMeta.SAVE_PERMS, check_user=False):
+            return None
+        return parent
 
     @classmethod
     def on_rest_handle_list(cls, request):

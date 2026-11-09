@@ -12,7 +12,7 @@ An operator provisions an `ApiKey` on the downstream project's `Group` with
 floor. An ordinary group administrator cannot assign it: the normal member path
 requires the global `sys.dnsman_acme_federation` grant, while the existing
 global `manage_users` / `manage_groups` key-administration override can also
-assign it. The three endpoints reject JWT users, group tokens, anonymous
+assign it. The three legacy allocation/publish/withdraw endpoints reject JWT users, group tokens, anonymous
 callers, keys without the underlying permission, override sessions whose
 underlying key lacks it, and keys whose project or ancestor project is inactive.
 Authorization and ownership always come from `request.api_key.group`; a
@@ -40,7 +40,7 @@ original group attribution, and exact allocation zone name/id never change.
 Changing configuration affects only new allocations and a target is never
 reused, including re-onboarding the same domain with a new reference.
 
-`AcmeHubChallengeLease` durably stores one immutable `challenge_ref`, its exact
+`AcmeHubChallengeLease` durably stores one immutable participant-local `challenge_ref`, its exact
 complete digest set, state, expiry, and reconciliation timestamps. Publish
 commits pending intent before touching Route53. A PostgreSQL advisory lock per
 allocation covers the lease write and the provider write, and Route53 always
@@ -190,9 +190,13 @@ still present in a config file.
 These settings intentionally use `settings.get_static`: no tenant or DB-backed
 setting can redirect an existing or future allocation.
 
-## Version skew
+## Legacy publish-propagation version skew
 
-The fix belongs on the **hub** side, and only there.
+This section describes the historical legacy publish-propagation fix. Shared
+validation v2 separately detects capabilities404 as unsupported and requires the
+[coordinated hub rollout](#coordinated-hub-rollout) below.
+
+The propagation fix belongs on the **hub** side, and only there.
 
 * **Old client → new hub**: works. This is exactly the deployment that is
   broken today, and upgrading the hub alone repairs it — the reply shape is
@@ -211,7 +215,7 @@ A deployment consuming this hub uses
 `mojo.apps.dnsman.services.acme_hub_client`. This is a challenge-specific HTTP
 transport, not a `DnsProvider`: it is never registered with
 `services/dns.get_adapter()`, cannot list records, and cannot write a
-caller-selected name. The only operations are:
+caller-selected name. Its legacy challenge operations are:
 
 ```python
 allocation = acme_hub_client.allocate(domain, client_ref)
@@ -281,7 +285,8 @@ reserve a globally unique `Domain`; authoritative exact one-hop proof creates
 never registered with general DNS CRUD.
 
 The public lifecycle is `pending → verified ↔ broken`; `retired` tombstones are
-internal. Pending is inert. Once verified, routing is sticky: a changed,
+internal. Legacy `allocated` pending rows are inert; prepared `shared` rows are
+route guards immediately. Once verified, routing is sticky: a changed,
 missing, chained or conflicting alias marks the delegation broken and issuance
 fails closed without falling back to the Domain's old Route53/GoDaddy adapter.
 Verification locks and rechecks the original tenant identity and its effective
@@ -324,3 +329,354 @@ failure is 503. `last_error_code` is a bounded machine diagnostic such as
 `configuration`, `transport`, `response`, `http`, or
 `hub_allocation_mismatch`; UI copy should be driven by the HTTP error and state,
 not by displaying that internal code verbatim.
+
+
+## Shared validation (protocol v2)
+
+An existing allocation controller can authorize explicitly named projects to use
+that allocation's **existing** public target. No new CNAME or target is created.
+This grants certificate issuance authority for the apex **and** wildcard. A
+trusted deployment can obtain a certificate using its own private key; granting
+trust can therefore enable impersonation. No private key, ACME account,
+registrar credential or general DNS capability crosses this protocol.
+
+A controller is the allocation's original project group through a fresh active
+protected federation key, or a genuine interactive platform superuser using the
+shared `services.authorization.is_platform_admin` policy. Acting-superuser
+keys, GroupScopedToken, ordinary DNS/Sites/security managers, key administrators
+and a caller-selected group cannot confer this authority. Every management
+operation repeats the allocation-row check. Protected-key capabilities indicate
+eligibility, never authority over every allocation.
+
+`AcmeHubParticipant` binds a permanent random `participant_ref`, immutable
+consumer project UUID, original group, consumer-local `client_ref`, allocation
+and role (`owner` or `trusted`). `(consumer_project_uuid, client_ref)` is unique
+across both roles. One owner is backfilled for every old allocation, including
+allocations whose group was deleted; historical leases are bound to that owner
+without changing PKs, values, state, expiry, errors or reconciliation timestamps.
+A null original group cannot be inherited by a recreated project.
+
+Project identity validation accepts existing sixteen-character lowercase hex
+Group IDs as well as canonical full UUIDs. Hub lookups and trust bindings retain
+the exact stored identity; no Group is rewritten or padded. Installed profiles
+retain short IDs and continue normalizing full UUIDs to compact hex. Participant,
+deployment and connection reference validation is unchanged.
+
+Grant creates a trusted participant; join only validates that grant and exact
+one-hop alias, and creates nothing. Revocation is a permanent tombstone. Exact
+active grant retries are idempotent; revoked references never reactivate or
+rebind. Regrant needs a fresh persisted consumer-local ref. Owner participants
+cannot be revoked through trust APIs. Legacy allocate creates allocation and
+owner participant atomically and conflicts on an already-trusted local ref,
+rather than minting a competing target.
+
+Every lease has a required participant FK and uniqueness on
+`(participant, challenge_ref)`. All writes, withdrawals, revocations, expiry and
+reconciliation hold the existing allocation advisory lock through provider
+submission. Publication repeats fresh key/group and trust checks **inside** the
+lock after DNS proof. The union excludes elapsed and revoked participants, and
+deduplicates identical values without conflating challenge refs across projects.
+Revocation commits before provider cleanup. Ambiguous provider failures leave
+durable, unconfirmed cleanup for repeated revoke/withdraw or the fair sweep.
+An active rotated protected key in the same original group may withdraw an old
+revoked participant's leases without alias proof; dead credentials and inactive
+projects are never admitted for cleanup.
+
+Cleanup is bounded by the existing lease lifetime
+`DNSMAN_ACME_HUB_LEASE_SECONDS` (default 900, clamped 60–86400 seconds), the
+five-minute sweep cadence and provider availability. Do not promise cleanup
+while the provider is unavailable. Revocation cannot revoke an already-issued
+certificate or undo a CA request accepted before revocation.
+
+### Connection request handshake
+
+Read-only preflight calls `acme_hub_client.capabilities()` and
+`lookup(domain, allocation_ref=None, cursor=None)` before any local row is
+created. A hub returning capabilities404 reports
+`shared_validation_unsupported`; never fall back to a new allocation for an
+already-used CNAME. Existing ordinary DNS and legacy delegation remain usable.
+
+Project setup owns preparing a fresh persisted local ref and exporting:
+
+```json
+{"version":1,"consumer_project_uuid":"0123456789abcdef0123456789abcdef",
+ "client_ref":"persisted-consumer-local-ref","domain":"customer.example",
+ "allocation_ref":"existing-target.acme-hub.example.net"}
+```
+
+The object contains no URL/key/token and has no authority by itself. The
+controller resolves the exact recipient, recognizes its bounded label and the
+apex+wildcard scope, and explicitly grants the descriptor. The consumer rechecks
+and joins with the **same persisted ref**. Public CNAME knowledge cannot join or
+self-grant. A non-controller can export a request and await authorization without
+creating a privileged credential or editing database rows.
+
+The narrow configured client adds `status(client_ref)`,
+`join(domain, client_ref, allocation_ref)`, `list_allocations(domain, cursor=None)`,
+`list_participants(allocation_ref, cursor=None)`,
+`resolve_recipient(allocation_ref, consumer_project_uuid)`, `grant(connection_request)`
+and `revoke(allocation_ref, participant_ref)`. Helpers use fixed paths and strict
+separate v2 DTO validation; no caller URL/key arguments. Existing file-only
+`DNSMAN_ACME_HUB_URL` and `DNSMAN_ACME_HUB_API_KEY` settings retain custody, TLS,
+redirect, retry and timeout safeguards. Shared responses have a bounded 64KiB
+wire budget to accommodate 20 complete DTOs; legacy replies retain 16KiB.
+
+The consumer/controller HTTP contract, exact DTO keys, safe error tokens and
+pagination are documented in the [REST reference](../../web_developer/dnsman/README.md#shared-validation-v2).
+Alias status is an authoritative single-source CNAME observation, **not** TXT
+propagation or certificate convergence. Consumer responses never disclose other
+participants' identities, lease refs or TXT values. Audit entries record action,
+result, actor, participant UUID, consumer UUID, role and counts, never digests,
+zone IDs or secrets.
+
+### Coordinated hub rollout
+
+Deploy a normal release newer than 1.39.1 to every expected node through the
+existing deployment controls. Shared capabilities remain off until a genuine
+interactive superuser enables them in the existing Portal. The action checks
+the selected latest converged deployment, exact UUID/SHA/framework and complete
+fresh frozen-roster proofs, then atomically binds owners under the existing
+PostgreSQL admission lock. Existing published 1.38 owners and already-pinned trusted participants continue
+normal issuance before enablement; no new trust is inferred. Missing installation state fails closed.
+
+See [the small rollout and rollback boundary](HubUpgrade.md). No separate
+operator login, root service, enrollment, process attestation or recovery floor
+is required. Normal deployment policy rejects framework versions below the
+recorded enablement version. Unmanaged older writers and manual package
+rollback across the sharing boundary are unsupported.
+
+Legacy allocation data stays four fields and publish/withdraw six. Domain,
+provider, certificate and vhost references stay in place. Source shipment does
+not publish a package, deploy production or activate a live installation.
+
+## Supported project setup
+
+`services/delegation_setup.py` is the local contract for an authorized project
+operator or agent to reuse an existing allocation. REST, `aws-check` and the
+[DNS assistant tools](../assistant/dns_tools.md) return the same versioned
+[Readiness v1](../../web_developer/dnsman/README.md#readiness-v1) object.
+Inspection, durable preparation, joining, persisted proof and certificate
+request are separate actions. None of them grants hub trust.
+
+The target is either an existing local `Domain` id, or an active local group
+plus a normalized apex name. An existing same-name Domain must belong to that
+exact group. Setup never adopts a house zone, moves a Domain, creates a group,
+changes its provider/credential/hosted-zone configuration, or replaces its
+certificate or vhost references. A groupless house Domain is read-only and
+ineligible: mutation capabilities are false, no descriptor is exported, and
+`next_action` is `unsupported_domain_scope` for the deployment operator.
+Shared setup currently requires a group-managed domain; existing direct-provider
+operation remains available.
+
+The local tenant UUID and hub consumer project UUID are different identities.
+The consumer UUID comes only from capabilities authenticated by the configured
+hub key's original group. It must never be inferred from `Domain.group`, an
+interactive controller session, DNS, or user input.
+
+### Prepare, authorize, connect, check, request
+
+The examples use fake public names and references. Authentication is omitted.
+A project administrator performs these local calls with the appropriate DNS
+permission; only the allocation controller performs the intervening grant.
+
+1. Inspect without creating rows, refs, accounts or jobs:
+   `GET /api/dnsman/delegation/plan?domain=12&allocation_ref=existing-target.acme-hub.example.net`.
+   Failed DNS observations do not demote a verified connection on this read.
+2. Prepare with `POST /api/dnsman/delegation/connect` and
+   `{"domain":12,"allocation_ref":"existing-target.acme-hub.example.net"}`.
+   Local authorization and read-only hub capabilities/own-participant lookup
+   precede preparation. Unconfigured, unsupported or unauthorized preflight
+   leaves direct routing unchanged. Successful preparation commits a fresh
+   immutable ref, shared mode, allocation and consumer identity before an
+   ambiguous status/join call. Missing trust yields `grant_trust` and a public
+   request of exactly this shape:
+
+   ```json
+   {
+     "version": 1,
+     "consumer_project_uuid": "0123456789abcdef0123456789abcdef",
+     "client_ref": "11111111-2222-4333-8444-555555555555",
+     "domain": "customer.example",
+     "allocation_ref": "existing-target.acme-hub.example.net"
+   }
+   ```
+
+   Export the object as returned. It contains no secret and has no authority
+   by itself. Display the scope separately as
+   `["customer.example","*.customer.example"]`.
+3. The controller imports that object into
+   `POST /api/dnsman/acme/trust/grant` as `{"connection_request": ...}` after
+   recognizing the exact recipient and the issuance authority being granted.
+   Ordinary local `manage_dns` cannot perform this grant or mint the protected
+   key. The existing public CNAME and allocation remain unchanged.
+4. Replay the same local Connect input after grant. It reuses the stored ref,
+   rechecks the configured consumer identity and pins the exact participant,
+   source and target. A lost response is retried with that same ref. Changing
+   the configured key to a different project reports `identity_changed` and
+   cannot repin the connection.
+5. Run `POST /api/dnsman/delegation/check` with `{"delegation":9}`. This is
+   the explicit state-changing proof step: it rechecks local ownership, active
+   grant, fixed scope and exact one-hop CNAME, then reuses `delegation.verify`.
+   An existing direct-provider Domain is bound without rewriting it. A new
+   external name becomes the existing certificate-only `provider="mojo"`
+   Domain only after proof succeeds.
+6. Run `POST /api/dnsman/delegation/request` with `{"delegation":9}`.
+   The exact apex-plus-wildcard request is queued through the existing
+   certificate service. An exact valid certificate outside its renewal
+   window returns `already_current`; a real pending/running job or active
+   issuer returns `already_queued`; a due active certificate renews its existing
+   id. Pending/issuing rows with terminal or missing jobs return `job_held`
+   unchanged and direct inspection. Conflicting SAN profiles
+   are refused rather than converted. Poll Plan for status.
+
+### Immutable generations and routing
+
+`AcmeDelegation.connection_mode` defaults old rows to `allocated`; `shared`
+rows pin `hub_allocation_ref`, `hub_consumer_project_uuid` and, once known,
+`hub_participant_ref`. These are server-owned immutable bindings. Generic
+creation/update/deletion remain disabled and `DENY_AI` blocks model-tool
+bypass. Client refs stay unique and the active tenant/name constraint remains.
+The target is no longer globally unique across local historical generations:
+a successor must be able to reuse the existing public target.
+
+Connect with `restart:true` is an explicit recovery action only for a revoked
+binding or an unjoined pending request. It retires the old generation and
+commits a fresh ref for the same allocation; the old ref is never edited,
+revived or given the new grant. Outstanding cleanup must be settled first.
+Export the new descriptor and ask the controller for a new grant. Repeating
+ordinary Connect keeps the existing ref. Neither path resets valid certificate
+material, `renew_after`, certificate ids or vhost references.
+
+`delegation.routing_for_domain(domain)` is the canonical route selector;
+`for_domain` is its compatibility wrapper. It chooses the newest live shared
+request, including pending, or an ever-verified tombstone, including retired.
+`routing_for_domains(domain_ids)` returns a domain-id-to-row map in one query;
+`routed_domain_ids()` returns a composable one-column queryset with the same
+selector. Consumers must use these helpers instead of reproducing the rule or
+checking only `Domain.provider`. A returned row is a route/deny guard, not proof
+that a usable wildcard private key exists. Sites must separately establish
+active, readable, exact-profile DNSMan material before selecting it.
+
+Preparation locks Domain first, collects certificate ids in stable order, and
+tries each existing certificate issue advisory lock before taking Certificate
+row locks. A busy issuer is refused immediately. This avoids the inverse lock
+order of an issuer holding the advisory lock before its joined
+Certificate/Domain row lock. Direct reservations and delegated cleanup are
+settled before the shared guard commits; locks are released before join calls.
+Verify, ownership checks, legacy initiation with an existing
+Domain and shared preparation all lock Domain, Group and Delegation in that
+order. A Check rechecks the locked current generation after DNS proof: a
+restart that completed during proof leaves the old row retired and returns
+`stale_connection`, rather than reviving the old reference. Wildcard Request
+also rechecks its generation under the Domain lock and tries issue advisory
+ownership before the existing certificate request takes Certificate row locks.
+An active issuer returns `already_queued` without a duplicate job.
+
+No worker performs direct-provider reservation cleanup after it has selected
+shared routing. Shared issuance refreshes grant and consumer identity before
+CA account/order creation and again before publish. Withdrawal continues to
+use the original local ref/challenge ref after revocation; it does not require
+active publish trust. Inactive keys/groups remain refused and hub expiry/sweep
+owns eventual cleanup when credentials are unavailable.
+
+### Deploying and recovering the downstream
+
+Deliver `DNSMAN_ACME_HUB_URL` and `DNSMAN_ACME_HUB_API_KEY` through the
+installation's existing static Django settings delivery. They are read with
+`settings.get_static`; the normal server loader reads `VAR_ROOT/django.conf`
+once per process. Restart API processes and all issuance workers after
+configuration or binary updates. No database setting, browser credential
+field, CLI key option, remote-agent key input or credential readback is added.
+The configured normalized origin and fixed paths remain the only destinations.
+
+Upgrade the hub first using its drain/migrate sequence above. Apply the next
+DNSMan migration, which defaults legacy rows to allocated mode, adds nullable
+shared bindings and relaxes historical target uniqueness. It does not rewrite
+Domain or Certificate rows. Drain every old downstream issuance worker and
+restart API/worker processes with the new routing/grant checks before accepting
+shared Connect. Old workers ignore pending shared guards and cannot safely
+handle these rows. Prove scheduled renewal with stubbed hub/DNS/CA and the
+existing KMS/edge handoff before any separately authorized production adoption.
+`renewal.worker_version` remains unknown without established worker telemetry;
+the API version cannot prove a long-lived worker restarted.
+
+Before any shared connection, application code can be rolled back with the
+additive schema retained. Once shared rows exist, keep the new guards: do not
+downgrade binaries, delete rows, or retire a connection merely to regain direct
+renewal. Retain still-valid serving material, revoke trust through the core if
+needed, repair static configuration/alias/grant, and use explicit fresh-ref
+restart where allowed. Returning a formerly shared name to direct DNS requires
+a separately authorized DNS handover. The software change authorizes no live
+DNS, credential, certificate, vhost or production-adoption change.
+
+### Temporary certificate ownership and queued workers
+
+Setup releases temporary issue advisory locks while the Domain transaction is
+still held, before commit callbacks expose a new job. A worker that encounters
+any temporary owner reports the fixed `dnsman_certificate_busy` outcome instead
+of completing a skipped renewal. Its existing Job receives a durable Jobs
+retry budget of 8, including jobs originally configured with zero retries
+(at most eight busy attempts).
+Only that lock collision is retryable at the Jobs boundary: CA/validation
+failures retain certificate backoff and valid serving material.
+
+If busy retries exhaust (or expire while busy), the existing certificate cron
+can recover due renewals and initial pending issuance through the existing Jobs
+replacement-retry service. Root/leaf locks serialize one exact replacement;
+consumer profile, function, certificate id and channel stay fixed. Recovery
+follows the actual replacement leaf and stops for cancellation, completion or a
+different failure. It does not revive an operator-canceled job. Readiness keeps
+serving validity separate, reports an exhausted busy worker as failed and points
+to `repair_worker`. Request returns `job_held` without changing a preserved
+terminal job (including completion), or a pending/issuing row without a Job.
+Only a real queued/running job or observed active issuer justifies
+`already_queued`; held work directs inspection. No extra scheduler or installer
+is introduced.
+
+## Operator connection and protected recipient keys
+
+Use the [protected Fleet topic](../account/admin_portal/fleet_configuration.md#protected-shared-validation-configuration)
+to configure an installed approved hub and write-only credential. Database Settings
+do not configure the downstream client. Application delivery owns the trusted
+profile catalog, both schema/delegation planes and fixed node-proof enrollment.
+Configuration can be verified against authenticated protocol v2 while sharing is
+inactive; sharing operations remain unavailable until actual hub activation.
+
+Shared Connect/restart and protected configuration changes use nonblocking
+transaction-scoped identity admission. A competing owner returns
+`configuration_busy` (HTTP 409) before local intent is inserted/retired or a hub
+mutation is attempted. This also applies when an application already holds its
+Domain/issuer fences: let the failed operation unwind those fences, Refresh the
+current plan/configuration, and explicitly retry. Never automatically replay the
+mutation. A retry rechecks the complete published and authenticated loaded tuple;
+a changed identity is still refused as `hub_identity_changed`. Applications do not
+need a private framework lock context. Unchanged managed tuples continue to bypass
+identity admission and hub probes for unrelated Fleet/GeoIP publication.
+Even a newly observed participant revocation leaves all connection diagnostics
+unchanged on busy refusal. Admitted restart records that observation only after
+fresh tenant/immutable-reference checks bind it to the exact predecessor.
+
+On the hub, `GET /api/account/admin/fleet/shared-validation/recipient` accepts only
+`consumer_project_uuid`, the exact original Group UUID. It returns the actual
+`consumer_project_uuid`, `consumer_label`, purpose `acme_validation_consumer`,
+permission `dnsman_acme_federation`, `can_issue`, and `grant_explanation`. It never
+lists all projects or derives hub identity from a downstream tenant.
+
+`POST` accepts exactly `consumer_project_uuid`, `expected_consumer_label`, `label`,
+and `purpose:"acme_validation_consumer"`. It rechecks the live literal interactive
+superuser, effective Group activity, confirmed current label and existing protected
+grant rules under the installation lock. The key is unlinked, non-override and has
+exactly `dnsman_acme_federation`. The response returns safe `api_key` identity,
+recipient identity, purpose, and a transient `token` in the existing no-store
+secret-response pattern. This does not grant allocation trust or activate the hub.
+The existing audited key-token reveal graph remains supported; do not describe this
+as an unrecoverable one-time key.
+
+For staged rotation: issue a replacement key, preview/publish the connection,
+Apply, verify every expected node, then explicitly deactivate the predecessor on
+the hub using `/api/account/admin/apikey/action`. The existing in-place `rotate`
+action immediately invalidates its previous token and must be presented with that
+consequence. Deactivate/revoke and audited reveal retain their existing owners.
+After ambiguous issuance, refetch the key inventory before replaying a secret-bearing
+mutation. Project administrators receive safe connection repair/status codes and
+the deployment-operator handoff, never this private catalog or an editable credential.

@@ -36,6 +36,7 @@ def _write_file(tmpdir, storage_file_path, data):
 
 @th.django_unit_setup()
 def setup_shortlink_urls(opts):
+    from django.db.models import Q
     from mojo.apps.account.models import User
     from mojo.apps.fileman.models import FileManager, File, FileRendition
     from mojo.apps.shortlink.models import ShortLink
@@ -108,10 +109,13 @@ def setup_shortlink_urls(opts):
     pub.save(update_fields=["mojo_secrets", "modified"])
     opts.fm_pub_id = pub.pk
 
+    # Scoped to this file's users, before their files go (the link's file is
+    # SET_NULL): test_fileman_cdn makes "fileman" links in parallel (#7538).
+    ShortLink.objects.filter(source__in=["fileman", "fileman-share"]).filter(
+        Q(file__user__in=[u1, u2]) | Q(user__in=[u1, u2])).delete()
     File.objects.filter(user__in=[u1, u2]).delete()
     FileRendition.objects.filter(
         original_file__file_manager__name__startswith="test_sl_fm").delete()  # scoped: never wipe other packages' renditions (#2792)
-    ShortLink.objects.filter(source__in=["fileman", "fileman-share"]).delete()
 
 
 def _mk_file(opts, filename="tier1.txt", file_manager_id=None, content=b"hi"):
@@ -698,14 +702,17 @@ def test_rendition_list_group_scoped(opts):
 
 @th.django_unit_setup()
 def cleanup_shortlink_tests(opts):
+    from django.db.models import Q
     from mojo.apps.fileman.models import FileManager, File, FileRendition
     from mojo.apps.shortlink.models import ShortLink
 
-    File.objects.filter(user__in=[opts.user, opts.user2]).delete()
+    users = [opts.user, opts.user2]
+    ShortLink.objects.filter(source__in=["fileman", "fileman-share", "manual"]).filter(
+        Q(file__user__in=users) | Q(user__in=users)).delete()
+    File.objects.filter(user__in=users).delete()
     FileRendition.objects.filter(
         original_file__file_manager__name__startswith="test_sl_fm").delete()  # scoped: never wipe other packages' renditions (#2792)
     FileManager.objects.filter(pk__in=[opts.fm_id, opts.fm_pub_id]).delete()
-    ShortLink.objects.filter(source__in=["fileman", "fileman-share", "manual"]).delete()
 
     if os.path.exists(opts.tmpdir):
         _shutil.rmtree(opts.tmpdir, ignore_errors=True)

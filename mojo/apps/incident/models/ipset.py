@@ -1,3 +1,5 @@
+import ipaddress
+
 from django.db import models
 from mojo.models import MojoModel
 from mojo.helpers import dates, logit
@@ -40,6 +42,23 @@ def _parse_tor_exit_list(text):
             if len(parts) >= 2:
                 ips.append(parts[1])
     return ips
+
+
+def _split_cache_families(lines):
+    """Keep IPv4 and malformed cache lines, counting valid IPv6 entries."""
+    kept = []
+    dropped = 0
+    for line in lines:
+        try:
+            network = ipaddress.ip_network(line, strict=False)
+        except (TypeError, ValueError):
+            kept.append(line)
+            continue
+        if network.version == 4:
+            kept.append(line)
+        else:
+            dropped += 1
+    return kept, dropped
 
 
 class IPSet(models.Model, MojoModel):
@@ -360,6 +379,7 @@ class IPSet(models.Model, MojoModel):
 
     def refresh_from_source(self):
         """Fetch latest CIDR data from the configured source."""
+        self.refresh_dropped = 0
         if self.source == "manual":
             return False
 
@@ -376,6 +396,20 @@ class IPSet(models.Model, MojoModel):
                 return False
 
             if data is not None:
+                if self.is_cache_only:
+                    data, self.refresh_dropped = _split_cache_families(data)
+                    if self.refresh_dropped and not data:
+                        self.sync_error = "source_refresh_no_ipv4"
+                        self.save(update_fields=["sync_error", "modified"])
+                        logit.warning(
+                            f"IPSet refresh for {self.name} refused a feed "
+                            f"with {self.refresh_dropped} non-IPv4 entries "
+                            "and no IPv4 entries")
+                        return False
+                    elif self.refresh_dropped:
+                        logit.info(
+                            f"IPSet refresh for {self.name} dropped "
+                            f"{self.refresh_dropped} non-IPv4 entries")
                 self.set_data(data)
                 self.sync_error = None
                 self.save(update_fields=[

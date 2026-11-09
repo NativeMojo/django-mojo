@@ -1,0 +1,1053 @@
+"""Health snapshot observations, causal proof and bounded primary transactions.
+
+Source observation time is independent of collection/publication time. These
+pure projectors are also used by the scheduled collectors; HTTP reads never
+invoke a collector.
+"""
+import copy
+import hashlib
+import ipaddress
+import json
+import math
+import selectors
+import time
+import uuid
+import threading
+from contextlib import contextmanager
+from datetime import datetime, timedelta, timezone
+
+PROFILE_VERSION = 2
+MAX_AGE_SECONDS = 420
+FUTURE_TOLERANCE_SECONDS = 30
+MAX_CONDITIONS = 1024
+MAX_BASIS = 8
+GRANTS = ("platform", "aws", "jobs")
+GOOD_SOURCE_STATUSES = ("ok", "stale")
+HOST_SOURCE_POLICY = {"host_metrics": "runtime", "cloudwatch_host_metrics": "optional", "provider_presence": "optional"}
+
+
+class EvidenceError(Exception):
+    def __init__(self, code):
+        self.code = code
+        super().__init__(code)
+
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
+def timestamp(value):
+    return value.astimezone(timezone.utc).isoformat() if value is not None else None
+
+
+def parse_time(value):
+    try:
+        result = value if isinstance(value, datetime) else datetime.fromisoformat(value.replace("Z", "+00:00"))
+        return result.astimezone(timezone.utc) if result.tzinfo is not None else None
+    except (ValueError, TypeError, AttributeError, OverflowError):
+        return None
+
+
+def canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), allow_nan=False)
+
+
+def digest(value):
+    return hashlib.sha256(canonical(value).encode()).hexdigest()
+
+
+def valid_time(value, now):
+    result = parse_time(value)
+    return result if result is not None and result <= now + timedelta(seconds=30) else None
+
+
+def slot(source_id, component_id, slot_id, *, source, required_grant,
+         observed_at=None, collected_at=None, source_identity=None,
+         status="ok", reason=None, value=None, unit=None, required=True,
+         period_seconds=None, provenance=None, limits=None, truncated=False,
+         previous=None, now=None):
+    """Build one authoritative source slot; failed attempts cannot renew facts.
+
+    A successful collection of an old provider sample is still a successful
+    read, but its sample identity and provider deadline remain old. A proved
+    target failure is an ordinary valid value (for example reachable=False),
+    rather than a collector exception.
+    """
+    now = now or utcnow()
+    if required_grant not in GRANTS or type(required) is not bool:
+        raise EvidenceError("invalid_source_grant")
+    if not isinstance(slot_id, str) or not slot_id or len(slot_id) > 256:
+        raise EvidenceError("invalid_slot_id")
+    sample = valid_time(observed_at, now)
+    collected = valid_time(collected_at, now)
+    try:
+        canonical(value)
+    except (ValueError, TypeError, OverflowError):
+        status, reason, value = "unknown", "source_value_invalid", None
+    valid = status in GOOD_SOURCE_STATUSES and sample is not None and collected is not None
+    identity = copy.deepcopy(source_identity or {})
+    output = dict(slot_id=slot_id, source=source, source_identity=identity,
+                  status=status, reason=reason, required=required,
+                  required_grant=required_grant, observed_at=None,
+                  collected_at=timestamp(collected), last_success_at=None,
+                  fresh_until=None, sample_id=None, value=None, unit=unit,
+                  provenance=copy.deepcopy(provenance or {}),
+                  limits=copy.deepcopy(limits or {}), truncated=bool(truncated))
+    if not valid:
+        if status in GOOD_SOURCE_STATUSES:
+            output.update(status="unknown", reason="source_time_invalid")
+        if previous:
+            output["prior"] = {key: copy.deepcopy(previous.get(key)) for key in (
+                "observed_at", "collected_at", "last_success_at", "fresh_until",
+                "sample_id", "value", "unit", "source_identity")}
+            for key in ("last_success_at", "fresh_until", "sample_id"):
+                output[key] = previous.get(key)
+        return output
+    # The tolerance validates slight source skew; it grants no extra freshness.
+    fresh_until = min(sample, now) + timedelta(seconds=MAX_AGE_SECONDS)
+    output.update(observed_at=timestamp(sample), last_success_at=timestamp(collected),
+                  value=copy.deepcopy(value), sample_id=digest([
+                      source_id, component_id, slot_id, identity, timestamp(sample)]))
+    if period_seconds is not None:
+        if type(period_seconds) not in (int, float) or not math.isfinite(period_seconds) or period_seconds <= 0:
+            raise EvidenceError("invalid_metric_period")
+        fresh_until = min(min(sample, now) + timedelta(seconds=period_seconds * 3),
+                          min(collected, now) + timedelta(seconds=MAX_AGE_SECONDS))
+        output.update(period_seconds=period_seconds,
+                      expected_cadence_seconds=period_seconds,
+                      provider_lag_seconds=max(0, (collected - sample).total_seconds()))
+    output["fresh_until"] = timestamp(fresh_until)
+    if fresh_until <= now:
+        output.update(status="stale", reason=reason or "sample_expired")
+    return output
+
+
+def slot_is_fresh(value, now):
+    until = parse_time(value.get("fresh_until"))
+    observed = valid_time(value.get("observed_at"), now)
+    maximum = slot_deadline(value)
+    return bool(value.get("status") == "ok" and not value.get("truncated")
+                and observed is not None and until is not None and until > now
+                and maximum is not None and until <= maximum
+                and until <= now + timedelta(seconds=min(MAX_AGE_SECONDS, 3*value["period_seconds"]) if value.get("period_seconds") is not None else MAX_AGE_SECONDS)
+                and valid_time(value.get("collected_at"), now) is not None
+                and valid_time(value.get("last_success_at"), now) is not None
+                and isinstance(value.get("sample_id"), str))
+
+
+def slot_deadline(value):
+    sample, collected = parse_time(value.get("observed_at")), parse_time(value.get("collected_at"))
+    if sample is None or collected is None:
+        return None
+    period = value.get("period_seconds")
+    if period is None:
+        return sample + timedelta(seconds=MAX_AGE_SECONDS)
+    if type(period) not in (int, float) or not math.isfinite(period) or period <= 0:
+        return None
+    return min(sample + timedelta(seconds=3 * period), collected + timedelta(seconds=MAX_AGE_SECONDS))
+
+
+def condition(component_id, rule, resource_key, outcome, basis, *, impact="operational", reason=None, now=None):
+    """Typed predicate proof; only fresh authoritative source slots form a basis."""
+    if outcome not in ("pass", "fail", "unknown", "not_applicable") or impact not in ("availability", "operational"):
+        raise EvidenceError("invalid_condition")
+    if not isinstance(basis, list) or len(basis) > MAX_BASIS:
+        raise EvidenceError("condition_basis_limit")
+    now = now or utcnow()
+    if outcome in ("pass", "fail") and (not basis or not all(slot_is_fresh(row, now) for row in basis)):
+        outcome, reason = "unknown", "causal_basis_unavailable"
+    return {"condition_key": digest([component_id, PROFILE_VERSION, rule, resource_key]),
+            "outcome": outcome, "impact": impact, "reason": reason,
+            "basis": [{"slot_id": row["slot_id"], "resource_key": resource_key,
+                       "sample_id": row.get("sample_id"), "observed_at": row.get("observed_at"),
+                       "fresh_until": row.get("fresh_until")} for row in basis]}
+
+
+def component(source_id, kind, resource_id, evidence, conditions, *, service_id=None,
+              resource_scope="installation", resource_owner_source_id=None,
+              required=True, coverage_complete=True, reasons=None, now=None, identity_grant=None):
+    """Conservative component rollup; a proved outage survives independent gaps."""
+    now = now or utcnow()
+    owning_grants = {row["required_grant"] for row in evidence}
+    identity_grant = identity_grant or (next(iter(owning_grants)) if len(owning_grants) == 1 else "platform")
+    if identity_grant not in GRANTS:
+        raise EvidenceError("invalid_identity_grant")
+    component_id = kind + ":" + resource_id
+    required_slots = [row for row in evidence if row.get("required", True)
+                      and row.get("status") != "not_applicable"]
+    fresh = [row for row in required_slots if slot_is_fresh(row, now)]
+    complete = bool(coverage_complete and required_slots and len(fresh) == len(required_slots))
+    failures = [row for row in conditions if row["outcome"] == "fail"]
+    required_ids = {row["slot_id"] for row in required_slots}
+    deciding = [row for row in conditions if row["outcome"] != "unknown" or not row.get("basis")
+                or any(fact["slot_id"] in required_ids for fact in row["basis"])]
+    availability = ("down" if any(row["impact"] == "availability" for row in failures) else
+                    "up" if any(row["outcome"] == "pass" and row["impact"] == "availability" for row in conditions) else "unknown")
+    status = ("unhealthy" if availability == "down" else "degraded" if failures else
+              "healthy" if complete and all(row["outcome"] in ("pass", "not_applicable") for row in deciding)
+              else "stale" if any(row.get("status") == "stale" for row in required_slots) else "unknown")
+    observations = [parse_time(row.get("observed_at")) for row in required_slots]
+    deadlines = [parse_time(row.get("fresh_until")) for row in required_slots]
+    successes = [parse_time(row.get("last_success_at")) for row in required_slots]
+    all_known = lambda values: bool(values) and all(value is not None for value in values)
+    return {"component_id": component_id, "kind": kind, "resource_scope": resource_scope,
+            "resource_id": resource_id, "resource_owner_source_id": resource_owner_source_id or source_id,
+            "identity_grant": identity_grant,
+            "service_id": service_id, "required": required, "status": status, "availability": availability,
+            "observed_at": timestamp(min(observations)) if all_known(observations) else None,
+            "last_success_at": timestamp(min(successes)) if all_known(successes) else None,
+            "fresh_until": timestamp(min(deadlines)) if all_known(deadlines) else None,
+            "sample_id": digest([source_id, component_id, sorted((row["slot_id"], row.get("sample_id")) for row in evidence)]),
+            "reasons": list(reasons or []), "evidence": copy.deepcopy(evidence),
+            "conditions": copy.deepcopy(conditions), "coverage": {
+                "expected_total": len(required_slots), "returned_total": len(required_slots),
+                "observed_total": sum(value is not None for value in observations),
+                "fresh_total": len(fresh), "unknown_total": len(required_slots) - len(fresh),
+                "omitted_total": 0, "complete": complete, "truncated": False, "reasons": []}}
+
+
+def _drive(generator, deadline, *, clock=None, fileno=None):
+    """Consume psycopg's nonblocking protocol without an uncancellable worker."""
+    clock = clock or time.monotonic
+    try:
+        state = next(generator)
+        while True:
+            fd, wanted = state if fileno is None else (fileno, state)
+            remaining = deadline - clock()
+            if remaining <= 0:
+                raise EvidenceError("database_deadline_exceeded")
+            with selectors.DefaultSelector() as selector:
+                selector.register(fd, int(wanted))
+                ready = selector.select(min(remaining, 0.1))
+            state = generator.send(ready[0][1] if ready else 0)
+    except StopIteration as stopped:
+        return stopped.value
+    finally:
+        generator.close()
+
+
+def _primary_connection(deadline, *, resolver=None, clock=None):
+    """Private primary PostgreSQL connection, bounded numeric DNS + libpq poll.
+
+    Never edits the shared Django connection, pool or transaction. Engines and
+    connection modes whose acquisition cannot be bounded are explicit gaps.
+    """
+    from django.db import connections
+    import psycopg
+    from psycopg import pq
+    from psycopg.conninfo import make_conninfo
+    from mojo.helpers.dns.probe import resolve_addresses
+    clock = clock or time.monotonic
+    primary = connections["default"]
+    if primary.vendor != "postgresql":
+        raise EvidenceError("database_engine_unsupported")
+    if not primary.settings_dict.get("NAME"):
+        raise EvidenceError("database_connection_mode_unsupported")
+    params = dict(primary.get_connection_params())
+    for key in ("cursor_factory", "row_factory", "context", "prepare_threshold"):
+        params.pop(key, None)
+    host = params.get("host")
+    if (not isinstance(host, str) or not host or "," in host or params.get("service")
+            or "," in str(params.get("port", ""))):
+        raise EvidenceError("database_connection_mode_unsupported")
+    if not host.startswith("/"):
+        addresses = (resolver or resolve_addresses)(host, deadline)
+        if not addresses:
+            raise EvidenceError("database_dns_unavailable")
+        params["hostaddr"] = str(ipaddress.ip_address(addresses[0]))
+    params.update(gssencmode="disable", target_session_attrs="any")
+    params["options"] = str(params.get("options") or "") + " -c statement_timeout=750 -c lock_timeout=750"
+    raw = pq.PGconn.connect_start(make_conninfo(**params).encode())
+    try:
+        while True:
+            if clock() >= deadline:
+                raise EvidenceError("database_deadline_exceeded")
+            state = raw.connect_poll()
+            if state == pq.PollingStatus.OK:
+                break
+            if state not in (pq.PollingStatus.READING, pq.PollingStatus.WRITING):
+                raise EvidenceError("database_connection_unavailable")
+            with selectors.DefaultSelector() as selector:
+                selector.register(raw.socket, selectors.EVENT_READ if state == pq.PollingStatus.READING else selectors.EVENT_WRITE)
+                selector.select(min(0.1, max(0, deadline - clock())))
+        class DeadlineConnection(psycopg.Connection):
+            def wait(self, generator, interval=0.1):
+                return _drive(generator, min(deadline, self.operation_deadline), clock=clock, fileno=self.pgconn.socket)
+        raw.nonblocking = 1
+        result = DeadlineConnection(raw)
+        result.operation_deadline = deadline
+        result.autocommit = True
+        return result
+    except BaseException:
+        raw.finish()
+        raise
+
+
+@contextmanager
+def primary_cursor(deadline, *, connect=None, clock=None, max_queries=16, budget=None, transactional=True):
+    """Private primary cursor; optional transaction, <=750ms per SQL operation."""
+    clock = clock or time.monotonic
+    connection = (connect or _primary_connection)(deadline)
+    raw = connection.cursor()
+    count = 0
+    class Cursor:
+        def execute(self, sql, params=None):
+            nonlocal count
+            if clock() >= deadline or count >= max_queries:
+                raise EvidenceError("database_budget_exceeded")
+            if budget is not None:
+                budget.take("db_queries")
+            count += 1
+            connection.operation_deadline = min(deadline, clock() + 0.75)
+            return raw.execute(sql, params)
+        def fetchone(self):
+            return raw.fetchone()
+        def fetchall(self):
+            return raw.fetchall()
+    cursor = Cursor()
+    try:
+        if transactional:
+            cursor.execute("BEGIN")
+        yield cursor
+        if transactional:
+            cursor.execute("COMMIT")
+    finally:
+        # Closing libpq locally also aborts an unfinished transaction. No
+        # rollback network operation may outlive the claimed deadline.
+        raw.close()
+        connection.close()
+
+
+FAILURE_CURSOR_SALT = "mojo.health.failures.v2"
+FAILURE_LIMITATIONS = ["best_effort_event_capture", "retention_unproven",
+                      "old_job_prune_cascades_recent_events", "manual_purge_possible",
+                      "commit_delay_beyond_600_seconds"]
+
+
+def _failure_rows(phase, start, end, after, limit, deadline):
+    from mojo.apps.jobs.models import Job, JobEvent
+    if phase == "events":
+        table, at = JobEvent._meta.db_table, "at"
+        fields = "id, job_id, channel, event, at, attempt"
+        columns = ("id", "job_id", "channel", "event", "at", "attempt")
+        clause = "event IN ('failed', 'expired')"
+    else:
+        table, at = Job._meta.db_table, "finished_at"
+        fields = "id, channel, status, attempt, finished_at"
+        columns = ("id", "channel", "status", "attempt", "finished_at")
+        clause = "status IN ('failed', 'expired')"
+    params = [start, end]
+    if after:
+        clause += ' AND ("%s", id) > (%%s, %%s)' % at
+        params += [parse_time(after[0]), after[1]]
+    sql = 'SELECT %s FROM "%s" WHERE "%s">=%%s AND "%s"<=%%s AND %s ORDER BY "%s", id LIMIT %%s' % (fields, table, at, at, clause, at)
+    with primary_cursor(deadline, max_queries=4) as cursor:
+        cursor.execute(sql, params + [limit + 1])
+        return [dict(zip(columns, row)) for row in cursor.fetchall()]
+
+
+def failure_page(source_id, cursor=None, *, deadline, now=None, reader=None):
+    """Frozen failure-only keyset windows; a completed cursor opens overlap."""
+    from django.core import signing
+    now, reader = now or utcnow(), reader or _failure_rows
+    start, end, phase, position, gaps = now - timedelta(hours=24), now, "events", None, []
+    expires = now + timedelta(hours=1)
+    if cursor is not None:
+        if not isinstance(cursor, str) or not 0 < len(cursor) <= 4096:
+            raise EvidenceError("invalid_evidence_cursor")
+        try:
+            saved = signing.loads(cursor, salt=FAILURE_CURSOR_SALT)
+            if (not isinstance(saved, dict) or saved.get("source") != source_id
+                    or saved.get("profile") != PROFILE_VERSION or saved.get("query") != "failed_expired_v2"
+                    or saved.get("phase") not in ("events", "fallback", "complete")):
+                raise ValueError()
+            start, end = parse_time(saved.get("start")), parse_time(saved.get("end"))
+            expires = parse_time(saved.get("expires"))
+            if (start is None or end is None or expires is None or start > end
+                    or end > now + timedelta(seconds=30) or end - start > timedelta(hours=24)):
+                raise ValueError()
+            phase, position = saved["phase"], saved.get("position")
+            if position is not None and (not isinstance(position, list) or len(position) != 2
+                    or parse_time(position[0]) is None or not start <= parse_time(position[0]) <= end
+                    or (phase == "events" and (type(position[1]) is not int or position[1] < 1))
+                    or (phase == "fallback" and (not isinstance(position[1], str) or len(position[1]) != 32
+                                                or uuid.UUID(position[1]).hex != position[1]))):
+                raise ValueError()
+            if expires <= now:
+                gaps.append("cursor_expired")
+                start, end, phase, position = now - timedelta(hours=24), now, "events", None
+                expires = now + timedelta(hours=1)
+            elif phase == "complete":
+                start, end, phase, position = end - timedelta(seconds=600), now, "events", None
+                expires = now + timedelta(hours=1)
+                if now - start > timedelta(hours=24):
+                    start = now - timedelta(hours=24)
+                    gaps.append("consumer_interval_beyond_24_hours")
+        except (ValueError, TypeError, signing.BadSignature):
+            raise EvidenceError("invalid_evidence_cursor") from None
+    result = {"window_start": timestamp(start), "window_end": timestamp(end),
+              "capture_status": "best_effort", "limitations": list(FAILURE_LIMITATIONS),
+              "retention_basis": "jobs_created_before_7_days_may_be_pruned_with_events",
+              "events": [], "terminal_fallback": [], "has_more": False,
+              "next_cursor": None, "gaps": gaps, "counts_scope": "returned_page",
+              "total": None}
+    result["checkpoint_cursor"] = signing.dumps({"source": source_id, "profile": PROFILE_VERSION,
+        "query": "failed_expired_v2", "start": timestamp(start), "end": timestamp(end),
+        "phase": phase, "position": position, "expires": timestamp(expires)}, salt=FAILURE_CURSOR_SALT, compress=True)
+    remaining = 200
+    try:
+        while phase != "complete" and remaining:
+            rows = reader(phase, start, end, position, remaining, deadline)
+            more = len(rows) > remaining
+            selected = rows[:remaining]
+            destination = result["events" if phase == "events" else "terminal_fallback"]
+            for row in selected:
+                row = dict(row)
+                if phase == "events":
+                    if type(row.get("id")) is not int or row["id"] < 1:
+                        raise EvidenceError("invalid_durable_evidence")
+                    row["job_id"] = uuid.UUID(str(row["job_id"])).hex
+                else:
+                    row["id"] = uuid.UUID(str(row["id"])).hex
+                at_key = "at" if phase == "events" else "finished_at"
+                at = parse_time(row.get(at_key))
+                if at is None or not start <= at <= end:
+                    raise EvidenceError("invalid_durable_evidence")
+                destination.append({**row, at_key: timestamp(at)})
+            remaining -= len(selected)
+            if more:
+                last = destination[-1]
+                position = [timestamp(parse_time(last["at" if phase == "events" else "finished_at"])), last["id"]]
+                result["has_more"] = True
+                result["gaps"].append("page_backlog")
+                break
+            phase, position = ("fallback" if phase == "events" else "complete"), None
+        if not remaining and phase != "complete":
+            result["has_more"] = True
+            result["gaps"].append("page_backlog")
+    except Exception:
+        result["gaps"].append("durable_read_unavailable")
+        result["has_more"] = True
+    # Even a failed initial page checkpoints the original closed lower bound.
+    # Continuation never extends its expiry, including after database errors.
+    result["next_cursor"] = signing.dumps({"source": source_id, "profile": PROFILE_VERSION,
+        "query": "failed_expired_v2", "start": timestamp(start), "end": timestamp(end),
+        "phase": phase, "position": position, "expires": timestamp(expires)},
+        salt=FAILURE_CURSOR_SALT, compress=True)
+    result["gaps"] = sorted(set(result["gaps"]))
+    return result
+
+
+class CycleBudget:
+    LIMITS = {"provider_operations": 32, "inventory_pages": 4, "metric_discovery_pages": 4,
+              "cloudwatch_series": 256, "checked_broadcasts": 4, "checked_targets": 128,
+              "redis_commands": 256, "db_queries": 16, "api_services": 24, "channels": 32,
+              "project_services": 8}
+    def __init__(self, deadline, *, limits=None, clock=None, reserved=None):
+        self.reserved, self.finalizing = dict(reserved or {}), False
+        self.clock, self.deadline = clock or time.monotonic, deadline
+        self.limits = {**self.LIMITS, **(limits or {})}
+        self.counts, self.lock = {}, threading.Lock()
+    def take(self, name, count=1):
+        with self.lock:
+            ceiling = self.limits[name] - (0 if self.finalizing else self.reserved.get(name, 0))
+            if self.clock() >= self.deadline or self.counts.get(name, 0) + count > ceiling:
+                raise TimeoutError("not_collected_budget")
+            self.counts[name] = self.counts.get(name, 0) + count
+    def begin_finalization(self):
+        with self.lock:
+            self.finalizing = True
+
+
+class BudgetRedis:
+    def __init__(self, client, budget):
+        self.client, self.budget = client, budget
+    def __enter__(self):
+        self.client.__enter__()
+        return self
+    def __exit__(self, *args):
+        return self.client.__exit__(*args)
+    def __getattr__(self, name):
+        target = getattr(self.client, name)
+        if not callable(target):
+            return target
+        def call(*args, **kwargs):
+            if name not in ("close", "reset"):
+                self.budget.take("redis_commands")
+            result = target(*args, **kwargs)
+            return BudgetRedis(result, self.budget) if name in ("pipeline", "pubsub") else result
+        return call
+
+
+def bounded_redis_connection(*, budget, connect=None, **kwargs):
+    """Private primary command cap also applies to checked transport callers."""
+    from mojo.helpers.redis import get_bounded_connection
+    kwargs["timeout"] = min(0.5, float(kwargs.get("timeout", 0.5)))
+    kwargs["read_from_replicas"] = False
+    return BudgetRedis((connect or get_bounded_connection)(**kwargs), budget)
+
+
+def endpoint_binding(host, port=None):
+    """Normalize an endpoint, without DNS guesses or retaining credentials."""
+    from urllib.parse import urlsplit
+    try:
+        parsed = urlsplit(str(host) if "://" in str(host) else "//" + str(host or ""))
+        return {"host": (parsed.hostname or "").rstrip(".").lower(), "port": int(parsed.port or port) if parsed.port or port else None}
+    except (ValueError, TypeError):
+        return {"host": "", "port": None}
+
+
+def source_configuration(deadline, *, get_static=None, cursor_context=None, budget=None, project_reader=None):
+    """One bounded primary query for frozen settings and the declared API roster."""
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import system_settings, health_snapshot
+    from mojo.apps.aws.services import fleet_health
+    from django.apps import apps as django_apps
+    from mojo.helpers.settings import settings
+    get_static = get_static or settings.get_static
+    keys = [system_settings.INSTALLATION_UUID, system_settings.INSTALLATION_SLUG,
+            system_settings.BASE_URL, system_settings.EXPECTED_EDGE_TOPOLOGY]
+    webapps_sql = "NULL"
+    if django_apps.is_installed("mojo.apps.edge"):
+        from mojo.apps.edge.models import WebApp, Vhost
+        from mojo.apps.edge.validators import server_name_for
+        from mojo.apps.dnsman.models import Domain
+        webapps_sql = '''(SELECT jsonb_agg(jsonb_build_object('id', w.id, 'domain_name', d.name, 'label', v.label) ORDER BY w.id)
+            FROM (SELECT id, vhost_id FROM "%s" ORDER BY id LIMIT 25) w
+            LEFT JOIN "%s" v ON v.id=w.vhost_id
+            LEFT JOIN "%s" d ON d.id=v.domain_id)''' % (WebApp._meta.db_table, Vhost._meta.db_table, Domain._meta.db_table)
+    with (cursor_context or (lambda end: primary_cursor(end, budget=budget, transactional=False)))(deadline) as cursor:
+        cursor.execute('SELECT (SELECT jsonb_object_agg(key, value) FROM "%s" WHERE group_id IS NULL AND key=ANY(%%s)), %s' % (Setting._meta.db_table, webapps_sql), [keys])
+        stored, apps = cursor.fetchone()
+    stored, apps = stored or {}, apps or []
+    pair = system_settings._validate_identity_pair(stored.get(system_settings.INSTALLATION_UUID), stored.get(system_settings.INSTALLATION_SLUG))
+    identity = health_snapshot.resolve_identity(identity_reader=lambda: pair, get_static=get_static)
+    topology = stored.get(system_settings.EXPECTED_EDGE_TOPOLOGY)
+    if isinstance(topology, str):
+        topology = json.loads(topology)
+    expected = fleet_health._read_expected({"platform": True, "aws": True, "jobs": True}, deadline,
+        get_static=get_static, topology_reader=lambda key: topology, spec_reader=fleet_health._health_spec)
+    services = [{"resource_id": "primary", "service_id": "primary", "origin": stored.get(system_settings.BASE_URL), "path": "/api/version"}]
+    for app in apps[:23]:
+        name = server_name_for(app["domain_name"], app.get("label") or "") if app.get("domain_name") is not None else None
+        services.append({"resource_id": "webapp-%s" % app["id"], "service_id": "webapp-%s" % app["id"],
+                         "origin": "https://" + name if name else None, "path": "/"})
+    channels = get_static("JOBS_CHANNELS", [])
+    if isinstance(channels, str):
+        channels = [part.strip() for part in channels.split(",") if part.strip()]
+    channels_valid = isinstance(channels, (list, tuple)) and all(isinstance(channel, str) and 0 < len(channel) <= 100 for channel in channels)
+    channels = sorted(set(channels)) if channels_valid else []
+    from django.db import connections
+    from mojo.helpers.redis.client import _build_url
+    primary = connections["default"].get_connection_params()
+    database = endpoint_binding(primary.get("host"), primary.get("port") or 5432)
+    redis = endpoint_binding(_build_url(get=get_static), 6379)
+    binding = {"database_host": database["host"], "database_port": database["port"],
+               "redis_host": redis["host"], "redis_port": redis["port"]}
+    spec = expected.get("spec")
+    region = spec.region if spec is not None else get_static("AWS_REGION", None)
+    from mojo.apps.account.services import project_health
+    project = (project_reader or (lambda end: project_health.freeze(end, get_static=get_static, budget=budget)))(deadline)
+    revision_config = {"roster_scope": fleet_health.roster_scope(expected),
+        "services": services, "channels": channels, "bindings": binding,
+        "region": region, "source_policy": HOST_SOURCE_POLICY}
+    if project is not None:
+        revision_config["project_services"] = project
+    revision = health_snapshot.configuration_revision(identity, revision_config)
+    result = {**identity, "config_revision": revision, "expected": expected, "services": services,
+            "services_omitted": max(0, len(apps) - 23), "services_complete": len(apps) < 25, "channels": channels[:32],
+            "channels_complete": bool(channels_valid and channels and len(channels) <= 32), "bindings": binding,
+            "region": region, "source_policy": copy.deepcopy(HOST_SOURCE_POLICY)}
+    if project is not None:
+        result["project_services"] = project
+    return result
+
+
+def database_and_job_facts(channels, deadline, *, budget=None, cursor_context=None):
+    """Grouped primary facts: no query text, usernames or job payload/error fields."""
+    from mojo.apps.jobs.models import Job, JobEvent
+    sql = '''SELECT
+        (SELECT jsonb_build_object('reachable', true, 'commits', xact_commit, 'rollbacks', xact_rollback,
+          'deadlocks', deadlocks, 'stats_reset', stats_reset, 'incarnation', pg_postmaster_start_time(),
+          'active', (SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='active'),
+          'idle_in_transaction', (SELECT count(*) FROM pg_stat_activity WHERE datname=current_database() AND state='idle in transaction'),
+          'oldest_transaction_seconds', (SELECT extract(epoch FROM CURRENT_TIMESTAMP-min(xact_start)) FROM pg_stat_activity WHERE datname=current_database()))
+         FROM pg_stat_database WHERE datname=current_database()),
+        (SELECT jsonb_agg(row_to_json(q)) FROM (SELECT channel,
+          count(*) FILTER (WHERE status='pending' AND (run_at IS NULL OR run_at<=CURRENT_TIMESTAMP)) AS due_pending,
+          min(COALESCE(run_at,created)) FILTER (WHERE status='pending' AND (run_at IS NULL OR run_at<=CURRENT_TIMESTAMP)) AS oldest_due,
+          count(*) FILTER (WHERE status='running') AS running, min(started_at) FILTER (WHERE status='running') AS oldest_running,
+          max(finished_at) FILTER (WHERE status='completed') AS latest_completed,
+          count(*) FILTER (WHERE status='running' AND max_exec_seconds IS NOT NULL AND started_at+max_exec_seconds*interval '1 second'<CURRENT_TIMESTAMP) AS overruns
+          FROM "%s" WHERE channel=ANY(%%s) GROUP BY channel) q),
+        (SELECT jsonb_agg(row_to_json(e)) FROM (SELECT channel, event, count(*) AS count, max(at) AS latest
+          FROM "%s" WHERE channel=ANY(%%s) AND at>=CURRENT_TIMESTAMP-interval '5 minutes'
+          AND event IN ('completed','failed','expired','retry') GROUP BY channel,event) e), CURRENT_TIMESTAMP, 1''' % (Job._meta.db_table, JobEvent._meta.db_table)
+    started = time.monotonic()
+    with (cursor_context or (lambda end: primary_cursor(end, budget=budget, transactional=False)))(deadline) as cursor:
+        cursor.execute(sql, [channels, channels])
+        database, jobs, events, observed, one = cursor.fetchone()
+    return {"database": database or {}, "jobs": jobs or [], "events": events or [],
+            "observed_at": timestamp(parse_time(observed)), "latency_seconds": time.monotonic() - started, "reachable": one == 1}
+
+
+def redis_facts(deadline, *, connect=None, budget=None):
+    from mojo.helpers.redis import get_bounded_connection
+    started = time.monotonic()
+    with (connect or get_bounded_connection)(timeout=0.5, max_connections=1, read_from_replicas=False, deadline=deadline) as raw:
+        client = BudgetRedis(raw, budget) if budget is not None else raw
+        reachable = bool(client.ping())
+        latency = time.monotonic() - started
+        info = client.info()
+    keys = ("used_memory", "maxmemory", "evicted_keys", "rejected_connections", "connected_clients",
+            "blocked_clients", "uptime_in_seconds", "run_id")
+    return {"reachable": reachable, "latency_seconds": latency, "observed_at": timestamp(utcnow()),
+            "scope": "default_node", **{key: info.get(key) for key in keys}}
+
+
+def queue_facts(channels, deadline, *, connect=None, budget=None):
+    from mojo.apps.jobs.keys import JobKeys
+    from mojo.helpers.redis import get_bounded_connection
+    keys = JobKeys()
+    with (connect or get_bounded_connection)(timeout=0.5, max_connections=1, read_from_replicas=False, deadline=deadline) as client:
+        pipeline = client.pipeline(transaction=False)
+        for channel in channels[:32]:
+            if budget is not None:
+                budget.take("channels")
+            pipeline.llen(keys.queue(channel))
+            pipeline.zcard(keys.sched(channel))
+            pipeline.zcard(keys.sched_broadcast(channel))
+            pipeline.zcard(keys.processing(channel))
+            pipeline.zrange(keys.processing(channel), 0, 0, withscores=True)
+        values = pipeline.execute()
+    observed, output = utcnow(), {}
+    for index, channel in enumerate(channels[:32]):
+        queued, scheduled, broadcasts, processing, oldest = values[index*5:index*5+5]
+        # Processing scores are visibility deadlines, not original start times.
+        output[channel] = {"status": "ok", "observed_at": timestamp(observed), "queued": queued,
+            "scheduled": scheduled, "scheduled_broadcast": broadcasts, "processing": processing,
+            "earliest_visibility_deadline": oldest[0][1] if oldest else None}
+    return output
+
+
+def probe_service(service, deadline, *, resolver=None, connector=None, ssl_context=None, context_factory=None, http_factory=None, clock=None):
+    """Fixed-origin, DNS-pinned HTTP/version probe with one absolute1.5s budget."""
+    import http.client
+    import ssl
+    from urllib.parse import urlsplit
+    from mojo.apps.account.services.system_settings import validate_base_url
+    from mojo.helpers.bounded_transport import connect_tcp, DeadlineSocket, DeadlineSSLContext, remaining
+    from mojo.helpers.dns.probe import resolve_addresses
+    clock = clock or time.monotonic
+    deadline = min(deadline, clock() + 1.5)
+    origin = validate_base_url(service["origin"])
+    parsed = urlsplit(origin)
+    addresses = (resolver or resolve_addresses)(parsed.hostname, deadline)
+    if not addresses or any(not ipaddress.ip_address(address).is_global for address in addresses):
+        raise EvidenceError("unsafe_service_origin")
+    class Connection(http.client.HTTPSConnection):
+        def connect(self):
+            raw = (connector or connect_tcp)(self.host, self.port, deadline,
+                resolver=lambda hostname, end: addresses)
+            try:
+                raw.settimeout(remaining(deadline, clock))
+                context = ssl_context or (context_factory or ssl.create_default_context)()
+                tls = DeadlineSSLContext(context, deadline, clock).wrap_socket(raw, server_hostname=self.host)
+                self.sock = DeadlineSocket(tls, deadline, clock=clock)
+            except BaseException:
+                raw.close()
+                raise
+    connection = (http_factory or Connection)(parsed.hostname, parsed.port or 443, timeout=remaining(deadline, clock))
+    started = clock()
+    try:
+        connection.request("GET", service["path"], headers={"Host": parsed.netloc, "Accept": "application/json" if service["path"] == "/api/version" else "text/html", "Connection": "close"})
+        response = connection.getresponse()
+        raw = response.read(4097 if service["path"] == "/api/version" else 65537)
+        body_limit = 4096 if service["path"] == "/api/version" else 65536
+        version = None
+        if service["path"] == "/api/version" and len(raw) <= body_limit:
+            try:
+                body = json.loads(raw)
+                body = body.get("data", body) if isinstance(body, dict) else {}
+                version = str(body.get("version") or "")[:64]
+            except (ValueError, TypeError, AttributeError):
+                pass
+        return {"reachable": 200 <= response.status < 300, "http_status": response.status,
+                "version": version, "body_truncated": len(raw) > body_limit,
+                "latency_seconds": clock() - started, "observed_at": timestamp(utcnow())}
+    finally:
+        connection.close()
+
+
+def managed_series(configuration, deadline, *, budget, provider_factory=None):
+    """Bounded exact endpoint observations, fenced by provision intent when present."""
+    from mojo.deploy.provision.spec import names
+    from mojo.helpers.aws.provider_call import DeadlineProviderClient
+    spec = configuration["expected"].get("spec")
+    region = spec.region if spec is not None else configuration.get("region")
+    result = {"series": [], "database": {"status": "unknown", "reason": "managed_endpoint_unresolved"},
+              "redis": {"status": "unknown", "reason": "managed_endpoint_unresolved"}}
+    if not isinstance(region, str) or not region.strip():
+        result.update(database={"status": "unknown", "reason": "provider_region_unresolved"},
+                      redis={"status": "unknown", "reason": "provider_region_unresolved"})
+        return result
+    # Invalid provision intent never enables account-wide endpoint discovery.
+    if configuration["expected"].get("sources", {}).get("provision", {}).get("status") == "unknown":
+        return result
+    resolved = names(spec) if spec is not None else None
+    factory = provider_factory or (lambda service: DeadlineProviderClient(service, deadline, region=region))
+    def call(service, operation, **params):
+        if time.monotonic() >= deadline:
+            raise TimeoutError("not_collected_budget")
+        budget.take("provider_operations")
+        return getattr(factory(service), operation)(**params)
+    def scan(service, operation, key):
+        rows, marker = [], None
+        while True:
+            budget.take("inventory_pages")
+            page = call(service, operation, MaxRecords=100, **({"ShowCacheNodeInfo": True} if operation == "describe_cache_clusters" else {}),
+                        **({"Marker": marker} if marker else {}))
+            current = page.get(key) or []
+            if not isinstance(current, list) or len(current) > 100:
+                raise TimeoutError("not_collected_budget")
+            rows.extend(current)
+            next_marker = page.get("Marker")
+            if not next_marker:
+                return rows
+            if next_marker == marker:
+                raise TimeoutError("not_collected_budget")
+            marker = next_marker
+    def exact(rows, key, identifier):
+        selected = [row for row in rows if row.get(key) == identifier]
+        if len(selected) != 1:
+            raise EvidenceError("managed_endpoint_ambiguous" if selected else "managed_endpoint_unresolved")
+        return selected[0]
+    def matches(kind, endpoint, default_port, port=None):
+        endpoint = endpoint if isinstance(endpoint, dict) else {"Address": endpoint, "Port": port}
+        actual = endpoint_binding(endpoint.get("Address"), endpoint.get("Port") or default_port)
+        bound = endpoint_binding(configuration["bindings"].get(kind + "_host"), configuration["bindings"].get(kind + "_port") or default_port)
+        return bool(bound["host"] and bound == actual)
+    def add(kind, resource, metric, unit, dimensions, namespace):
+        result["series"].append({"key": kind + ":" + resource + ":" + metric, "kind": kind, "resource": resource,
+            "metric": metric, "unit": unit, "namespace": namespace, "dimensions": dimensions, "period_seconds": 300})
+    def unknown(kind, exc):
+        reason = ("provider_denied" if getattr(exc, "denied", False) else
+                  "not_collected_budget" if isinstance(exc, TimeoutError) or getattr(exc, "provider_code", None) == "deadline_exceeded" else
+                  exc.code if isinstance(exc, EvidenceError) else "managed_" + ("database" if kind == "database" else "cache") + "_unavailable")
+        result[kind] = {"status": "unknown", "reason": reason}
+        result["series"] = [row for row in result["series"] if row["kind"] != kind]
+    try:
+        if resolved:
+            instances = call("rds", "describe_db_instances", DBInstanceIdentifier=resolved["db_writer"]).get("DBInstances") or []
+            row = exact(instances, "DBInstanceIdentifier", resolved["db_writer"])
+            clusters = []
+            if not matches("database", row.get("Endpoint"), 5432) and row.get("DBClusterIdentifier") == resolved["db_cluster"]:
+                clusters = call("rds", "describe_db_clusters", DBClusterIdentifier=resolved["db_cluster"]).get("DBClusters") or []
+        else:
+            instances = scan("rds", "describe_db_instances", "DBInstances")
+            clusters = scan("rds", "describe_db_clusters", "DBClusters")
+        candidates = [("instance", row) for row in instances if matches("database", row.get("Endpoint"), 5432)]
+        candidates += [("cluster", row) for row in clusters if matches("database", row.get("Endpoint"), 5432, row.get("Port"))]
+        if len(candidates) != 1:
+            raise EvidenceError("managed_endpoint_ambiguous" if candidates else "managed_endpoint_unresolved")
+        shape, row = candidates[0]
+        if shape == "cluster":
+            if resolved and row.get("DBClusterIdentifier") != resolved["db_cluster"]:
+                raise EvidenceError("managed_endpoint_unresolved")
+            cluster_id = row.get("DBClusterIdentifier")
+            writers = [member.get("DBInstanceIdentifier") for member in row.get("DBClusterMembers", []) if member.get("IsClusterWriter") is True]
+            if len(writers) != 1 or not writers[0]:
+                raise EvidenceError("managed_endpoint_ambiguous")
+            # Follow the current writer, never the provision recipe's old member.
+            current = call("rds", "describe_db_instances", DBInstanceIdentifier=writers[0]).get("DBInstances") or []
+            row = exact(current, "DBInstanceIdentifier", writers[0])
+            if row.get("DBClusterIdentifier") != cluster_id:
+                raise EvidenceError("managed_endpoint_unresolved")
+        resource = row.get("DBInstanceIdentifier")
+        if not resource:
+            raise EvidenceError("managed_endpoint_unresolved")
+        result["database"] = {"status": "ok", "resource": resource, "binding": "validated_current_endpoint"}
+        storage = "FreeLocalStorage" if str(row.get("Engine") or "").startswith("aurora") else "FreeStorageSpace"
+        for metric, unit in (("CPUUtilization", "Percent"), ("DatabaseConnections", "Count"), ("FreeableMemory", "Bytes"),
+                             (storage, "Bytes"), ("ReadLatency", "Seconds"), ("WriteLatency", "Seconds")):
+            add("database", resource, metric, unit, [{"Name": "DBInstanceIdentifier", "Value": resource}], "AWS/RDS")
+    except Exception as exc:
+        unknown("database", exc)
+    try:
+        if resolved:
+            groups = call("elasticache", "describe_replication_groups", ReplicationGroupId=resolved["cache_group"]).get("ReplicationGroups") or []
+            groups = [exact(groups, "ReplicationGroupId", resolved["cache_group"])]
+            cache_rows = []
+        else:
+            groups = scan("elasticache", "describe_replication_groups", "ReplicationGroups")
+            cache_rows = scan("elasticache", "describe_cache_clusters", "CacheClusters")
+        candidates = [("group", group) for group in groups if len(group.get("NodeGroups") or []) == 1
+            and matches("redis", group["NodeGroups"][0].get("PrimaryEndpoint"), 6379)]
+        candidates += [("standalone", row) for row in cache_rows if not row.get("ReplicationGroupId") and row.get("Engine") in ("redis", "valkey")
+            and len(row.get("CacheNodes") or []) == 1 and matches("redis", row["CacheNodes"][0].get("Endpoint"), 6379)]
+        if len(candidates) != 1:
+            raise EvidenceError("managed_endpoint_ambiguous" if candidates else "managed_endpoint_unresolved")
+        shape, selected = candidates[0]
+        roles = {}
+        if shape == "group":
+            members = selected.get("MemberClusters") or []
+            if not members or len(members) > 4 or len(set(members)) != len(members):
+                raise TimeoutError("not_collected_budget")
+            for member in selected["NodeGroups"][0].get("NodeGroupMembers") or []:
+                roles[(member.get("CacheClusterId"), member.get("CacheNodeId"))] = member.get("CurrentRole")
+            clusters = []
+            for member in members:
+                rows = call("elasticache", "describe_cache_clusters", CacheClusterId=member, ShowCacheNodeInfo=True).get("CacheClusters") or []
+                cluster = exact(rows, "CacheClusterId", member)
+                if cluster.get("ReplicationGroupId") != selected["ReplicationGroupId"]:
+                    raise EvidenceError("managed_endpoint_unresolved")
+                clusters.append(cluster)
+            resource = selected["ReplicationGroupId"]
+        else:
+            clusters, resource = [selected], selected["CacheClusterId"]
+        for cluster in clusters:
+            nodes = cluster.get("CacheNodes") or []
+            if not nodes or len(nodes) > 4:
+                raise TimeoutError("not_collected_budget")
+            for node in nodes:
+                node_id, member = node.get("CacheNodeId"), cluster["CacheClusterId"]
+                if not node_id:
+                    raise EvidenceError("managed_endpoint_unresolved")
+                role = roles.get((member, node_id))
+                if shape == "group" and role not in ("primary", "replica"):
+                    raise EvidenceError("managed_cache_role_unresolved")
+                metrics = [("CPUUtilization", "Percent"), ("EngineCPUUtilization", "Percent"),
+                           ("DatabaseMemoryUsagePercentage", "Percent"), ("CurrConnections", "Count"), ("Evictions", "Count")]
+                if role == "replica":
+                    metrics.append(("ReplicationLag", "Seconds"))
+                for metric, unit in metrics:
+                    add("redis", member + ":" + node_id, metric, unit,
+                        [{"Name": "CacheClusterId", "Value": member}, {"Name": "CacheNodeId", "Value": node_id}], "AWS/ElastiCache")
+        result["redis"] = {"status": "ok", "resource": resource, "binding": "validated_endpoint"}
+    except Exception as exc:
+        unknown("redis", exc)
+    return result
+
+
+def build_components(configuration, native, redis, fleet, probes, *, managed=None, previous=None, queues=None, project_results=None, now=None):
+    """Profile2 current obligations and causal-slot proof from independent sources."""
+    now, source_id = now or utcnow(), configuration["source_id"]
+    components = []
+    old = {row["component_id"]: row for row in (previous or {}).get("components", [])}
+    def make(kind, resource, slot_id, raw, *, grant="platform", source=None, value=None, identity=None, required=True):
+        previous_slot = next((row for row in old.get(kind + ":" + resource, {}).get("evidence", []) if row["slot_id"] == slot_id), None)
+        raw = raw or {}
+        provenance = {key: raw[key] for key in ("namespace", "metric", "dimensions", "start", "end", "aggregation") if key in raw}
+        if any(key in raw for key in ("total", "maxmemory")):
+            provenance["capacity_denominator"] = {key: raw[key] for key in ("total", "maxmemory") if key in raw}
+        provenance["pressure_profile_version"] = PROFILE_VERSION
+        if source == "scheduler_lock" and type(raw.get("scheduler_active")) is bool:
+            provenance["installation_lock_present"] = raw["scheduler_active"]
+            provenance["scope"] = "installation"
+        return slot(source_id, kind + ":" + resource, slot_id, source=source or grant, required_grant=grant,
+            source_identity=identity or {}, observed_at=raw.get("observed_at"), collected_at=raw.get("collected_at") or timestamp(now),
+            status=raw.get("status", "ok" if raw.get("observed_at") else "unknown"), reason=raw.get("reason"),
+            value=raw if value is None else value, unit=raw.get("unit"), period_seconds=raw.get("period_seconds"),
+            truncated=raw.get("truncated", False), provenance=provenance, required=required,
+            previous=previous_slot, now=now)
+    def predicate(kind, resource, rule, value, predicate_value, *, impact="operational", resource_key=None):
+        outcome = "unknown" if predicate_value is None else "fail" if predicate_value else "pass"
+        result = condition(kind + ":" + resource, rule, resource_key or resource, outcome, [value], impact=impact, now=now)
+        result["rule"] = rule
+        if "ge_90_percent" in rule:
+            result["evaluation"] = {"operator": ">=", "threshold": 90, "unit": "Percent", "profile_version": PROFILE_VERSION}
+        elif "ge_1_second" in rule:
+            result["evaluation"] = {"operator": ">=", "threshold": 1, "unit": "Seconds", "profile_version": PROFILE_VERSION}
+        return result
+    def pressured(value, threshold=90):
+        return value >= threshold if type(value) in (int, float) and math.isfinite(value) else None
+    for service in configuration["services"]:
+        raw = probes.get(service["resource_id"]) or {"status": "unknown", "reason": "service_probe_unavailable"}
+        sample = make("api", service["resource_id"], "http", raw, source="http", value={key: raw.get(key) for key in ("reachable", "http_status", "version", "latency_seconds", "body_truncated")})
+        checks = [predicate("api", service["resource_id"], "http_availability", sample,
+                            not raw["reachable"] if type(raw.get("reachable")) is bool else None, impact="availability")]
+        components.append(component(source_id, "api", service["resource_id"], [sample], checks,
+                                    service_id=service["service_id"], resource_scope="service", now=now))
+    project = configuration.get("project_services")
+    if project is not None:
+        from mojo.apps.account.services import project_health
+        for check in project["checks"]:
+            resource = check["id"]
+            identity = project_health.source_identity(project, check)
+            prior = next((row for row in old.get("service:" + resource, {}).get("evidence", [])
+                          if row["slot_id"] == "check" and row["source_identity"] == identity), None)
+            raw = (project_results or {}).get(resource) or {"outcome": "unknown", "observed_at": None,
+                "reason": project["reason"] or "project_check_unavailable"}
+            known = raw.get("outcome") in ("pass", "fail") and not project["reason"]
+            sample = slot(source_id, "service:" + resource, "check", source="project_service",
+                required_grant="platform", source_identity=identity,
+                observed_at=raw.get("observed_at") if known else None, collected_at=now,
+                status="ok" if known else "unknown", reason=project["reason"] or raw.get("reason"),
+                value=raw["outcome"] == "pass" if known else None, previous=prior, now=now)
+            proof = condition("service:" + resource, "service_check", resource,
+                raw["outcome"] if known else "unknown", [sample] if known else [],
+                impact=check["impact"], reason=project["reason"] or raw.get("reason"), now=now)
+            proof["rule"] = "service_check"
+            components.append(component(source_id, "service", resource, [sample], [proof],
+                service_id=resource, resource_scope="service", identity_grant="platform", now=now))
+    for kind, raw in (("database", native.get("database", {})), ("redis", redis)):
+        raw = dict(raw or {})
+        if kind == "database" and native.get("observed_at"):
+            raw.update(observed_at=native["observed_at"], latency_seconds=native["latency_seconds"], reachable=native["reachable"])
+        sample = make(kind, "default", "native", raw, source=kind)
+        slots = [sample]
+        checks = [predicate(kind, "default", "availability", sample, not raw["reachable"] if type(raw.get("reachable")) is bool else None, impact="availability"),
+                  predicate(kind, "default", "latency_ge_1_second", sample, pressured(raw.get("latency_seconds"), 1))]
+        if kind == "redis":
+            total, used = raw.get("maxmemory"), raw.get("used_memory")
+            ratio = used * 100 / total if type(total) in (int, float) and total > 0 and type(used) in (int, float) else None
+            checks.append(predicate(kind, "default", "memory_ge_90_percent", sample, pressured(ratio)))
+        prior = next((item for item in old.get(kind + ":default", {}).get("evidence", []) if item["slot_id"] == "native"), {})
+        for counter in (("deadlocks",) if kind == "database" else ("evicted_keys", "rejected_connections")):
+            previous_value, current_value = (prior.get("value") or {}).get(counter), raw.get(counter)
+            incarnation_key = "incarnation" if kind == "database" else "run_id"
+            same = raw.get(incarnation_key) and raw.get(incarnation_key) == (prior.get("value") or {}).get(incarnation_key)
+            if kind == "database":
+                same = same and raw.get("stats_reset") == (prior.get("value") or {}).get("stats_reset")
+            ordered = parse_time(prior.get("observed_at")) is not None and parse_time(raw.get("observed_at")) is not None and parse_time(raw["observed_at"]) > parse_time(prior["observed_at"])
+            delta = current_value - previous_value if same and ordered and type(current_value) in (int, float) and type(previous_value) in (int, float) and current_value >= previous_value else None
+            checks.append(predicate(kind, "default", counter + "_positive_delta", sample, delta > 0 if delta is not None else None))
+        requests = [item for item in (managed or {}).get("series", []) if item["kind"] == kind]
+        for request in requests:
+            metric = ((fleet.get("cloud") or {}).get("extra") or {}).get(request["key"]) or {"status": "unknown", "reason": "managed_metric_unavailable"}
+            metric_slot = make(kind, "default", "managed:" + digest(request["key"])[:32], metric, grant="aws", source="cloudwatch", value=metric.get("value"), identity={"resource": request["resource"], "metric": request["metric"]})
+            slots.append(metric_slot)
+            if request["unit"] == "Percent":
+                checks.append(predicate(kind, "default", request["metric"] + "_ge_90_percent", metric_slot, pressured(metric.get("value")), resource_key=request["resource"]))
+            elif request["unit"] == "Seconds" and request["metric"] in ("ReadLatency", "WriteLatency"):
+                checks.append(predicate(kind, "default", request["metric"] + "_ge_1_second", metric_slot, pressured(metric.get("value"), 1), resource_key=request["resource"]))
+        if not requests or (managed or {}).get(kind, {}).get("status") != "ok":
+            slots.append(make(kind, "default", "managed_pressure", {"status": "unknown", "reason": (managed or {}).get(kind, {}).get("reason", "managed_resource_unresolved"), "omitted_count": (managed or {}).get(kind, {}).get("omitted_count", 0)}, grant="aws", source="cloudwatch"))
+        components.append(component(source_id, kind, "default", slots, checks, now=now, identity_grant="platform"))
+    slots, checks = [], []
+    for row in fleet.get("rows", []):
+        if not row["expected"]:
+            continue
+        node_id = row["node_id"]
+        ambiguous = row.get("identity_status") == "ambiguous"
+        detail = {} if ambiguous else fleet.get("evidence", {}).get(node_id, {})
+        current = detail.get("current") or fleet.get("collection_error") or {}
+        required_service = row.get("request_service_required")
+        service = (detail.get("services") or {}).get("request_service") or {"status": "unknown", "reason": "role_or_service_evidence_unknown"}
+        service_slot = make("fleet", "installation", "service:" + digest(node_id)[:32], service,
+            grant="jobs", source="request_service", identity={"node_id": node_id, "required": required_service}, required=required_service is not False)
+        slots.append(service_slot)
+        if required_service is not False:
+            checks.append(predicate("fleet", "installation", "request_service_availability", service_slot,
+                not service["healthy"] if type(service.get("healthy")) is bool else None,
+                impact="availability", resource_key=digest(node_id)))
+        families = [("cpu", current.get("cpu")), ("memory", current.get("memory"))]
+        fs = current.get("filesystems") or {}
+        fs = {**fs, "truncated": bool(fs.get("omitted_count") or fs.get("omitted_missing_count"))}
+        families.append(("filesystem_inventory", fs))
+        for mount in fs.get("mounts", []) + fs.get("missing", []):
+            families.append(("filesystem:" + mount["path"], mount))
+            families.append(("inodes:" + mount["path"], mount.get("inodes") or {"status": "unknown", "reason": "inodes_unavailable"}))
+        for key, raw in families:
+            raw = raw or {"status": "unknown", "reason": "identity_ambiguous" if ambiguous else current.get("reason", "collector_missing")}
+            sample = make("fleet", "installation", "runtime:" + digest([node_id, key])[:32], raw, grant="jobs", source="runtime", identity={"node_id": node_id, "measurement": key})
+            slots.append(sample)
+            percent = raw.get("percent")
+            if key == "memory" or key.startswith("filesystem:"):
+                total = raw.get("total")
+                if type(total) not in (int, float) or total <= 0:
+                    percent = None
+            if key.startswith("inodes"):
+                total, free = raw.get("total"), raw.get("free")
+                percent = (total - free) * 100 / total if type(total) in (int, float) and total > 0 and type(free) in (int, float) and 0 <= free <= total else None
+            if key != "filesystem_inventory":
+                checks.append(predicate("fleet", "installation", key.split(":")[0] + "_ge_90_percent", sample, pressured(percent), resource_key=digest([node_id, key])))
+        trends = detail.get("trends") or {}
+        for key, raw in [("cpu", trends.get("cpu")), ("memory", trends.get("memory"))] + [("filesystem:" + item.get("path", "/"), item) for item in trends.get("filesystems", [])]:
+            raw = raw or {"status": "unknown", "reason": "cloudwatch_unavailable"}
+            required = raw.get("required") is True
+            sample = make("fleet", "installation", "cloud:" + digest([node_id, key])[:32], raw, grant="aws", source="cloudwatch", value=raw.get("value"), identity={"node_id": node_id, "measurement": key}, required=required)
+            slots.append(sample)
+            if required or slot_is_fresh(sample, now):
+                checks.append(predicate("fleet", "installation", "cloud_" + key.split(":")[0] + "_ge_90_percent", sample, pressured(raw.get("value")), resource_key=digest([node_id, key])))
+        mapped = bool(row.get("instance_id") and row.get("provider_state") and not ambiguous)
+        presence = make("fleet", "installation", "presence:" + digest(node_id)[:32], {
+            "status": "ok" if mapped else "unknown", "reason": "identity_ambiguous" if ambiguous else None if mapped else "provider_identity_unresolved",
+            "observed_at": fleet.get("inventory", {}).get("observed_at") if mapped else None,
+            "value": row.get("provider_state") if mapped else None}, grant="aws", source="ec2",
+            identity={"node_id": node_id, "instance_id": row.get("instance_id")}, required=False)
+        slots.append(presence)
+        if slot_is_fresh(presence, now):
+            checks.append(predicate("fleet", "installation", "provider_stopped", presence, row.get("provider_state") in ("stopped", "stopping", "terminated", "shutting-down"), impact="availability", resource_key=digest(node_id)))
+    if not slots:
+        slots.append(make("fleet", "installation", "roster", {"status": "unknown", "reason": "expected_roster_unresolved"}))
+    fleet_component = component(source_id, "fleet", "installation", slots, checks,
+        coverage_complete=bool(fleet.get("expected", {}).get("complete") and not fleet.get("overflow") and fleet.get("roster_complete", False)), now=now, identity_grant="platform")
+    if (not fleet.get("expected", {}).get("complete") or fleet.get("overflow")
+            or any(row.get("request_service_required") is None for row in fleet.get("rows", []) if row["expected"])):
+        fleet_component["coverage"]["expected_total"] = None
+        fleet_component["coverage"]["complete"] = False
+    components.append(fleet_component)
+    job_slots, job_checks = [], []
+    by_channel = {row["channel"]: row for row in native.get("jobs", [])}
+    for channel in configuration["channels"]:
+        raw = by_channel.get(channel) or {"channel": channel, "due_pending": 0, "running": 0, "overruns": 0}
+        raw = {**raw, "observed_at": native.get("observed_at"), "status": "ok" if native.get("observed_at") else "unknown", "reason": None if native.get("observed_at") else native.get("reason")}
+        raw["events_last_300_seconds"] = {row["event"]: row["count"] for row in native.get("events", []) if row["channel"] == channel}
+        queue = make("jobman", "installation", "queue:" + digest(channel)[:32], raw, grant="jobs", source="job_queue", identity={"channel": channel})
+        job_slots.append(queue)
+        job_checks.append(predicate("jobman", "installation", "runtime_overrun", queue, raw.get("overruns", 0) > 0 if raw.get("observed_at") else None, resource_key=channel))
+        prior = next((row for row in old.get("jobman:installation", {}).get("evidence", []) if row["slot_id"] == queue["slot_id"]), None)
+        progress = False if raw.get("observed_at") and raw.get("due_pending") == 0 else None
+        if prior and raw.get("due_pending") and (prior.get("value") or {}).get("due_pending") and parse_time(prior.get("observed_at")) and parse_time(raw.get("observed_at")):
+            duration = (parse_time(raw["observed_at"]) - parse_time(prior["observed_at"])).total_seconds()
+            if duration >= 300:
+                current_completed, previous_completed = parse_time(raw.get("latest_completed")), parse_time((prior.get("value") or {}).get("latest_completed"))
+                raw["progress_window_seconds"] = duration
+                if current_completed is None and previous_completed is not None or current_completed and previous_completed and current_completed < previous_completed:
+                    raw["progress_comparison"] = "reset_unknown"
+                    progress = None
+                else:
+                    progress = not raw["events_last_300_seconds"].get("completed", 0) and (current_completed is None or previous_completed is not None and current_completed == previous_completed)
+                    raw["progress_comparison"] = "same_channel_window"
+                queue["value"] = dict(raw)
+        job_checks.append(predicate("jobman", "installation", "due_backlog_no_progress_300_seconds", queue, progress, resource_key=channel))
+    from mojo.helpers.settings import settings
+    interval = max(1, int(settings.get_static("JOBS_RUNNER_HEARTBEAT_SEC", 5)))
+    for row in fleet.get("rows", []):
+        if row["expected"]:
+            ambiguous = row.get("identity_status") == "ambiguous"
+            runner = next((item for item in fleet.get("runners", []) if item.get("runner_id") == row.get("runner_id")), {})
+            heartbeat = make("jobman", "installation", "worker:" + digest(row["node_id"])[:32],
+                {"status": "ok" if row.get("last_heartbeat") and not ambiguous else "unknown", "observed_at": None if ambiguous else row.get("last_heartbeat"), "runner_id": row.get("runner_id")},
+                grant="jobs", source="heartbeat", identity={"node_id": row["node_id"], "runner_id": row.get("runner_id"), "started": runner.get("started")})
+            # The live roster already checked its lease; retain the actual sample.
+            heartbeat["provenance"].update(heartbeat_interval_seconds=interval,
+                                           live_admission_window_seconds=interval * 3)
+            job_slots.append(heartbeat)
+    for channel in configuration["channels"]:
+        queue_raw = (queues or {}).get(channel) or {"status": "unknown", "reason": "queue_transport_unavailable"}
+        job_slots.append(make("jobman", "installation", "redis_queue:" + digest(channel)[:32], queue_raw, grant="jobs", source="redis_queue", identity={"channel": channel}))
+    scheduler = fleet.get("sources", {}).get("scheduler", {})
+    job_slots.append(make("jobman", "installation", "scheduler_lock",
+        {**{key: scheduler[key] for key in ("status", "reason", "scheduler_active") if key in scheduler}, "observed_at": None},
+        grant="jobs", source="scheduler_lock", required=False))
+    detector = scheduler.get("detector") or {"status": "unknown", "reason": "detector_evidence_unavailable"}
+    detector_slot = make("jobman", "installation", "scheduler_detector", detector,
+                         grant="jobs", source="independent_detector",
+                         identity={"detector_id": detector.get("detector_id"), "node": detector.get("node")})
+    job_slots.append(detector_slot)
+    for name, rule in (("scheduler", "scheduler_available"), ("runners", "expected_runners_available")):
+        state = detector.get(name) or {}
+        healthy = state.get("healthy")
+        job_checks.append(predicate("jobman", "installation", rule, detector_slot,
+            not healthy if detector.get("status") == "ok" and state.get("status") == "ok" and type(healthy) is bool else None))
+    components.append(component(source_id, "jobman", "installation", job_slots, job_checks,
+                                coverage_complete=configuration["channels_complete"], now=now, identity_grant="platform"))
+    producer = make("monitoring", "producer", "attempt", {"observed_at": timestamp(now), "status": "ok"}, source="snapshot_producer",
+                    value={"profile_version": PROFILE_VERSION, "roster_revision": fleet.get("roster_revision")})
+    if configuration.get("services_omitted") or not configuration.get("services_complete", True):
+        producer["limits"] = {"services_omitted": configuration.get("services_omitted", 0), "denominator_known": configuration.get("services_complete", True)}
+    components.append(component(source_id, "monitoring", "producer", [producer], [],
+        coverage_complete=all(row["coverage"]["complete"] for row in components) and not configuration.get("services_omitted") and configuration.get("services_complete", True), now=now, identity_grant="platform"))
+    return components

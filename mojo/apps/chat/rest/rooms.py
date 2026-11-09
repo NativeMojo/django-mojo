@@ -1,5 +1,6 @@
 from mojo import decorators as md
 from mojo import errors as merrors
+from mojo.apps.realtime import policy
 from mojo.helpers import dates
 from mojo.helpers.request import (
     identity_allows_group, is_override_user_session, restricted_identity)
@@ -28,6 +29,14 @@ def _refuse_banned(request, room):
     """A banned caller has no say in a room except leaving it (#8347). Fixed:
     no authority hook runs before it or can lift it."""
     if room_authority.is_banned(request, room):
+        raise merrors.PermissionDeniedException()
+
+
+def _refuse_by_policy(request, room):
+    """403 when the project's REALTIME_SUBSCRIBE_HANDLER refuses the caller
+    this room's topic (maestro #8874). Asked after the view's own checks, so
+    it can only narrow them; with no hook it never refuses."""
+    if not policy.allows(request.user, room.topic, True):
         raise merrors.PermissionDeniedException()
 
 
@@ -365,6 +374,7 @@ def on_chat_room_members(request):
                 request.user, "manage_chat",
                 not is_override_user_session(request))):
             raise merrors.PermissionDeniedException()
+    _refuse_by_policy(request, room)
 
     qs = ChatMembership.objects.filter(room=room).exclude(status="banned")
     return ChatMembership.on_rest_list(request, queryset=qs)
@@ -399,6 +409,7 @@ def on_chat_room_online(request):
                 request.user, ["chat", "manage_chat"],
                 not is_override_user_session(request))):
             raise merrors.PermissionDeniedException()
+    _refuse_by_policy(request, room)
 
     members = ChatMembership.objects.filter(
         room=room, status__in=["active", "muted"],

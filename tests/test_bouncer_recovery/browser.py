@@ -38,9 +38,10 @@ def test_rejected_check_stays_on_recovery(opts):
 
         def do_GET(self):
             if self.path.startswith('/api/account/static/'):
-                asset = ROOT / 'mojo/apps/account/static/account' / self.path.split('?', 1)[0].rsplit('/', 1)[-1]
+                path = self.path.split('?', 1)[0]
+                asset = ROOT / 'mojo/apps/account/static/account' / path.rsplit('/', 1)[-1]
                 body = asset.read_bytes()
-                kind = 'application/javascript'
+                kind = 'text/css' if path.endswith('.css') else 'application/javascript'
             else:
                 visits.append(self.path)
                 body, kind = html, 'text/html'
@@ -72,9 +73,9 @@ def test_rejected_check_stays_on_recovery(opts):
             ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
             _json(f'http://127.0.0.1:{port}/json/version', time.monotonic() + 10)
             page = _new_page(port, f'http://127.0.0.1:{server.server_port}/auth')
-            page.wait("!!document.querySelector('button:not([disabled])')", 'continue button')
+            page.wait("!!document.querySelector('#mbg-continue:not([disabled])')", 'continue button')
             before = len([p for p in visits if p == '/auth'])
-            page.evaluate("window.__verifiedSeen=false;new MutationObserver(()=>{if(document.body.textContent.includes('Verified'))window.__verifiedSeen=true}).observe(document.body,{subtree:true,childList:true,characterData:true});document.querySelector('button:not([disabled])').click();true")
+            page.evaluate("window.__verifiedSeen=false;new MutationObserver(()=>{if(document.body.textContent.includes('Verified'))window.__verifiedSeen=true}).observe(document.body,{subtree:true,childList:true,characterData:true});document.querySelector('#mbg-continue:not([disabled])').click();true")
             time.sleep(1.4)
             assert len([p for p in visits if p == '/auth']) == before, "a blocked assessment must not reload the challenge"
             assert not page.evaluate("window.__verifiedSeen || document.body.textContent.includes('Verified')"), "a blocked assessment must never display Verified"
@@ -86,26 +87,79 @@ def test_rejected_check_stays_on_recovery(opts):
         server.server_close()
 
 
+LONG_REF = '1234567890123-' + 'b' * 30  # 44 characters, the longest reference shape
+GROUP_NAME = 'test-9132-browser-theme'
+
+# Layout probe: every visible block of the challenge, no horizontal scroll,
+# no overlapping blocks, and every visible control at least 44x44.
+LAYOUT_PROBE = """(async()=>{
+  // Entrance animations scale and shift elements; measure the settled layout.
+  await Promise.all(document.getAnimations().filter(a=>a.effect&&a.effect.getTiming().iterations!==Infinity).map(a=>a.finished.catch(()=>null)));
+  const vis=el=>{if(!el)return false;const r=el.getBoundingClientRect();const cs=getComputedStyle(el);return r.width>0&&r.height>0&&cs.display!=='none'&&cs.visibility!=='hidden'};
+  const blocks=['.mbg-brand','.mbg-glyph','#mbg-live','.mbg-actions','#mbg-reference-row','#mbg-sent-restart','#mbg-review','.mbg-footer']
+    .map(s=>document.querySelector(s)).filter(vis);
+  const overlaps=[];
+  for(let i=0;i<blocks.length;i++)for(let j=i+1;j<blocks.length;j++){
+    const a=blocks[i].getBoundingClientRect(),b=blocks[j].getBoundingClientRect();
+    if(a.left<b.right-0.5&&b.left<a.right-0.5&&a.top<b.bottom-0.5&&b.top<a.bottom-0.5)overlaps.push((blocks[i].id||blocks[i].className)+' x '+(blocks[j].id||blocks[j].className));
+  }
+  const small=[...document.querySelectorAll('.mbg button,.mbg a,.mbg input:not(#mbg-hp-field),.mbg textarea')].filter(vis)
+    .filter(el=>el.offsetWidth<44||el.offsetHeight<44).map(el=>el.id||el.textContent.trim());
+  const outside=[...document.querySelectorAll('.mbg *')].filter(vis).filter(el=>!el.closest('.mbg-hp'))
+    .filter(el=>{const r=el.getBoundingClientRect();return r.left<-0.5||r.right>innerWidth+0.5}).map(el=>el.id||el.className||el.tagName);
+  return {scroll:document.documentElement.scrollWidth<=innerWidth,overlaps,small,outside:outside.slice(0,5),state:document.getElementById('mbg-root').dataset.state};
+})()"""
+
+
 @th.django_unit_test('rendered Continue supports mouse, touch, keyboard, honest failures and credential-free decoys')
 def test_browser_interaction_matrix(opts):
     import base64
+    import re
     import time
     import objict
     from django.test import RequestFactory
+    from mojo.apps.account.models import Group
     from mojo.apps.account.rest.bouncer.views import _serve_challenge, _serve_login
     from test_account.test_admin_security_browser import _port, _json, _new_page, _stop
     executable = os.environ.get('MOJO_BOUNCER_CHROME', '')
     assert executable and Path(executable).is_file(), 'select installed Chrome with MOJO_BOUNCER_CHROME'
     state = {'mode': 'success', 'posts': [], 'visits': []}
+
+    def render(query=None, group=None, reference=None):
+        request = RequestFactory().get('/auth', query or {})
+        request.DATA = objict.objict(query or {})
+        request.muid = 'browser-matrix'
+        request.ip = '127.0.0.1'
+        request.user_agent = 'Mozilla/5.0'
+        cfg = {'descriptor': 'x' * 32, 'next_action': 'check'}
+        if reference:
+            cfg.update(reference=reference, review_ticket='ticket-browser-9132')
+        return _serve_challenge(request, group=group, hosted_config=cfg).content.decode().replace(
+            '"redirect_url": "/auth', '"redirect_url": "/finished').encode()
+
     request = RequestFactory().get('/auth')
     request.DATA = objict.objict()
     request.muid = 'browser-matrix'
     request.ip = '127.0.0.1'
     request.user_agent = 'Mozilla/5.0'
     cfg = {'descriptor': 'x' * 32, 'next_action': 'check'}
-    html = _serve_challenge(request, hosted_config=cfg).content.decode().replace('"redirect_url": "/auth"', '"redirect_url": "/finished"').encode()
-    nonce = __import__('re').search(rb'<script nonce="([^"]+)"', html).group(1).decode()
+    html = render()
+    nonce = re.search(rb'<script nonce="([^"]+)"', html).group(1).decode()
     login_html = _serve_login(request, hosted_config=cfg).content
+    Group.objects.filter(name=GROUP_NAME).delete()
+    group = Group.objects.create(name=GROUP_NAME, kind='organization', metadata={'auth_config': {'theme': {
+        'accent_color': '#0f9d8a',
+        'app_title': 'A Considerably Long Tenant Application Title For Narrow Phones',
+        'auth_provider_name': 'An Unusually Verbose Identity Provider Name Incorporated',
+    }}})
+    variants = {
+        'light': render({'auth_appearance': 'light'}),
+        'dark': render({'auth_appearance': 'dark'}),
+        'system': render({'auth_appearance': 'system'}),
+        'tenant': render(group=group, reference=LONG_REF),
+    }
+    Group.objects.filter(name=GROUP_NAME).delete()
+    variants['noscript-src'] = html.replace(b'mojo-hosted-bouncer.js?v=', b'missing-hosted-bouncer.js?v=')
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, *args):
@@ -113,15 +167,23 @@ def test_browser_interaction_matrix(opts):
 
         def do_GET(self):
             state['visits'].append(self.path)
-            if self.path.startswith('/api/account/static/'):
-                body = (ROOT / 'mojo/apps/account/static/account' / self.path.split('?', 1)[0].rsplit('/', 1)[-1]).read_bytes()
-                kind = 'text/css' if self.path.endswith('.css') else 'application/javascript'
+            path, _, query = self.path.partition('?')
+            status = 200
+            if path.startswith('/api/account/static/'):
+                asset = ROOT / 'mojo/apps/account/static/account' / path.rsplit('/', 1)[-1]
+                if asset.is_file():
+                    body = asset.read_bytes()
+                else:
+                    status, body = 404, b'missing'
+                kind = 'text/css' if path.endswith('.css') else 'application/javascript'
             else:
-                body = b'<h1>Destination reached</h1>' if self.path == '/finished' else (login_html if self.path.startswith('/real-login') else html)
+                variant = re.search(r'(?:^|&)variant=([\w-]+)', query)
+                body = b'<h1>Destination reached</h1>' if path == '/finished' else (
+                    login_html if path.startswith('/real-login') else variants.get(variant.group(1), html) if variant else html)
                 kind = 'text/html'
-            self.send_response(200)
+            self.send_response(status)
             self.send_header('Content-Type', kind)
-            rendered_nonce = __import__('re').search(rb'<script nonce="([^"]+)"', body)
+            rendered_nonce = re.search(rb'<script nonce="([^"]+)"', body)
             active_nonce = rendered_nonce.group(1).decode() if rendered_nonce else nonce
             self.send_header('Content-Security-Policy', f"default-src 'self'; script-src 'self' 'nonce-{active_nonce}'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https:")
             self.end_headers()
@@ -139,22 +201,30 @@ def test_browser_interaction_matrix(opts):
             op = body['hosted_gate']['operation']
             mode = state['mode']
             data = {'decision': 'allow', 'next_action': 'allow' if op == 'confirm' else 'check_cookie'}
-            status, content_type = 200, 'application/json'
+            status, content_type, headers = 200, 'application/json', {}
             if mode == 'cookies':
-                data = {'decision': 'block', 'next_action': 'recovery', 'reason': 'cookies'} if op == 'confirm' else data
+                data = {'decision': 'block', 'next_action': 'recovery', 'reason': 'cookies', 'reference': LONG_REF} if op == 'confirm' else data
             elif mode == 'limited':
                 status = 429
+                headers['Retry-After'] = '42'
                 data = {}
             elif mode == 'decoy':
                 data = {'decision': 'block', 'next_action': 'decoy'}
+            elif mode == 'invalid':
+                status = 400
+                data = {'next_action': 'error', 'reason': 'invalid', 'reference': LONG_REF}
             elif mode == 'http':
                 status = 503
             elif mode == 'html':
                 content_type = 'text/html'
+            elif mode == 'hold':
+                time.sleep(4)
             self.send_response(status)
             self.send_header('Content-Type', content_type)
+            for name, value in headers.items():
+                self.send_header(name, value)
             self.end_headers()
-            self.wfile.write(b'not json' if mode == 'json' else json.dumps({'status': True, 'data': data}).encode())
+            self.wfile.write(b'not json' if mode == 'json' else json.dumps({'status': status == 200, 'data': data}).encode())
 
     server = ThreadingHTTPServer(('127.0.0.1', 0), Handler)
     threading.Thread(target=server.serve_forever, daemon=True).start()
@@ -170,28 +240,57 @@ def test_browser_interaction_matrix(opts):
                 state.update(mode=mode, posts=[])
                 page.call('Page.navigate', {'url': f'http://127.0.0.1:{server.server_port}/auth{query}'})
                 page.wait("!!document.querySelector('#mbg-continue:not([disabled])')", 'enabled Continue')
-            def rect():
-                return page.evaluate("(()=>{let r=document.getElementById('mbg-continue').getBoundingClientRect();return {left:r.left,width:r.width,y:r.top+r.height/2}})()")
+            def rect(selector='#mbg-continue'):
+                return page.evaluate("(()=>{let r=document.querySelector(%r).getBoundingClientRect();return {left:r.left,width:r.width,y:r.top+r.height/2}})()" % selector)
             def key(name, code):
-                page.call('Input.dispatchKeyEvent', {'type': 'keyDown', 'key': name, 'windowsVirtualKeyCode': code, 'text': '\r' if name == 'Enter' else ''})
-                page.call('Input.dispatchKeyEvent', {'type': 'keyUp', 'key': name, 'windowsVirtualKeyCode': code})
+                text = '\r' if name == 'Enter' else (' ' if name == ' ' else '')
+                page.call('Input.dispatchKeyEvent', {'type': 'keyDown', 'key': name, 'code': 'Space' if name == ' ' else name, 'windowsVirtualKeyCode': code, 'text': text})
+                page.call('Input.dispatchKeyEvent', {'type': 'keyUp', 'key': name, 'code': 'Space' if name == ' ' else name, 'windowsVirtualKeyCode': code})
+            def click(selector):
+                page.evaluate("document.querySelector(%r).scrollIntoView({block:'center'});true" % selector)
+                box = rect(selector)
+                for kind in ('mousePressed', 'mouseReleased'):
+                    page.call('Input.dispatchMouseEvent', {'type': kind, 'x': box['left'] + box['width']/2, 'y': box['y'], 'button': 'left', 'clickCount': 1})
             def confirm():
                 page.evaluate("document.getElementById('mbg-continue').click();true")
+            def at(name):
+                page.wait(f"document.getElementById('mbg-root').dataset.state==='{name}'", f'{name} state')
+            def layout(tag):
+                probe = page.evaluate(LAYOUT_PROBE)
+                assert probe['scroll'], f'{tag}: no horizontal scroll ({probe})'
+                assert not probe['overlaps'], f'{tag}: blocks overlap: {probe["overlaps"]}'
+                assert not probe['small'], f'{tag}: controls under 44x44: {probe["small"]}'
+                assert not probe['outside'], f'{tag}: content runs off screen: {probe["outside"]}'
             page.call('Emulation.setDeviceMetricsOverride', {'width': 1100, 'height': 820, 'deviceScaleFactor': 1, 'mobile': False})
             fresh()
             assert page.evaluate("!document.querySelector('input[type=range]') && !document.body.textContent.includes('slider')"), 'hosted page must expose a Continue button without a drag requirement'
-            page.evaluate("document.getElementById('mbg-continue').focus();true")
-            assert page.evaluate("document.activeElement.id==='mbg-continue' && document.getElementById('mbg-status').getAttribute('aria-live')==='polite'"), 'keyboard focus and live status must stay available'
+            # Real keyboard: Tab reaches Continue first, Enter activates it.
+            key('Tab', 9)
+            assert page.evaluate("document.activeElement.id==='mbg-continue'"), 'a real Tab must land on Continue first'
+            assert page.evaluate("(()=>{const l=document.getElementById('mbg-live');return l.getAttribute('role')==='status'&&l.getAttribute('aria-live')==='polite'&&l.contains(document.getElementById('mbg-status'))})()"), 'the live status region must wrap the status line'
             Path('/tmp/bouncer-no-slider-desktop.png').write_bytes(base64.b64decode(page.call('Page.captureScreenshot', {'format': 'png'})['data']))
             key('Enter', 13)
             page.wait("location.pathname==='/finished'", 'keyboard destination')
             assert [p['hosted_gate']['operation'] for p in state['posts']] == ['check', 'confirm'], 'Continue must confirm the cookie before navigation'
             fresh()
-            box = rect()
-            for kind in ('mousePressed', 'mouseReleased'):
-                page.call('Input.dispatchMouseEvent', {'type': kind, 'x': box['left'] + box['width']/2, 'y': box['y'], 'button': 'left', 'clickCount': 1})
+            click('#mbg-continue')
             page.wait("location.pathname==='/finished'", 'mouse destination')
-            page.call('Emulation.setDeviceMetricsOverride', {'width': 360, 'height': 800, 'deviceScaleFactor': 1, 'mobile': True})
+            # A cookies failure reached with a real Enter: focus lands on the heading,
+            # then a real Tab reaches Ask for a review and Space opens the review step.
+            fresh('cookies')
+            key('Tab', 9)
+            key('Enter', 13)
+            at('failed')
+            assert page.evaluate("document.activeElement.id==='mbg-heading'"), 'a failure that hides Try again must move focus to the heading'
+            key('Tab', 9)
+            assert page.evaluate("document.activeElement.id==='mbg-restart' && document.activeElement.textContent==='Try again'"), 'a real Tab from the heading must reach the promoted Try again first'
+            key('Tab', 9)
+            assert page.evaluate("document.activeElement.id==='mbg-review-open'"), 'the next real Tab must reach Ask for a review'
+            key(' ', 32)
+            at('review')
+            assert page.evaluate("document.activeElement.id==='mbg-review-email'"), 'Space on Ask for a review must open the step with focus in the email field'
+            # Touch: EMULATED (CDP touch emulation at 360x640), not a physical device.
+            page.call('Emulation.setDeviceMetricsOverride', {'width': 360, 'height': 640, 'deviceScaleFactor': 1, 'mobile': True})
             page.call('Emulation.setTouchEmulationEnabled', {'enabled': True})
             page.call('Emulation.setEmulatedMedia', {'features': [{'name': 'prefers-reduced-motion', 'value': 'reduce'}]})
             fresh()
@@ -200,37 +299,105 @@ def test_browser_interaction_matrix(opts):
             box = rect()
             for kind in ('touchStart', 'touchEnd'):
                 page.call('Input.dispatchTouchEvent', {'type': kind, 'touchPoints': [] if kind == 'touchEnd' else [{'x': box['left']+box['width']/2, 'y': box['y'], 'id': 1}]})
-            page.wait("location.pathname==='/finished'", 'single mobile tap destination')
-            assert [p['hosted_gate']['operation'] for p in state['posts']] == ['check', 'confirm'], 'one mobile tap must confirm the cookie and reach the destination without dragging'
+            page.wait("location.pathname==='/finished'", 'single emulated-touch tap destination')
+            assert [p['hosted_gate']['operation'] for p in state['posts']] == ['check', 'confirm'], 'one emulated tap must confirm the cookie and reach the destination without dragging'
             tap = state['posts'][0]['signals']
-            assert tap['behavior']['touch_event_count'] > 0, 'a stationary mobile tap must be measured without dragging'
+            assert tap['behavior']['touch_event_count'] > 0, 'a stationary emulated tap must be measured without dragging'
             assert tap['gate_challenge'].get('had_activation') is True, 'Continue activation must be reported before the assessment'
+            # Reduced motion: no animation on any element of the challenge, in any state.
+            for mode in ('success', 'cookies'):
+                fresh(mode)
+                if mode == 'cookies':
+                    confirm()
+                    at('failed')
+                moving = page.evaluate("[...document.querySelectorAll('.mbg,.mbg *')].filter(el=>getComputedStyle(el).animationName!=='none').map(el=>el.className||el.tagName)")
+                assert not moving, f'reduced motion must stop every challenge animation ({mode}): {moving}'
+            page.call('Emulation.setEmulatedMedia', {'features': [{'name': 'prefers-reduced-motion', 'value': 'no-preference'}]})
             fresh()
             page.evaluate("MojoHostedBouncer.mount(document, {descriptor:'x'.repeat(32),next_action:'slider',redirect_url:'/finished'});true")
-            assert page.evaluate("document.getElementById('mbg-continue').textContent==='Continue' && !document.getElementById('mbg-continue').disabled"), 'legacy page configuration must still expose Continue'
-            for mode in ('cookies', 'http', 'html', 'json', 'decoy', 'limited'):
+            assert page.evaluate("document.getElementById('mbg-continue-label').textContent==='Continue' && !document.getElementById('mbg-continue').disabled"), 'legacy page configuration must still expose Continue'
+            for mode in ('cookies', 'http', 'html', 'json', 'decoy', 'limited', 'invalid'):
                 fresh(mode)
                 confirm()
                 time.sleep(0.25)
                 assert page.evaluate("location.pathname==='/auth' && !document.body.textContent.includes('Verified')"), f'{mode} must never show success or navigate'
+                assert page.evaluate("document.getElementById('mbg-root').dataset.state==='failed'"), f'{mode} must show the failed state'
                 if mode == 'cookies':
-                    assert page.evaluate("document.getElementById('mbg-status').textContent.includes('cookies')"), 'missing cookie must explain recovery'
+                    assert page.evaluate("document.getElementById('mbg-status').textContent.includes('cookie')"), 'missing cookie must explain recovery'
                 if mode == 'limited':
-                    assert page.evaluate("document.getElementById('mbg-status').textContent.includes('Too many checks') && document.getElementById('mbg-continue').disabled"), '429 must explain the wait and keep review reachable'
+                    assert page.evaluate("document.getElementById('mbg-heading').textContent==='Too many tries' && /^Try again in \\d:\\d\\d$/.test(document.getElementById('mbg-continue-label').textContent) && document.getElementById('mbg-continue').disabled"), '429 must count down on a disabled Try again'
+                    assert page.evaluate("getComputedStyle(document.getElementById('mbg-review-open')).display!=='none'"), '429 must keep review reachable'
                 if mode == 'decoy':
-                    assert page.evaluate("document.getElementById('mbg-help').open && !document.querySelector('input[type=password]')"), 'a legacy hosted decoy response must offer recovery without collecting credentials'
+                    assert page.evaluate("getComputedStyle(document.getElementById('mbg-review-open')).display!=='none' && !document.querySelector('input[type=password]')"), 'a legacy hosted decoy response must offer review without collecting credentials'
+                if mode == 'invalid':
+                    assert page.evaluate("(()=>{const r=document.getElementById('mbg-restart');return getComputedStyle(r).display!=='none'&&r.textContent==='Start over'})()"), 'a deterministic invalid response must offer Start over at once'
             fresh('cookies')
             confirm()
-            page.wait("document.getElementById('mbg-help').open", 'recovery help')
-            page.evaluate("document.getElementById('mbg-review-email').value='mobile@example.test';document.getElementById('mbg-review-note').value='Mobile check failed';document.getElementById('mbg-review-submit').click();true")
-            page.wait("document.getElementById('mbg-review-status').textContent.includes('recorded')", 'review receipt')
+            at('failed')
+            click('#mbg-review-open')
+            at('review')
+            page.evaluate("document.getElementById('mbg-review-email').value='mobile@example.test';document.getElementById('mbg-review-note').value='Mobile check failed';true")
+            click('#mbg-review-submit')
+            at('sent')
+            page.wait("document.getElementById('mbg-status').textContent.includes('recorded')", 'review receipt')
             assert state['posts'][-1]['email'] == 'mobile@example.test' and 'hosted_gate' not in state['posts'][-1], 'review submission must use independent intake, not the failed assess path'
             Path('/tmp/bouncer-mobile-review.png').write_bytes(base64.b64decode(page.call('Page.captureScreenshot', {'format': 'png'})['data']))
             fresh('html')
             for _ in range(3):
                 confirm()
                 time.sleep(0.15)
-            assert page.evaluate("document.getElementById('mbg-continue').hidden && !document.getElementById('mbg-restart').hidden && document.getElementById('mbg-help').open"), 'three interrupted attempts must offer restart/review instead of endless Retry'
+            assert page.evaluate("document.getElementById('mbg-continue').hidden && !document.getElementById('mbg-restart').hidden && document.getElementById('mbg-restart').classList.contains('is-primary')"), 'three interrupted attempts must promote Restart instead of an endless Try again'
+            # Theme: light, dark and system (with EMULATED dark/light) set the page background;
+            # a tenant accent changes Continue.
+            backgrounds = {}
+            for variant, scheme in (('light', 'dark'), ('dark', 'light'), ('system', 'dark'), ('system', 'light')):
+                page.call('Emulation.setEmulatedMedia', {'features': [{'name': 'prefers-color-scheme', 'value': scheme}]})
+                fresh('success', f'?variant={variant}')
+                backgrounds[(variant, scheme)] = page.evaluate("getComputedStyle(document.body).backgroundColor")
+            assert backgrounds[('light', 'dark')] == 'rgb(242, 239, 232)', f'light appearance ignores an OS dark theme: {backgrounds}'
+            assert backgrounds[('dark', 'light')] == 'rgb(9, 14, 22)', f'dark appearance ignores an OS light theme: {backgrounds}'
+            assert backgrounds[('system', 'dark')] == 'rgb(9, 14, 22)' and backgrounds[('system', 'light')] == 'rgb(242, 239, 232)', f'system appearance follows the (emulated) OS theme: {backgrounds}'
+            page.call('Emulation.setEmulatedMedia', {'features': []})
+            fresh()
+            default_button = page.evaluate("getComputedStyle(document.getElementById('mbg-continue')).backgroundColor")
+            fresh('success', '?variant=tenant')
+            tenant_button = page.evaluate("getComputedStyle(document.getElementById('mbg-continue')).backgroundColor")
+            assert default_button != tenant_button and tenant_button not in ('rgba(0, 0, 0, 0)', 'transparent'), f'the tenant accent must colour Continue: {default_button} vs {tenant_button}'
+            # Layout at phone widths with a 44-character reference and a long title/provider.
+            for width, height in ((320, 568), (360, 640)):
+                page.call('Emulation.setDeviceMetricsOverride', {'width': width, 'height': height, 'deviceScaleFactor': 1, 'mobile': True})
+                tag = f'{width}x{height}'
+                fresh('success', '?variant=tenant')
+                layout(f'{tag} ready')
+                fresh('hold', '?variant=tenant')
+                confirm()
+                at('checking')
+                layout(f'{tag} checking')
+                fresh('cookies', '?variant=tenant')
+                confirm()
+                at('failed')
+                layout(f'{tag} failed (Restart promoted, 44-char reference)')
+                click('#mbg-review-open')
+                at('review')
+                layout(f'{tag} review')
+                page.evaluate("document.getElementById('mbg-review-email').value='narrow@example.test';true")
+                click('#mbg-review-submit')
+                at('sent')
+                layout(f'{tag} sent')
+                fresh('limited', '?variant=tenant')
+                confirm()
+                at('failed')
+                layout(f'{tag} limited (Try again + Start over)')
+                fresh('success', '?variant=tenant')
+                page.evaluate("document.getElementById('mbg-root').dataset.state='verified';true")
+                layout(f'{tag} verified (FORCED: a real pass navigates away at once)')
+            page.call('Emulation.setDeviceMetricsOverride', {'width': 360, 'height': 640, 'deviceScaleFactor': 1, 'mobile': True})
+            # The script never loads: Get help still reveals the review step (CSS :target).
+            page.call('Page.navigate', {'url': f'http://127.0.0.1:{server.server_port}/auth?variant=noscript-src'})
+            page.wait("document.readyState==='complete'", 'page without its script')
+            assert page.evaluate("getComputedStyle(document.getElementById('mbg-review')).display==='none'"), 'the review step starts closed'
+            click('#mbg-help')
+            page.wait("getComputedStyle(document.getElementById('mbg-review')).display!=='none'", 'review revealed without script')
             # Storage denial still leaves controls and the original reset URL usable.
             script = page.call('Page.addScriptToEvaluateOnNewDocument', {'source': "Object.defineProperty(window,'sessionStorage',{get(){throw new Error('blocked')}});Object.defineProperty(window,'localStorage',{get(){throw new Error('blocked')}});"})
             fresh('success', '?token=pr%3Afixture-reset')
@@ -340,6 +507,7 @@ def test_browser_interaction_matrix(opts):
             page.call('Page.navigate', {'url': fresh_url})
             time.sleep(0.25)
             assert page.evaluate("!!document.querySelector('#mbg-review-form[method=post] input[name=review_ticket]') && !document.querySelector('input[type=password]')"), 'without JavaScript visitors can still submit a review and no password form is present'
+            assert page.evaluate("getComputedStyle(document.getElementById('mbg-review')).display!=='none' && getComputedStyle(document.getElementById('mbg-review-back')).display==='none'"), 'without JavaScript the review form shows under the check, with no Back button'
     finally:
         if page:
             page.close()

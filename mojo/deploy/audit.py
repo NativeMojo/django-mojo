@@ -1,9 +1,10 @@
 #!/usr/bin/env python3
-"""Converge the narrow Linux Audit policy used by MojoSec provenance.
+"""Converge the narrow Linux Audit policy MojoSec keeps for forensics.
 
-This module is settings-free because it runs during node convergence and from
-the root-owned audit health timer.  The sensor consumes only the resulting
-sidecar; it never receives CAP_AUDIT_CONTROL.
+This module is settings-free because it runs during node convergence. The
+managed policy is one path watch on the sudo executable: the sensor itself
+reads no Audit exec records any more (maestro #9769) and never receives
+CAP_AUDIT_CONTROL.
 """
 
 import argparse
@@ -11,11 +12,9 @@ import fcntl
 import glob
 import hashlib
 import json
-import math
 import os
 import re
 import shutil
-import sqlite3
 import stat
 import subprocess
 import tempfile
@@ -26,22 +25,13 @@ RULES_DIR = "/etc/audit/rules.d"
 GENERATED_PATH = "/etc/audit/audit.rules"
 MANAGED_PATH = "/etc/audit/rules.d/70-mojosec.rules"
 STATE_PATH = "/etc/mojosec/audit-state.json"
-HEALTH_PATH = "/run/mojosec/audit-health.json"
 LOCK_PATH = "/run/mojosec-audit.lock"
-SENSOR_STATE_PATH = "/var/lib/mojosec/state.sqlite3"
 MANAGED_MARKER = "# managed-by: django-mojo mojosec-audit-v1"
-HEALTH_SCHEMA = "mojosec.audit-health"
-HEALTH_ENVELOPE_FIELDS = (
-    "schema", "version", "boot_id", "generation", "rules_sha256", "sequence",
-)
-HEALTH_STATUS_FIELDS = (
+# The auditctl -s counters converge verifies after loading the policy.
+STATUS_FIELDS = (
     "enabled", "failure", "rate_limit", "backlog_limit", "backlog", "lost",
 )
-HEALTH_FIELDS = HEALTH_ENVELOPE_FIELDS + HEALTH_STATUS_FIELDS + ("updated_at",)
-HEALTH_INTEGER_MAX = 2 ** 63 - 1
-MAX_HEALTH_AGE_SECONDS = 15
-_DIGEST = re.compile(r"^[a-f0-9]{64}$")
-_BOOT = re.compile(r"^[a-f0-9]{32}$")
+STATUS_INTEGER_MAX = 2 ** 63 - 1
 # Seed classification is by EFFECTIVE DIRECTIVES, never bytes: the distro
 # ships these exact semantics wrapped in comments and blank lines, and a
 # byte-exact form matches only skeleton-provisioned nodes (item 2002). A file
@@ -76,25 +66,19 @@ def render_policy(app_uid):
     if (not isinstance(app_uid, int) or isinstance(app_uid, bool) or
             not 1 <= app_uid < 4294967295):
         raise AuditError("application UID is invalid")
+    # The app UID is validated for the generation contract even though the
+    # sudo-only policy no longer embeds it: the exec rules that did were
+    # ~800 kernel records a minute on a django-mojo node and nothing reads
+    # them any more. The path watch keeps every sudo exec in auditd's own log
+    # for forensics at near-zero cost.
     lines = [
         MANAGED_MARKER,
         "-D",
         "-b 8192",
         "-f 1",
         "-r 0",
+        "-w /usr/bin/sudo -p x -k mojosec-sudo",
     ]
-    for arch in ("b64", "b32"):
-        lines.append(
-            f"-a always,exit -F arch={arch} -S execve,execveat "
-            f"-F euid=0 -F auid!={app_uid} -k mojosec-root-exec")
-        lines.append(
-            f"-a always,exit -F arch={arch} -S execve,execveat "
-            f"-F auid={app_uid} -F auid!=4294967295 "
-            "-F exe!=/usr/bin/sudo -k mojosec-app-exec")
-    # A path watch catches sudo execution without authorizing a command-name
-    # based disposition.  Audit can emit the same exec via another rule; the
-    # compound identity de-duplicates it later.
-    lines.append("-w /usr/bin/sudo -p x -k mojosec-sudo")
     return "\n".join(lines) + "\n"
 
 
@@ -180,94 +164,19 @@ def parse_status(text):
     for line in str(text).splitlines():
         parts = line.split(None, 1)
         key = parts[0] if parts else ""
-        if key not in HEALTH_STATUS_FIELDS:
+        if key not in STATUS_FIELDS:
             continue
         if key in values:
             raise AuditError(f"auditctl status repeats {key}")
         if len(parts) != 2 or not re.fullmatch(r"-?[0-9]+", parts[1]):
             raise AuditError(f"auditctl status field {key} is not an integer")
         value = int(parts[1])
-        if not 0 <= value <= HEALTH_INTEGER_MAX:
+        if not 0 <= value <= STATUS_INTEGER_MAX:
             raise AuditError(f"auditctl status field {key} is out of range")
         values[key] = value
-    if set(values) != set(HEALTH_STATUS_FIELDS):
+    if set(values) != set(STATUS_FIELDS):
         raise AuditError("auditctl status is incomplete")
-    return {key: values[key] for key in HEALTH_STATUS_FIELDS}
-
-
-def select_health_fields(value):
-    """Project one internal health mapping onto the closed publisher contract."""
-    if not isinstance(value, dict):
-        raise AuditError("Audit health value is not a mapping")
-    try:
-        return {key: value[key] for key in HEALTH_FIELDS}
-    except KeyError as err:
-        raise AuditError(f"Audit health value is missing {err.args[0]}") from err
-
-
-def validate_health(value, now=None, previous=None):
-    reason = ""
-    now = time.time() if now is None else float(now)
-    if not isinstance(value, dict) or set(value) != set(HEALTH_FIELDS):
-        return {"healthy": False, "reason": "malformed"}
-    integers = ("sequence",) + HEALTH_STATUS_FIELDS
-    updated_at = value.get("updated_at")
-    if (value.get("schema") != HEALTH_SCHEMA or type(value.get("version")) is not int or
-            value["version"] != 1 or
-            not _BOOT.fullmatch(str(value.get("boot_id") or "")) or
-            not _DIGEST.fullmatch(str(value.get("generation") or "")) or
-            not _DIGEST.fullmatch(str(value.get("rules_sha256") or "")) or
-            any(not isinstance(value.get(key), int) or isinstance(value.get(key), bool) or
-                not 0 <= value[key] <= HEALTH_INTEGER_MAX for key in integers) or
-            not isinstance(updated_at, (int, float)) or isinstance(updated_at, bool) or
-            not math.isfinite(updated_at) or not 0 <= updated_at <= HEALTH_INTEGER_MAX):
-        return {"healthy": False, "reason": "malformed"}
-    if now < value["updated_at"] - 2 or now - value["updated_at"] > MAX_HEALTH_AGE_SECONDS:
-        reason = "stale"
-    elif (value["enabled"] != 1 or value["failure"] != 1 or
-          value["rate_limit"] != 0 or value["backlog_limit"] < 8192 or
-          value["backlog"] >= value["backlog_limit"] or
-          value["lost"] != 0):
-        reason = "audit_unhealthy"
-    elif previous is not None:
-        if value["boot_id"] == previous.get("boot_id"):
-            repeated = (
-                value["sequence"] == previous.get("sequence") and
-                value["updated_at"] == previous.get("updated_at") and
-                value["generation"] == previous.get("generation") and
-                value["rules_sha256"] == previous.get("rules_sha256"))
-            if (value["generation"] != previous.get("generation") or
-                    value["rules_sha256"] != previous.get("rules_sha256")):
-                reason = "generation_changed"
-            elif value["lost"] < previous.get("lost", 0):
-                reason = "loss_counter_regressed"
-            elif not repeated and value["sequence"] != previous.get("sequence", -1) + 1:
-                reason = "sequence_gap"
-    return {"healthy": not reason, "reason": reason, "value": value}
-
-
-def read_health(path=HEALTH_PATH, require_root=True):
-    try:
-        payload, info = _read_regular(path, maximum=4096)
-    except (FileNotFoundError, OSError, AuditError):
-        return None
-    if (stat.S_IMODE(info.st_mode) != 0o600 or
-            (require_root and (info.st_uid != 0 or info.st_gid != 0))):
-        return None
-    try:
-        value = json.loads(payload.decode("utf-8"), object_pairs_hook=lambda pairs: _health_object(pairs))
-    except (UnicodeError, json.JSONDecodeError, AuditError):
-        return None
-    return value if isinstance(value, dict) else None
-
-
-def _health_object(pairs):
-    result = {}
-    for key, value in pairs:
-        if key in result:
-            raise AuditError("duplicate health field")
-        result[key] = value
-    return result
+    return {key: values[key] for key in STATUS_FIELDS}
 
 
 def _atomic_write(path, payload, mode):
@@ -441,126 +350,17 @@ def restore_prior(state_path=STATE_PATH, consume=True):
     return state
 
 
-def flush_pending_firewall(path=SENSOR_STATE_PATH):
-    """Fail open held broker candidates before an older v3 sensor can start."""
-    if not os.path.exists(path):
-        return 0
-    db = sqlite3.connect(path, timeout=30, isolation_level=None)
-    db.row_factory = sqlite3.Row
-    flushed = 0
-    try:
-        tables = {row[0] for row in db.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'")}
-        if "pending_firewall" not in tables:
-            return 0
-        db.execute("BEGIN IMMEDIATE")
-        sensor = db.execute("SELECT value FROM meta WHERE key='sensor_id'").fetchone()
-        if sensor is None:
-            raise AuditError("pending firewall state has no sensor identity")
-        sensor_id = json.loads(sensor[0])
-        columns = {row[1] for row in db.execute("PRAGMA table_info(events)")}
-        for row in db.execute(
-                "SELECT observation_id,payload FROM pending_firewall "
-                "WHERE state='pending' ORDER BY created,rowid").fetchall():
-            observation = json.loads(row["payload"])
-            first = observation["observed_at"]
-            event = {
-                "id": hashlib.sha256("\0".join((sensor_id, observation["kind"],
-                    observation["fingerprint"], first)).encode()).hexdigest(),
-                "kind": observation["kind"], "observed_at": first,
-                "first_seen": first, "last_seen": first,
-                "severity": observation["severity"],
-                "summary": observation["summary"][:256], "count": 1,
-                "attributes": observation.get("attributes", {}),
-                "recommendation": observation.get("recommendation", "none"),
-            }
-            payload = json.dumps(event, sort_keys=True, separators=(",", ":"))
-            if "delivery_class" in columns:
-                db.execute(
-                    "INSERT OR IGNORE INTO events(id,payload,severity,created,delivery_class) "
-                    "VALUES(?,?,?,?, 'ordinary')",
-                    (event["id"], payload, event["severity"], time.time()))
-            else:
-                db.execute(
-                    "INSERT OR IGNORE INTO events(id,payload,severity,created) VALUES(?,?,?,?)",
-                    (event["id"], payload, event["severity"], time.time()))
-            if db.execute("SELECT 1 FROM events WHERE id=?", (event["id"],)).fetchone():
-                db.execute("DELETE FROM pending_firewall WHERE observation_id=?",
-                           (row["observation_id"],))
-                flushed += 1
-        remaining = db.execute(
-            "SELECT COUNT(*) FROM pending_firewall WHERE state='pending'").fetchone()[0]
-        if remaining:
-            raise AuditError("pending firewall downgrade flush was incomplete")
-        db.execute("COMMIT")
-        return flushed
-    except Exception:
-        if db.in_transaction:
-            db.execute("ROLLBACK")
-        raise
-    finally:
-        db.close()
-
-
-def publish_health(generation, rules_sha256, sequence, status_text=None,
-                   path=HEALTH_PATH, boot_id=None, active_rules_text=None):
-    if status_text is None:
-        process = subprocess.run(
-            ["/sbin/auditctl", "-s"], capture_output=True, text=True, timeout=5)
-        if process.returncode:
-            raise AuditError(process.stderr.strip() or "auditctl -s failed")
-        status_text = process.stdout
-    status = parse_status(status_text)
-    if active_rules_text is None:
-        process = subprocess.run(
-            ["/sbin/auditctl", "-l"], capture_output=True, text=True, timeout=5)
-        if process.returncode:
-            raise AuditError(process.stderr.strip() or "auditctl -l failed")
-        active_rules_text = process.stdout
-    active_digest = _sha256(active_rules_text.encode())
-    if (active_digest != rules_sha256 or
-            any(value not in active_rules_text for value in (
-                "mojosec-root-exec", "mojosec-app-exec", "mojosec-sudo")) or
-            "task,never" in active_rules_text or "never,task" in active_rules_text):
-        # Preserve a valid bounded sidecar while making it ineligible for
-        # suppression. The actual digest proves what drifted.
-        status["enabled"] = 0
-    if boot_id is None:
-        with open("/proc/sys/kernel/random/boot_id", encoding="ascii") as handle:
-            boot_id = handle.read().strip().replace("-", "")
-    if sequence is None:
-        prior = read_health(path=path, require_root=True)
-        sequence = (int(prior.get("sequence", -1)) + 1
-                    if prior and prior.get("boot_id") == boot_id else 0)
-    enriched = {
-        "schema": HEALTH_SCHEMA, "version": 1, "boot_id": boot_id,
-        "generation": generation, "rules_sha256": active_digest,
-        "sequence": sequence, **status, "updated_at": time.time(),
-    }
-    payload = select_health_fields(enriched)
-    _atomic_write(path, (json.dumps(payload, sort_keys=True, separators=(",", ":")) + "\n").encode(), 0o600)
-    return payload
-
-
 def main(argv=None):
     parser = argparse.ArgumentParser(prog="python3 -m mojo.deploy.audit")
-    parser.add_argument("command", choices=(
-        "render", "converge", "restore", "publish-health", "flush-pending"))
+    parser.add_argument("command", choices=("render", "converge", "restore"))
     parser.add_argument("--app-uid", type=int)
-    parser.add_argument("--generation", default="")
-    parser.add_argument("--rules-sha256", default="")
-    parser.add_argument("--sequence", type=int)
     args = parser.parse_args(argv)
     if args.command == "render":
         print(render_policy(args.app_uid), end="")
     elif args.command == "converge":
         print(json.dumps(converge(args.app_uid), sort_keys=True))
-    elif args.command == "restore":
-        restore_prior()
-    elif args.command == "flush-pending":
-        flush_pending_firewall()
     else:
-        publish_health(args.generation, args.rules_sha256, args.sequence)
+        restore_prior()
     return 0
 
 

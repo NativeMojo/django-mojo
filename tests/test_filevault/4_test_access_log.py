@@ -55,10 +55,6 @@ def setup_vault_access_log(opts):
     from mojo.apps.account.models import User, Group, GroupMember
     from mojo.apps.fileman.models import FileManager
     from mojo.apps.filevault.services import vault as vault_service
-    import sys
-    # Reuse the FileManager helper from the DM-047 suite rather than
-    # duplicating it; both need the same filesystem-backed default.
-    scoping = sys.modules.get("tests.test_filevault.3_test_rest_scoping")
 
     Group.objects.filter(name__in=[GROUP_A, GROUP_B]).delete()
     User.objects.filter(email__in=[OWNER_EMAIL, OUTSIDER_EMAIL]).delete()
@@ -86,22 +82,19 @@ def setup_vault_access_log(opts):
     ms_b.save()
     ms_b.add_permission("view_vault")
 
-    if scoping is not None:
-        scoping._ensure_file_manager(FileManager)
-    else:
-        from mojo.helpers import paths
-        base_path = str(paths.VAR_ROOT / "filevault-tests")
-        fm, _ = FileManager.objects.get_or_create(
-            user=None, group=None, name="Test FileManager (file)",
-            defaults={"backend_type": FileManager.FILE_SYSTEM,
-                      "backend_url": "file:///", "is_default": True,
-                      "is_active": True})
-        fm.backend_type = FileManager.FILE_SYSTEM
-        fm.backend_url = "file:///"
-        fm.is_default = True
-        fm.is_active = True
-        fm.set_settings({"base_path": base_path})
-        fm.save()
+    # group A's own filevault manager, so uploads never derive from the
+    # system default: fileman packages running in parallel create and delete
+    # system defaults of their own (#7538)
+    from mojo.helpers import paths
+    group = group_a
+    FileManager.objects.filter(group=group).delete()
+    manager = FileManager(user=None, group=group, use="filevault",
+                          name=f"{group.name}_vault_fm",
+                          is_default=True, is_active=True)
+    manager.set_backend_url("file:///", group.get_uuid(), "filevault")
+    manager.save()
+    manager.set_settings({"base_path": str(paths.VAR_ROOT / "filevault-tests")})
+    manager.save()
 
     normal = vault_service.upload_file(
         file_obj=_make_file_obj(b"tenant A secret file", "vlog-file.txt"),

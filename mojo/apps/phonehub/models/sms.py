@@ -4,6 +4,31 @@ from mojo.helpers.settings import settings
 
 SMS_FAKE_MAPPINGS = settings.get_static("SMS_FAKE_MAPPINGS", {})
 
+REDACTED = "[redacted]"
+# The only keys of a relay's reply kept in metadata['remote']. The reply is
+# the relay's own SMS row, body and recipient included.
+REMOTE_METADATA_KEYS = ("id", "status", "from_number")
+
+
+def _stored_body(body, secret):
+    """The body as stored: `secret` replaced by [redacted].
+
+    With no secret the body is stored unchanged. A secret that is not in the
+    body (a changed template) stores [redacted] alone: fail closed.
+    """
+    if not secret:
+        return body
+    if secret not in (body or ""):
+        return REDACTED
+    return body.replace(secret, REDACTED)
+
+
+def remote_metadata(remote):
+    """Cut a relay reply down to REMOTE_METADATA_KEYS."""
+    if not isinstance(remote, dict):
+        return {}
+    return {key: remote[key] for key in REMOTE_METADATA_KEYS if key in remote}
+
 
 class SMS(models.Model, MojoModel):
     """
@@ -164,8 +189,12 @@ class SMS(models.Model, MojoModel):
         self.save()
 
     @classmethod
-    def send(cls, body, to_number, metadata=None, group=None, user=None, from_number=None):
+    def send(cls, body, to_number, metadata=None, group=None, user=None, from_number=None,
+             secret=None):
         """Send an outbound SMS and return the saved SMS instance.
+
+        `secret` is a code or link inside `body`. The provider gets the full
+        body; the stored row keeps it as [redacted] (see _stored_body).
 
         Dispatches by PhoneConfig.provider (resolved once via
         PhoneConfig.get_for_group(group)). If no PhoneConfig exists or the
@@ -178,6 +207,7 @@ class SMS(models.Model, MojoModel):
         from .config import PhoneConfig
 
         to_number = PhoneNumber.normalize(to_number)
+        stored_body = _stored_body(body, secret)
         config = PhoneConfig.get_for_group(group)
         provider_name = config.provider if config else twilio.PROVIDER
 
@@ -198,7 +228,7 @@ class SMS(models.Model, MojoModel):
                     sms = cls.objects.create(
                         user=user, group=group, direction='outbound',
                         from_number=from_number or '', to_number=to_number,
-                        body=body, status='queued', provider='mojo',
+                        body=stored_body, status='queued', provider='mojo',
                         metadata=metadata or {},
                     )
                     sms.is_test = True
@@ -209,7 +239,7 @@ class SMS(models.Model, MojoModel):
             if not base_url or not api_key:
                 sms = cls.objects.create(
                     user=user, group=group, direction='outbound',
-                    from_number=from_number or '', to_number=to_number, body=body,
+                    from_number=from_number or '', to_number=to_number, body=stored_body,
                     status='failed', provider='mojo', metadata=metadata or {},
                 )
                 sms.mark_failed(
@@ -220,21 +250,21 @@ class SMS(models.Model, MojoModel):
 
             sms = cls.objects.create(
                 user=user, group=group, direction='outbound',
-                from_number=from_number or '', to_number=to_number, body=body,
+                from_number=from_number or '', to_number=to_number, body=stored_body,
                 status='queued', provider='mojo', metadata=metadata or {},
             )
 
             from mojo.apps.phonehub.services import mojo_provider
             resp = mojo_provider.send_sms(
                 body, to_number, from_number=from_number,
-                base_url=base_url, api_key=api_key,
+                base_url=base_url, api_key=api_key, secret=secret,
             )
             if resp.sent:
                 if resp.from_number and not sms.from_number:
                     sms.from_number = resp.from_number
                 if resp.remote:
                     md = sms.metadata or {}
-                    md['remote'] = resp.remote
+                    md['remote'] = remote_metadata(resp.remote)
                     sms.metadata = md
                 sms.mark_sent(resp.id)
             else:
@@ -252,7 +282,7 @@ class SMS(models.Model, MojoModel):
         if resolution.error:
             sms = cls.objects.create(
                 user=user, group=group, direction='outbound',
-                from_number='', to_number=to_number, body=body,
+                from_number='', to_number=to_number, body=stored_body,
                 status='failed', provider=twilio.PROVIDER, metadata=metadata or {},
             )
             sms.mark_failed(error_code=resolution.error_code,
@@ -265,7 +295,7 @@ class SMS(models.Model, MojoModel):
             direction='outbound',
             from_number=resolved_from,
             to_number=to_number,
-            body=body,
+            body=stored_body,
             status='queued',
             provider=twilio.PROVIDER,
             metadata=metadata or {},

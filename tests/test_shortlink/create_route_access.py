@@ -1,0 +1,404 @@
+"""POST /api/shortlink/link/create access: #1831 (files), #9536 (groups) and
+#8099 (the opt-in SHORTLINK_CREATE_PERMS gate).
+
+#1831: the route used to load any File by numeric id and shorten it. A
+file-backed link now needs the File's share permission (SAVE_PERMS:
+manage_files, files or owner), checked against the file's own group.
+
+#9536: the route stored the link in any ?group= the caller named. The caller
+must now belong to that group (directly or through a parent) or hold
+manage_shortlinks globally. Every refusal looks the same.
+
+#8099: require_create_perms is tested here in process with explicit perms, so
+no setting is touched; the route with the real setting is tested in the
+serial package tests/test_shortlink_extended_serial.
+"""
+import os
+import tempfile
+import uuid as _uuid
+
+from testit import helpers as th
+from testit.helpers import assert_true, assert_eq
+
+TESTIT_TIER = "bug"
+
+PREFIX = "sl1831"
+PWORD = "Sl1831##mojo99"
+CREATE = "/api/shortlink/link/create"
+
+
+def _make_user(tag, name, global_perms=None):
+    from mojo.apps.account.models import User
+    username = f"{PREFIX}_{name}_{tag}@shortlink.test"
+    user = User.objects.create_user(username=username, email=username, password=PWORD)
+    user.is_active = True
+    user.is_email_verified = True
+    user.requires_mfa = False
+    user.save()
+    if global_perms:
+        user.add_permission(list(global_perms))
+        user.save()
+    return user
+
+
+def _join(user, group, perms):
+    from mojo.apps.account.models import GroupMember
+    member, _ = GroupMember.objects.get_or_create(user=user, group=group)
+    member.permissions = {p: True for p in perms}
+    member.save()
+
+
+def _make_file(opts, fm, owner, name):
+    from mojo.apps.fileman.models import File
+    content = b"private bytes"
+    f = File(filename=name, content_type="text/plain", category="text",
+             file_size=len(content), file_manager=fm, user=owner, group=fm.group)
+    f.generate_storage_filename()
+    f.save()
+    path = os.path.join(opts.tmpdir, f.storage_file_path.lstrip("/"))
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as fh:
+        fh.write(content)
+    f.mark_as_completed(commit=True)
+    f.refresh_from_db()
+    return f
+
+
+def _as(opts, user):
+    opts.client.logout()
+    assert_true(opts.client.login(user.username, PWORD), f"login failed for {user.username}")
+
+
+def _as_key(opts, token):
+    opts.client.logout()
+    opts.client.bearer = "apikey"
+    opts.client.access_token = token
+    opts.client.is_authenticated = True
+
+
+def _create(opts, data, group=None):
+    path = CREATE if group is None else f"{CREATE}?group={group}"
+    return opts.client.post(path, dict(data, source=opts.source))
+
+
+def _link_for(resp):
+    from mojo.apps.shortlink.models import ShortLink
+    url = resp.response.data.short_link
+    code = url.rstrip("/").rsplit("/", 1)[-1]
+    return ShortLink.objects.filter(code=code).first()
+
+
+@th.django_unit_setup()
+def setup_create_route_access(opts):
+    from mojo.apps.account.models import User, Group, GroupMember, ApiKey
+    from mojo.apps.fileman.models import FileManager, File
+    from mojo.apps.shortlink.models import ShortLink
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip="127.0.0.1")
+
+    # Leftovers from an earlier run on this long-lived database.
+    old_users = User.objects.filter(username__startswith=f"{PREFIX}_")
+    ShortLink.objects.filter(source__startswith=PREFIX).delete()
+    File.objects.filter(user__in=old_users).delete()
+    FileManager.objects.filter(name__startswith=f"{PREFIX}_").delete()
+    ApiKey.objects.filter(name__startswith=f"{PREFIX}_").delete()
+    Group.objects.filter(name__startswith=f"{PREFIX}_").delete()
+    old_users.delete()
+
+    tag = _uuid.uuid4().hex[:8]
+    opts.source = f"{PREFIX}_{tag}"
+    group_parent = Group.objects.create(name=f"{PREFIX}_p_{tag}", kind="organization")
+    group_a = Group.objects.create(name=f"{PREFIX}_a_{tag}", kind="organization",
+                                   parent=group_parent)
+    group_b = Group.objects.create(name=f"{PREFIX}_b_{tag}", kind="organization")
+    opts.group_a, opts.group_b = group_a.pk, group_b.pk
+
+    owner = _make_user(tag, "owner")
+    _join(owner, group_b, [])
+    outsider = _make_user(tag, "outsider")
+    _join(outsider, group_a, ["manage_files", "view_fileman"])
+    manager_b = _make_user(tag, "manager")
+    _join(manager_b, group_b, ["manage_files"])
+    viewer_b = _make_user(tag, "viewer")
+    _join(viewer_b, group_b, ["view_fileman"])
+    global_a = _make_user(tag, "global", global_perms=["manage_files"])
+    _join(global_a, group_a, [])
+    opts.owner, opts.outsider, opts.manager_b = owner, outsider, manager_b
+    opts.viewer_b, opts.global_a = viewer_b, global_a
+    parent_member = _make_user(tag, "parent")
+    _join(parent_member, group_parent, [])
+    link_manager = _make_user(tag, "slmanager", global_perms=["manage_shortlinks"])
+    plain = _make_user(tag, "plain")
+    former = _make_user(tag, "former")
+    _join(former, group_b, [])
+    GroupMember.objects.filter(user=former, group=group_b).update(is_active=False)
+    opts.parent_member, opts.link_manager = parent_member, link_manager
+    opts.plain, opts.former = plain, former
+    holder_a = _make_user(tag, "holdera")
+    _join(holder_a, group_a, ["manage_shortlinks"])
+    holder_parent = _make_user(tag, "holderp")
+    _join(holder_parent, group_parent, ["manage_shortlinks"])
+    opts.holder_a, opts.holder_parent = holder_a, holder_parent
+    opts.group_a_obj = group_a
+
+    opts.tmpdir = tempfile.mkdtemp(prefix="mojo_sl1831_")
+    fm = FileManager(name=f"{PREFIX}_b_{tag}", backend_type="file", backend_url="file://",
+                     user=owner, group=group_b, is_active=True, is_default=False,
+                     is_public=False)
+    fm.save()
+    fm.set_setting("base_path", opts.tmpdir)
+    fm.save(update_fields=["mojo_secrets", "modified"])
+    opts.file_b = _make_file(opts, fm, owner, "private_b.txt").pk
+    inactive = _make_file(opts, fm, owner, "inactive_b.txt")
+    inactive.is_active = False
+    inactive.save()
+    opts.inactive_b = inactive.pk
+    opts.missing = (File.objects.order_by("-pk").values_list("pk", flat=True).first() or 0) + 100000
+
+    _, opts.key_a = ApiKey.create_for_group(
+        group=group_a, name=f"{PREFIX}_a_{tag}", permissions={"view_fileman": True})
+    _, opts.key_b = ApiKey.create_for_group(
+        group=group_b, name=f"{PREFIX}_b_{tag}", permissions={"manage_files": True})
+    opts.key_a_id = ApiKey.objects.get(name=f"{PREFIX}_a_{tag}").pk
+    key_a_sl, _ = ApiKey.create_for_group(
+        group=group_a, name=f"{PREFIX}_asl_{tag}", permissions={"manage_shortlinks": True})
+    opts.key_a_sl_id = key_a_sl.pk
+
+
+@th.django_unit_test("create: a member of another group cannot link a private file")
+def test_other_group_member_refused(opts):
+    from mojo.apps.shortlink.models import ShortLink
+    _as(opts, opts.outsider)
+    resp = _create(opts, {"file": opts.file_b}, group=opts.group_a)
+    assert_eq(resp.status_code, 403,
+              f"another tenant's file must be refused, got {resp.status_code}: {resp.response}")
+    assert_true(not ShortLink.objects.filter(file_id=opts.file_b).exists(),
+                "no shortlink may exist for the refused file")
+
+
+@th.django_unit_test("create: missing, malformed, inactive and unauthorized files fail alike")
+def test_uniform_denial(opts):
+    _as(opts, opts.outsider)
+    cases = {
+        "missing": opts.missing,
+        "text": "abc",
+        "bool": True,
+        "zero": 0,
+        "too_many_digits": "9" * 5000,
+        "beyond_bigint": 10 ** 30,
+        "inactive": opts.inactive_b,
+        "unauthorized": opts.file_b,
+    }
+    seen = {}
+    for name, value in cases.items():
+        resp = _create(opts, {"file": value})
+        seen[name] = (resp.status_code, resp.response)
+    first = seen["unauthorized"]
+    assert_eq(first[0], 403, f"unauthorized file must be a 403, got {first}")
+    for name, got in seen.items():
+        assert_eq(got, first, f"{name} must answer exactly like an unauthorized file: {got} vs {first}")
+
+
+@th.django_unit_test("create: owner and a manage_files member of the file's group may link it")
+def test_allowed_callers(opts):
+    _as(opts, opts.owner)
+    resp = _create(opts, {"file": opts.file_b})
+    assert_eq(resp.status_code, 200, f"owner must be allowed, got {resp.status_code}: {resp.response}")
+    link = _link_for(resp)
+    assert_true(link is not None and link.file_id == opts.file_b, "owner's link must point at the file")
+
+    _as(opts, opts.manager_b)
+    resp = _create(opts, {"file": opts.file_b}, group=opts.group_b)
+    assert_eq(resp.status_code, 200,
+              f"manage_files member of B must be allowed, got {resp.status_code}: {resp.response}")
+    link = _link_for(resp)
+    assert_eq(link.group_id, opts.group_b, "manager's link belongs to group B")
+
+
+@th.django_unit_test("create: view_fileman alone cannot share a file (share needs SAVE_PERMS)")
+def test_view_only_refused(opts):
+    _as(opts, opts.viewer_b)
+    resp = _create(opts, {"file": opts.file_b}, group=opts.group_b)
+    assert_eq(resp.status_code, 403,
+              f"view_fileman-only member must be refused, got {resp.status_code}: {resp.response}")
+
+
+@th.django_unit_test("create: the link stays in the caller's group, not the file's")
+def test_caller_group_restored(opts):
+    _as(opts, opts.global_a)
+    resp = _create(opts, {"file": opts.file_b}, group=opts.group_a)
+    assert_eq(resp.status_code, 200,
+              f"global manage_files holder must be allowed, got {resp.status_code}: {resp.response}")
+    link = _link_for(resp)
+    assert_eq(link.group_id, opts.group_a,
+              f"link group must be the caller's group A ({opts.group_a}), got {link.group_id}")
+
+
+@th.django_unit_test("create: API keys are bound to their tenant and permissions")
+def test_api_keys(opts):
+    _as_key(opts, opts.key_a)
+    resp = _create(opts, {"file": opts.file_b})
+    assert_eq(resp.status_code, 403,
+              f"group-A key must be refused for B's file, got {resp.status_code}: {resp.response}")
+
+    _as_key(opts, opts.key_b)
+    resp = _create(opts, {"file": opts.file_b})
+    assert_eq(resp.status_code, 200,
+              f"group-B key with manage_files must be allowed, got {resp.status_code}: {resp.response}")
+    link = _link_for(resp)
+    assert_true(link.user_id is None, f"an unlinked key's link has no user, got {link.user_id}")
+    opts.client.logout()
+
+
+@th.django_unit_test("create: URL-only links still need only a signed-in user")
+def test_url_only_unchanged(opts):
+    _as(opts, opts.outsider)
+    resp = _create(opts, {"url": "https://example.com/sl1831", "track_clicks": False})
+    assert_eq(resp.status_code, 200, f"URL-only create must work, got {resp.status_code}: {resp.response}")
+    link = _link_for(resp)
+    assert_eq(link.url, "https://example.com/sl1831", "URL-only link keeps its url")
+
+
+# ---------------------------------------------------------------------------
+# #9536 — the link's group must be one the caller belongs to
+# ---------------------------------------------------------------------------
+
+def _url(opts, name):
+    return {"url": f"https://example.com/{opts.source}/{name}"}
+
+
+@th.django_unit_test("create: a member of A cannot store a link in group B")
+def test_group_non_member_refused(opts):
+    from mojo.apps.shortlink.models import ShortLink
+    _as(opts, opts.outsider)
+    data = _url(opts, "foreign")
+    resp = _create(opts, data, group=opts.group_b)
+    assert_eq(resp.status_code, 403,
+              f"a non-member must not create a link in group B, got {resp.status_code}: {resp.response}")
+    assert_true(not ShortLink.objects.filter(url=data["url"]).exists(),
+                "no link may be created for the refused request")
+
+
+@th.django_unit_test("create: the group refusal matches the file refusal")
+def test_group_refusal_uniform(opts):
+    _as(opts, opts.outsider)
+    group_resp = _create(opts, _url(opts, "uniform"), group=opts.group_b)
+    file_resp = _create(opts, {"file": opts.file_b})
+    assert_eq((group_resp.status_code, group_resp.response), (file_resp.status_code, file_resp.response),
+              "a group refusal and a file refusal must answer alike")
+
+
+@th.django_unit_test("create: members of the group, or of its parent, may store links in it")
+def test_group_members_allowed(opts):
+    _as(opts, opts.outsider)
+    resp = _create(opts, _url(opts, "member"), group=opts.group_a)
+    assert_eq(resp.status_code, 200, f"a member of A must be allowed, got {resp.status_code}: {resp.response}")
+    assert_eq(_link_for(resp).group_id, opts.group_a, "the member's link belongs to group A")
+
+    _as(opts, opts.parent_member)
+    resp = _create(opts, _url(opts, "parent"), group=opts.group_a)
+    assert_eq(resp.status_code, 200,
+              f"a member of A's parent must be allowed, got {resp.status_code}: {resp.response}")
+    assert_eq(_link_for(resp).group_id, opts.group_a, "the parent member's link belongs to group A")
+
+
+@th.django_unit_test("create: a global manage_shortlinks holder may store a link in any group")
+def test_group_global_manager_allowed(opts):
+    _as(opts, opts.link_manager)
+    resp = _create(opts, _url(opts, "manager"), group=opts.group_b)
+    assert_eq(resp.status_code, 200,
+              f"global manage_shortlinks must be allowed, got {resp.status_code}: {resp.response}")
+    assert_eq(_link_for(resp).group_id, opts.group_b, "the manager's link belongs to group B")
+
+
+@th.django_unit_test("create: a link with no group is unchanged")
+def test_group_none_allowed(opts):
+    _as(opts, opts.plain)
+    resp = _create(opts, _url(opts, "nogroup"))
+    assert_eq(resp.status_code, 200, f"no-group create must work, got {resp.status_code}: {resp.response}")
+    assert_true(_link_for(resp).group_id is None, "a no-group link has no group")
+
+
+@th.django_unit_test("create: an inactive membership does not count")
+def test_group_inactive_member_refused(opts):
+    _as(opts, opts.former)
+    resp = _create(opts, _url(opts, "former"), group=opts.group_b)
+    assert_eq(resp.status_code, 403,
+              f"an inactive member must be refused, got {resp.status_code}: {resp.response}")
+
+
+@th.django_unit_test("create: a group key stores links in its own group only")
+def test_group_api_key(opts):
+    _as_key(opts, opts.key_a)
+    resp = _create(opts, _url(opts, "key"))
+    assert_eq(resp.status_code, 200, f"group-A key must be allowed, got {resp.status_code}: {resp.response}")
+    assert_eq(_link_for(resp).group_id, opts.group_a, "the key's link belongs to group A")
+
+    resp = _create(opts, _url(opts, "key_b"), group=opts.group_b)
+    assert_eq(resp.status_code, 403,
+              f"group-A key must be refused for group B, got {resp.status_code}: {resp.response}")
+    opts.client.logout()
+
+
+# ---------------------------------------------------------------------------
+# #8099 — the opt-in permission gate, in process (no setting is touched)
+# ---------------------------------------------------------------------------
+
+GATE = ["manage_shortlinks"]
+
+
+def _person(user, group=None):
+    from objict import objict
+    return objict(user=user, group=group, api_key=None, group_token=None,
+                  user_api_key=None, acting_user=None)
+
+
+def _key_request(key_id):
+    from objict import objict
+    from mojo.apps.account.models import ApiKey
+    key = ApiKey.objects.select_related("group").get(pk=key_id)
+    key.is_authenticated = True
+    return objict(user=key, group=key.group, api_key=key, group_token=None,
+                  user_api_key=None, acting_user=None)
+
+
+def _gate(request, perms=GATE):
+    from mojo import errors as merrors
+    from mojo.apps.shortlink.services.access import require_create_perms
+    try:
+        require_create_perms(request, perms=perms)
+    except merrors.PermissionDeniedException as err:
+        return err
+    return None
+
+
+@th.django_unit_test("gate: a member without the permission is refused")
+def test_gate_member_without_perm(opts):
+    err = _gate(_person(opts.outsider, opts.group_a_obj))
+    assert_true(err is not None, "a member of A without manage_shortlinks must be refused")
+    assert_eq((err.status, err.reason), (403, "Permission denied"),
+              f"the gate refuses with the route's one 403, got {err.status} {err.reason!r}")
+
+
+@th.django_unit_test("gate: holders in the group or its parent, and global holders, pass")
+def test_gate_holders_pass(opts):
+    assert_true(_gate(_person(opts.holder_a, opts.group_a_obj)) is None,
+                "a manage_shortlinks member of A must pass")
+    assert_true(_gate(_person(opts.holder_parent, opts.group_a_obj)) is None,
+                "a manage_shortlinks member of A's parent must pass")
+    assert_true(_gate(_person(opts.link_manager)) is None,
+                "a global manage_shortlinks holder with no group must pass")
+
+
+@th.django_unit_test("gate: a group key needs the permission itself")
+def test_gate_keys(opts):
+    assert_true(_gate(_key_request(opts.key_a_id)) is not None,
+                "a group-A key without manage_shortlinks must be refused")
+    assert_true(_gate(_key_request(opts.key_a_sl_id)) is None,
+                "a group-A key holding manage_shortlinks must pass")
+
+
+@th.django_unit_test("gate: an empty permission list lets anyone through")
+def test_gate_empty_passes(opts):
+    assert_true(_gate(_person(opts.plain), perms=[]) is None, "perms=[] must pass a plain user")
+    assert_true(_gate(_key_request(opts.key_a_id), perms=[]) is None, "perms=[] must pass a key")

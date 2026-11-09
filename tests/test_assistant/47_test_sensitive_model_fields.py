@@ -265,55 +265,31 @@ def test_json_column_is_not_a_lookup_surface(opts):
 
 @th.django_unit_test()
 def test_search_cannot_compare_against_a_sensitive_field(opts):
-    """Search is a comparison too. Where a model's search fields include one the
-    input rule refuses, the tools refuse the search instead of answering it."""
+    """Search is a comparison too. A search field that walks a sensitive foreign
+    key is dropped by the shared search under either spelling of the key
+    (#6446), so the search runs over what is left and tells nothing about it."""
     from mojo.apps.filevault.models import VaultData
 
     declared = list(VaultData.RestMeta.SENSITIVE_FIELDS)
     owner = "senstest_admin"
-    searches = (f"user__username:{owner}", f"user__username:{PROBE_VALUE}", owner, PROBE_VALUE,
-                f'"{owner}"', f"-{PROBE_VALUE}", "name:senstest_0")
-    files_before = _vault_files(opts).count()
 
-    with _vault_rest_meta(SENSITIVE_FIELDS=declared + ["user_id"], SEARCH_FIELDS=["name", "user__username"]):
-        for search in searches:
-            calls = (
-                ("query_model", lambda: _query(VAULT, opts.admin, filters=opts.vault_filters,
-                                               search=search, count_only=True)),
-                ("export_data", lambda: _export(VAULT, opts.admin, filters=opts.vault_filters, search=search)),
-            )
-            for tool_name, call in calls:
-                before = _events(opts).count()
-                result = call()
-                _refused(result, f"{tool_name} search={search!r} with the owner declared as user_id")
-                assert owner not in result["error"], \
-                    f"{tool_name}: the refusal repeats the search text: {result['error']}"
-                assert _events(opts).count() == before + 1, \
-                    f"{tool_name} search={search!r} must report exactly one event"
-                event = _events(opts).latest("pk")
-                text = f"{event.title} {event.details} {event.metadata}"
-                assert event.level == 7, f"{tool_name}: the event should be level 7, got {event.level}"
-                assert "user__username" in text and "search" in text, \
-                    f"{tool_name}: the event should name the search field, got: {text}"
-                assert PROBE_VALUE not in text and f":{owner}" not in text, \
-                    f"{tool_name}: the event carries the search text: {text}"
-        listed = _describe(VAULT, opts.admin)["search_fields"]
-        assert listed == [], f"describe_model advertises a search the tools refuse: {listed}"
+    for spelling in ("user", "user_id"):
+        with _vault_rest_meta(SENSITIVE_FIELDS=declared + [spelling], SEARCH_FIELDS=["name", "user__username"]):
+            counts = {}
+            before = _events(opts).count()
+            for search in (f"user__username:{owner}", f"user__username:{PROBE_VALUE}"):
+                result = _query(VAULT, opts.admin, filters=opts.vault_filters, search=search, count_only=True)
+                assert "error" not in result, \
+                    f"owner declared as {spelling}: search={search!r} should run over the name alone: {result.get('error')}"
+                counts[search] = result["count"]
+            assert len(set(counts.values())) == 1, \
+                f"owner declared as {spelling}: a search naming the owner must not tell a right guess from a wrong one: {counts}"
+            assert _events(opts).count() == before, \
+                f"owner declared as {spelling}: a search the shared rule already narrows is not a refused probe"
+            listed = _describe(VAULT, opts.admin)["search_fields"]
+            assert listed == ["name"], \
+                f"owner declared as {spelling}: describe_model should list only what a search compares: {listed}"
 
-    # Declared by the relation's own name, the shared search drops the field
-    # itself. The search runs over what is left, and tells nothing about the owner.
-    with _vault_rest_meta(SENSITIVE_FIELDS=declared + ["user"], SEARCH_FIELDS=["name", "user__username"]):
-        counts = {}
-        for search in (f"user__username:{owner}", f"user__username:{PROBE_VALUE}"):
-            result = _query(VAULT, opts.admin, filters=opts.vault_filters, search=search, count_only=True)
-            assert "error" not in result, f"search={search!r} should run over the name alone: {result.get('error')}"
-            counts[search] = result["count"]
-        assert len(set(counts.values())) == 1, \
-            f"A search naming the owner must not tell a right guess from a wrong one: {counts}"
-        listed = _describe(VAULT, opts.admin)["search_fields"]
-        assert listed == ["name"], f"describe_model should list only what a search compares: {listed}"
-
-    assert _vault_files(opts).count() == files_before, "A refused export search must not create a File row"
     assert VaultData.RestMeta.SENSITIVE_FIELDS == declared, "The fixture did not restore RestMeta"
 
 

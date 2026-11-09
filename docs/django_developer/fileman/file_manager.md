@@ -149,7 +149,25 @@ group (with parents) or a global `manage_files`/`files` grant. An `ApiKey` or
 group token may name a group manager in a group it covers (`is_group_allowed`,
 no permission grant needed), and a key acting as a member that member's own
 manager; never a system manager. With no id, it resolves the caller's
-user/group manager as before.
+user/group manager as before, except that storage a group does not have yet is
+created from a request only for an active member of that group (parents
+walked) or a holder of a global `manage_files` or `files` grant. An `ApiKey`
+or group token needs the `FileManager` SAVE_PERMS check there. Anyone else gets 403 (`File manager is unavailable`) before any row, or
+the group's `uuid`, is written.
+
+A purpose (`use`) must be a plain short name: 1-64 letters, digits, `_` or
+`-`, starting with a letter or digit (`USE_RE`). Anything else is a 400, so a
+purpose can never be a path such as `../x` or `/x`. `get_for_group()` checks
+it for server callers too. `filevault` is reserved for the vault: a request
+that selects it gets 403. Existing rows are not re-checked. To list stored
+purposes that no longer match, run
+`FileManager.objects.exclude(use="").exclude(use__regex=USE_RE.pattern)`.
+They stay usable by id.
+
+A group (or user) has at most one active manager per purpose. A save that
+would add a second one is refused with `DuplicateUseError` (400, "An active
+file manager already exists for this purpose"): see
+[Multiple FileManagers per Group](#multiple-filemanagers-per-group).
 
 Upload initiation must use `FileManager.resolve_for_upload(request)`, not a
 bare primary-key lookup. The resolver applies the upload authorization truth
@@ -166,8 +184,24 @@ table before any `File` or upload capability is created:
 
 Global file administrators may use any active manager, but explicit `group`
 and `use` selectors must still agree with that manager. Client-supplied `user`
-selectors are never accepted. Authorization failures happen before storage
-targets are generated.
+selectors are never accepted. Authorization failures happen before any
+storage row is created and before storage targets are generated.
+
+Writes that name no storage in the body follow the same rule through
+`FileManager.require_write_right(request)`, checked before any row or byte is
+written:
+
+- an inline base64 value on a related `File` field (for example a Group
+  `avatar` or incident `media`) that lands in group storage needs active
+  membership of that group or a global `manage_files`/`files` grant (on this
+  path a global `manage_groups`/`groups` grant also passes). An `ApiKey` or
+  group token needs only to cover the group. Inline values that land in the
+  caller's own user storage are unchanged;
+- a multipart update of an existing `File` (`POST /api/fileman/file/<pk>` with
+  a file part) needs the rule for that File's storage, so an owner who has left
+  the group can no longer replace its bytes;
+- `File.create_from_file(file, name, request=...)` and `on_rest_save_file`
+  apply the rule to the storage the request resolves.
 
 A REST create of a `File` (`POST /api/fileman/file`) uses
 `FileManager.resolve_for_file_create(request)`. For user sessions it is
@@ -230,6 +264,12 @@ Files stored in AWS S3. Supports:
 - Presigned upload URLs (direct browser-to-S3 uploads)
 - Presigned download URLs with configurable TTL
 - Public bucket support
+
+The manager's `supports_direct_upload` field does not govern S3: the S3
+backend always reports direct upload as supported. With no server-side
+encryption, the upload target is a presigned `PUT` URL. With server-side
+encryption, it is a presigned `POST` form (`upload_url`, `fields`), and only
+that form carries the content-type, size and encryption conditions.
 
 `python manage.py aws-check --section s3 --check` audits the system-default S3
 manager, bucket access/region, Public Access Block and CORS without persisting
@@ -401,6 +441,13 @@ upload credentials; `--profile` runs under an operator's boto3 profile.
 additively, like `mojo/deploy/provision`: create what is missing, never
 delete, no waiters, no state file. A second run creates nothing; a run
 interrupted anywhere is finished by the next one.
+On an existing distribution, `enable` and the visibility sync keep the
+distribution's own origin and behavior settings (custom headers, timeouts,
+Origin Shield, other origins, functions, origin request policy, a BYO cache
+policy and origin Id) and change only the keys fileman owns.
+A behavior fileman adds where none is live (a new prefix, or a new distribution)
+is sent with CloudFront's neutral values (`SmoothStreaming` false, no field-level
+encryption, no Lambda@Edge or CloudFront functions); a live behavior keeps its own.
 
 | Resource | Identity | Notes |
 |---|---|---|
@@ -565,7 +612,7 @@ narrowed needs the CloudFront actions added, plus `kms:GetKeyPolicy` and
 `kms:PutKeyPolicy` on the media bucket's key; `check_cdn` names each missing
 one as a denied IAM action.
 
-Tests: `tests/test_fileman/26_test_cdn_links.py` and
+Tests: `tests/test_fileman_cdn/26_test_cdn_links.py` and
 `27_test_cdn_provision.py` (no AWS); the opt-in
 `tests/test_fileman_cdn_live_slow_serial/` proves it on a real SSE-KMS bucket.
 
@@ -762,12 +809,43 @@ A group can have multiple named FileManagers (e.g., `"avatars"`, `"documents"`).
 fm = FileManager.get_for_user_group(user, group, use="avatars")
 ```
 
-REST clients pass `?use=avatars` to select a specific manager.
+REST clients pass `?use=avatars` to select a specific manager. The name must
+match the purpose pattern above. An active member may create a new purpose
+for their own group; non-members cannot.
+
+**One active manager per purpose.** Saving an active manager for a group (or
+user) and purpose that already has one is refused with `DuplicateUseError`
+(400, "An active file manager already exists for this purpose"). Only a move
+into a taken purpose is refused: a create, switching a manager on, or changing
+its `use`, group or user. Editing, renaming or deactivating a manager that is
+already a duplicate keeps working. The check locks the owning Group (or User)
+row, so two concurrent saves cannot both pass. Purpose-less managers (`use=""`)
+are not limited: a group may hold several, and only one is its default.
+
+**Selection order.** When more than one manager matches, every lookup
+(`get_for_group`, `get_for_user`, `get_from_request` and the auto-create race
+fallback) picks the purpose's default first, then the oldest id
+(`SELECTION_ORDER`). `is_default` is per purpose: making an `invoices` manager
+the default does not demote the group's purpose-less default.
+
+**Duplicates from before this rule** are left alone. List them, with the id
+each scope now selects, with the read-only command:
+
+```bash
+python manage.py fileman_duplicate_uses          # text
+python manage.py fileman_duplicate_uses --json   # one row per scope
+```
+
+After an upgrade, a scope with duplicates may get a different, now stable,
+manager than before; no files move. Deactivate the extra rows once you have
+decided which one to keep.
 
 ## Auto-Provisioning
 
 If no `FileManager` exists for a group or user, the system-wide default is used
-automatically. Set `is_default=True` on one FileManager to designate it. A new
+automatically. When another manager already holds the purpose (a concurrent
+save, or one saved under another name), auto-create returns that manager
+instead of raising, so an upload never fails on the one-per-purpose rule. Set `is_default=True` on one FileManager to designate it. A new
 user manager inherits the system manager's public/private value and reconciles
 its derived S3 prefix before it is returned.
 
@@ -775,7 +853,11 @@ A new group manager created by `get_for_group()` follows the same contract: it
 inherits the system manager's public/private value and its S3 prefix is checked
 once, at creation. A conclusive check repairs `is_public` in either direction.
 An `unknown` check keeps the inherited value. An existing group manager is
-returned as stored and is not re-checked on read.
+returned as stored and is not re-checked on read. From a request, only a
+member of the group or a global files holder can cause this creation (see
+`get_from_request` above); members may upload to the group's storage, public
+storage included. Deployments that do not want member content on public
+storage should give members a private manager.
 
 The inherited value is the operator's setting on the system default manager.
 That setting is not itself checked automatically.

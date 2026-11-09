@@ -26,83 +26,9 @@ def _provenance_deploy_mocks(deploy):
                 "generation": "a" * 64, "rules_sha256": "b" * 64}), \
             mock.patch("mojo.deploy.audit.restore_immediate"), \
             mock.patch("mojo.deploy.audit.restore_prior"), \
-            mock.patch.object(deploy, "_converge_ptrace_scope",
-                              return_value=(False, 1, 1)), \
-            mock.patch.object(deploy, "_read_ptrace_scope", return_value=1), \
-            mock.patch.object(deploy, "_restore_ptrace_scope"), \
             mock.patch.object(deploy.subprocess, "run",
                               return_value=mock.Mock(returncode=0, stderr="")):
         yield
-
-
-@th.django_unit_test()
-def test_ptrace_convergence_raises_weak_policy_without_lowering_stronger_policy(opts):
-    from mojo.deploy import mojosec as deploy
-
-    writes = []
-    runs = []
-    readings = iter((0, 1))
-    changed, prior, current = deploy._converge_ptrace_scope(
-        reader=lambda: next(readings),
-        writer=lambda path, text, mode: writes.append((path, text, mode)) or True,
-        runner=lambda argv: runs.append(argv),
-    )
-    th.assert_true(changed and prior == 0 and current == 1,
-                   "weak ptrace policy must be reported as a changed convergence")
-    th.assert_eq(writes, [(deploy.PTRACE_SYSCTL_PATH,
-                           deploy._ptrace_sysctl_text(1), 0o644)],
-                 "convergence must persist the minimum restricted-ptrace policy")
-    th.assert_eq(runs, [["/usr/sbin/sysctl", "-w", "kernel.yama.ptrace_scope=1"]],
-                 "weak live policy must be raised immediately")
-
-    writes = []
-    runs = []
-    readings = iter((2, 2))
-    changed, prior, current = deploy._converge_ptrace_scope(
-        reader=lambda: next(readings),
-        writer=lambda path, text, mode: writes.append((path, text, mode)) or True,
-        runner=lambda argv: runs.append(argv),
-    )
-    th.assert_true(changed and prior == 2 and current == 2,
-                   "persisting an existing stronger policy is still a managed change")
-    th.assert_eq(writes, [(deploy.PTRACE_SYSCTL_PATH,
-                           deploy._ptrace_sysctl_text(2), 0o644)],
-                 "convergence must preserve the stronger host policy exactly")
-    th.assert_eq(runs, [], "convergence must never lower or rewrite stronger live policy")
-
-
-@th.django_unit_test()
-def test_ptrace_rollback_restores_persistent_and_live_policy(opts):
-    from mojo.deploy import mojosec as deploy
-
-    snapshot = (b"prior policy\n", 0o640)
-    with mock.patch.object(deploy, "_restore_snapshot") as restore, \
-            mock.patch.object(deploy, "_read_ptrace_scope", return_value=1), \
-            mock.patch.object(deploy, "_run") as run:
-        deploy._restore_ptrace_scope(snapshot, 2)
-    restore.assert_called_once_with(deploy.PTRACE_SYSCTL_PATH, snapshot)
-    run.assert_called_once_with(
-        ["/usr/sbin/sysctl", "-w", "kernel.yama.ptrace_scope=2"])
-
-
-@th.django_unit_test()
-def test_ptrace_writer_atomically_replaces_writable_metadata_drift(opts):
-    from mojo.deploy import mojosec as deploy
-
-    text = deploy._ptrace_sysctl_text(1)
-    payload = text.encode("utf-8")
-    info = mock.Mock(
-        st_mode=deploy.stat.S_IFREG | 0o666, st_uid=0, st_gid=0,
-        st_size=len(payload))
-    with mock.patch.object(deploy.os, "open", return_value=17), \
-            mock.patch.object(deploy.os, "fstat", return_value=info), \
-            mock.patch.object(deploy.os, "read", return_value=payload), \
-            mock.patch.object(deploy.os, "close"), \
-            mock.patch.object(deploy, "_atomic_write") as atomic:
-        changed = deploy._write_ptrace_scope(deploy.PTRACE_SYSCTL_PATH, text, 0o644)
-    th.assert_true(changed,
-                   "unsafe metadata must be a real convergence change")
-    atomic.assert_called_once_with(deploy.PTRACE_SYSCTL_PATH, payload, 0o644)
 
 
 @th.django_unit_test()
@@ -265,20 +191,230 @@ def test_converge_lifecycle_is_an_exact_allowlist(opts):
 
     th.assert_eq(result["mode"], "observe", "observe convergence must report its mode")
     th.assert_true(all(
-        not call or call[-1] in (
-            "daemon-reload", "nginx", deploy.SERVICE,
-            deploy.PROC_IDENTITY_SERVICE, deploy.PROC_IDENTITY_SOCKET,
-            "mojosec-audit-health.timer")
+        not call or call[-1] in ("daemon-reload", "nginx", deploy.SERVICE)
         for call in calls),
         f"lifecycle may address only nginx and the exact MojoSec unit: {calls}")
     th.assert_in(("enable", "--now", deploy.SERVICE), calls,
                  "observe must enable and start the exact service")
-    th.assert_in(("enable", "--now", deploy.PROC_IDENTITY_SOCKET), calls,
-                 "observe must enable the root-only identity socket")
-    th.assert_in(("restart", deploy.PROC_IDENTITY_SOCKET), calls,
-                 "a changed active socket must load its new listener contract")
+    th.assert_true(not any("proc-identity" in part or "audit-health" in part
+                           for call in calls for part in call),
+                   "observe must never touch the retired resolver or health timer directly; "
+                   "the retired-unit sweep owns them")
     th.assert_true(not any("*.service" in part for call in calls for part in call),
                    "deployment must never enable a service glob")
+
+
+@th.django_unit_test()
+def test_retire_stale_units_retires_static_socket_activated_pairs(opts):
+    """Regression for the first 1.40.2 deploy (maestro #9769): a static unit
+    answers is-enabled with exit 0 while its file exists, and the still
+    listening socket re-activated its service, so the per-unit check raised
+    and converge rolled every retired unit back."""
+    from mojo.deploy import mojosec as deploy
+
+    units = {
+        "mojosec-agent.service": {"file": False, "state": "", "active": False},
+        "mojosec-proc-identity.socket": {"file": True, "state": "enabled", "active": True},
+        "mojosec-proc-identity.service": {"file": True, "state": "static", "active": True},
+        "mojosec-audit-health.timer": {"file": True, "state": "enabled", "active": True},
+        "mojosec-audit-health.service": {"file": True, "state": "static", "active": False},
+    }
+    events = []
+
+    def systemctl(*args):
+        events.append(("cmd",) + args)
+        if args[0] == "disable":
+            unit = units[args[-1]]
+            unit["active"] = False
+            if unit["state"] == "enabled":
+                unit["state"] = "disabled"
+            if args[-1].endswith(".service"):
+                socket = units.get(args[-1][:-len(".service")] + ".socket")
+                if socket and socket["active"]:
+                    # A listening socket re-activates the service it triggers.
+                    unit["active"] = True
+        elif args[0] == "daemon-reload":
+            for unit in units.values():
+                if not unit["file"]:
+                    unit["state"] = ""
+
+    def systemctl_is(verb, name):
+        events.append(("is", verb, name))
+        unit = units[name]
+        if verb == "is-enabled":
+            # The real exit code: static answers 0 for as long as the file exists.
+            return unit["state"] in ("enabled", "static")
+        return unit["active"]
+
+    def owned_snapshot(path):
+        return (b"[Unit]\n", 0o644) if units[os.path.basename(path)]["file"] else None
+
+    def unlink(path):
+        units[os.path.basename(path)]["file"] = False
+
+    th.assert_true(
+        deploy.RETIRED_UNITS.index("mojosec-proc-identity.socket") <
+        deploy.RETIRED_UNITS.index("mojosec-proc-identity.service"),
+        "the socket must be retired before the service it activates")
+    with mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=unlink):
+        snapshot = deploy._retired_unit_snapshot()
+        th.assert_true(snapshot["mojosec-proc-identity.service"]["enabled"],
+                       "the fixture must reproduce a static unit reading as enabled")
+        del events[:]
+        changed = deploy._retire_stale_units(snapshot)
+    th.assert_true(changed, "retiring installed units is a change")
+    for name, unit in units.items():
+        th.assert_true(not unit["file"] and not unit["active"] and unit["state"] == "",
+                       f"{name} must be stopped, unlinked and unknown to systemd: {unit}")
+    reload_at = events.index(("cmd", "daemon-reload"))
+    th.assert_true(all(event[0] == "cmd" for event in events[:reload_at]),
+                   f"no unit may be judged before the files are gone and systemd reloaded: {events}")
+    disables = [event[-1] for event in events if event[0] == "cmd" and event[1] == "disable"]
+    th.assert_eq(disables, [name for name in deploy.RETIRED_UNITS if units[name] is not None
+                            and name != "mojosec-agent.service"],
+                 "every present retired unit is disabled and stopped, in RETIRED_UNITS order")
+
+    # A unit that survives the sweep still fails the converge, after the sweep.
+    units["mojosec-audit-health.timer"].update(file=True, state="enabled", active=True)
+    stubborn = dict(units["mojosec-audit-health.timer"])
+
+    def stubborn_systemctl(*args):
+        systemctl(*args)
+        if args[0] == "disable" and args[-1] == "mojosec-audit-health.timer":
+            units["mojosec-audit-health.timer"].update(stubborn)
+
+    with mock.patch.object(deploy, "_systemctl", side_effect=stubborn_systemctl), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=lambda path: None):
+        with th.assert_raises(deploy.DeployError) as raised:
+            deploy._retire_stale_units(deploy._retired_unit_snapshot())
+    th.assert_in("mojosec-audit-health.timer", str(raised.exception),
+                 "a unit that will not stop must still fail the converge by name")
+
+
+def _retire_fixture(units, events, failed):
+    """Fakes for _retire_stale_units over `units`; `failed` is systemd's set
+    of units listed as failed, which only reset-failed clears."""
+    import os as _os
+
+    def systemctl(*args):
+        events.append(("cmd",) + args)
+        if args[0] == "disable":
+            units[args[-1]].update(active=False, state="")
+        elif args[0] == "daemon-reload":
+            for unit in units.values():
+                if not unit["file"]:
+                    unit["state"] = ""
+
+    def systemctl_is(verb, name):
+        events.append(("is", verb, name))
+        if verb == "is-failed":
+            return name in failed
+        if verb == "reset-failed":
+            failed.discard(name)
+            return True
+        unit = units[name]
+        if verb == "is-enabled":
+            return unit["state"] in ("enabled", "static")
+        return unit["active"]
+
+    def owned_snapshot(path):
+        return (b"[Unit]\n", 0o644) if units[_os.path.basename(path)]["file"] else None
+
+    def unlink(path):
+        units[_os.path.basename(path)]["file"] = False
+
+    return systemctl, systemctl_is, owned_snapshot, unlink
+
+
+@th.django_unit_test()
+def test_retire_stale_units_clears_failed_marks_after_the_proof(opts):
+    """maestro #9813: the health service failed 4 times during the package
+    swap, so after the sweep systemd still listed it as failed. The sweep
+    clears the mark, after daemon-reload and the gone-proof."""
+    from mojo.deploy import mojosec as deploy
+
+    units = {name: {"file": False, "state": "", "active": False} for name in deploy.RETIRED_UNITS}
+    units["mojosec-audit-health.timer"].update(file=True, state="enabled", active=True)
+    units["mojosec-audit-health.service"].update(file=True, state="static")
+    failed = {"mojosec-audit-health.service"}
+    events = []
+    systemctl, systemctl_is, owned_snapshot, unlink = _retire_fixture(units, events, failed)
+    with mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=unlink), \
+            contextlib.redirect_stderr(io.StringIO()):
+        changed = deploy._retire_stale_units(deploy._retired_unit_snapshot())
+    th.assert_true(changed, "retiring installed units is a change")
+    th.assert_eq(failed, set(), "the retired service's failed mark is cleared")
+    reset_at = events.index(("is", "reset-failed", "mojosec-audit-health.service"))
+    reload_at = events.index(("cmd", "daemon-reload"))
+    last_proof = max(i for i, event in enumerate(events)
+                     if event[:2] == ("is", "is-active"))
+    th.assert_true(reload_at < reset_at and last_proof < reset_at,
+                   f"the mark is cleared only after the reload and the gone-proof: {events}")
+
+
+@th.django_unit_test()
+def test_retire_stale_units_clears_marks_left_by_an_earlier_release(opts):
+    """maestro #9813: a node 1.40.3 already swept has nothing left to retire,
+    but systemd still lists the health service as failed. The next converge
+    clears it without counting a change or touching any file."""
+    from mojo.deploy import mojosec as deploy
+
+    units = {name: {"file": False, "state": "", "active": False} for name in deploy.RETIRED_UNITS}
+    failed = {"mojosec-audit-health.service"}
+    events = []
+    systemctl, systemctl_is, owned_snapshot, unlink = _retire_fixture(units, events, failed)
+    with mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=unlink), \
+            contextlib.redirect_stderr(io.StringIO()):
+        changed = deploy._retire_stale_units(deploy._retired_unit_snapshot())
+    th.assert_true(not changed, "clearing a failed mark is not a change")
+    th.assert_eq([event for event in events if event[0] == "cmd"], [],
+                 "nothing is disabled, unlinked or reloaded on a clean node")
+    th.assert_eq(failed, set(), "the leftover failed mark is cleared")
+
+
+@th.django_unit_test()
+def test_retire_stale_units_resets_nothing_before_a_stubborn_unit_raises(opts):
+    """maestro #9813: when the gone-proof fails, no mark is cleared and the
+    converge still fails by name, so today's rollback runs unchanged."""
+    from mojo.deploy import mojosec as deploy
+
+    units = {name: {"file": False, "state": "", "active": False} for name in deploy.RETIRED_UNITS}
+    units["mojosec-audit-health.timer"].update(file=True, state="enabled", active=True)
+    failed = {"mojosec-audit-health.service"}
+    events = []
+    systemctl, systemctl_is, owned_snapshot, _ = _retire_fixture(units, events, failed)
+    with mock.patch.object(deploy, "_systemctl", side_effect=lambda *args: events.append(("cmd",) + args)), \
+            mock.patch.object(deploy, "_systemctl_is", side_effect=systemctl_is), \
+            mock.patch.object(deploy, "_unit_file_state",
+                              side_effect=lambda name: units[name]["state"]), \
+            mock.patch.object(deploy, "_owned_snapshot", side_effect=owned_snapshot), \
+            mock.patch.object(deploy.os, "unlink", side_effect=lambda path: None):
+        with th.assert_raises(deploy.DeployError) as raised:
+            deploy._retire_stale_units(deploy._retired_unit_snapshot())
+    th.assert_in("mojosec-audit-health.timer", str(raised.exception),
+                 "a unit that will not stop still fails the converge by name")
+    th.assert_true(not any(event[:2] == ("is", "reset-failed") for event in events),
+                   f"no failed mark is cleared before the raise: {events}")
+    th.assert_eq(failed, {"mojosec-audit-health.service"}, "the mark stays for the rollback")
 
 
 @th.django_unit_test()
@@ -294,8 +430,6 @@ def test_off_and_best_effort_preserve_evidence(opts):
             states["active"] = False
         elif args == ("disable", deploy.SERVICE):
             states["enabled"] = False
-        elif args == ("disable", "--now", deploy.PROC_IDENTITY_SOCKET):
-            states.update(enabled=False, active=False)
 
     with mock.patch.object(deploy, "_ensure_dir"), \
             mock.patch.object(deploy, "_require_root_install_dir"), \
@@ -308,14 +442,12 @@ def test_off_and_best_effort_preserve_evidence(opts):
             mock.patch.object(deploy, "_systemctl_is",
                               side_effect=lambda verb, unit: states[verb[3:]]), \
             mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
-            mock.patch("mojo.deploy.audit.flush_pending_firewall") as flush, \
             mock.patch.object(deploy.os, "geteuid", return_value=0):
         result = deploy.converge("off", "required")
     th.assert_in(("stop", deploy.SERVICE), calls,
                  "off must stop and disable a prior installation")
     th.assert_in(("disable", deploy.SERVICE), calls,
                  "off must keep the quiesced sensor disabled")
-    flush.assert_called_once_with()
     th.assert_eq(result["spool_preserved"], True,
                  "off/rollback must preserve local evidence")
 
@@ -343,8 +475,6 @@ def test_off_restores_audit_and_removes_feature_assets(opts):
             states["active"] = False
         elif args == ("disable", deploy.SERVICE):
             states["enabled"] = False
-        elif args == ("disable", "--now", deploy.PROC_IDENTITY_SOCKET):
-            states.update(enabled=False, active=False)
 
     with mock.patch.object(deploy.os, "geteuid", return_value=0), \
             mock.patch.object(deploy, "_ensure_dir"), \
@@ -364,30 +494,21 @@ def test_off_restores_audit_and_removes_feature_assets(opts):
             mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
             mock.patch.object(deploy, "_remove_owned",
                               side_effect=lambda path: removed.append(path) or True), \
-            mock.patch.object(audit, "flush_pending_firewall") as flush, \
             mock.patch.object(audit, "restore_prior") as restore:
         deploy.converge("off", "required")
 
-    flush.assert_called_once_with()
     restore.assert_called_once_with()
     for path in (BROKER_PATH, SUDOERS_PATH):
         th.assert_true(path not in removed,
                        f"MojoSec off must preserve independently enrolled firewall asset {path}")
-    for path in (deploy.AUDIT_HEALTH_SERVICE_PATH,
-                 deploy.AUDIT_HEALTH_TIMER_PATH, deploy.AUDIT_STABLE_HELPER_PATH,
-                 audit.HEALTH_PATH):
+    for path in deploy.RETIRED_FILES:
         th.assert_in(path, removed,
-                     f"off must remove package-owned provenance asset {path}")
-    th.assert_in(("disable", "--now", "mojosec-audit-health.timer"), calls,
-                 "off must disable the privileged Audit health publisher")
-    for path in (deploy.PROC_IDENTITY_SERVICE_PATH,
-                 deploy.PROC_IDENTITY_SOCKET_PATH):
-        th.assert_in(path, removed,
-                     f"off must remove the process resolver asset {path}")
-    th.assert_in(deploy.PTRACE_SYSCTL_PATH, removed,
-                 "off must remove the package-owned persistent ptrace policy")
-    th.assert_in(("disable", "--now", deploy.PROC_IDENTITY_SOCKET), calls,
-                 "off must disable the process identity socket")
+                     f"off must remove the retired package-owned provenance file {path}")
+    th.assert_true(not any("/etc/sysctl.d/90-mojosec-ptrace.conf" == path for path in removed),
+                   "off must leave the ptrace sysctl alone: removing it lowers Yama at reboot")
+    th.assert_true(not any("audit-health" in part or "proc-identity" in part
+                           for call in calls for part in call),
+                   "off must not address the retired units directly; the sweep owns them")
 
 
 @th.django_unit_test()
@@ -420,14 +541,13 @@ def test_off_refuses_managed_audit_without_rollback_inventory(opts):
             mock.patch.object(deploy, "_restore_snapshot"), \
             mock.patch.object(deploy, "_systemctl_is",
                               side_effect=lambda verb, unit: states[verb[3:]]), \
-            mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
-            mock.patch.object(audit, "flush_pending_firewall"):
+            mock.patch.object(deploy, "_systemctl", side_effect=systemctl):
         with th.assert_raises(deploy.DeployError):
             deploy.converge("off", "required")
 
 
 @th.django_unit_test()
-def test_off_flush_failure_restores_service_without_removing_assets(opts):
+def test_off_audit_restore_failure_restores_service_without_removing_assets(opts):
     from mojo.deploy import audit
     from mojo.deploy import mojosec as deploy
 
@@ -454,15 +574,16 @@ def test_off_flush_failure_restores_service_without_removing_assets(opts):
                               side_effect=lambda *unused: systemctl("start", deploy.SERVICE)), \
             mock.patch.object(deploy, "_restore_snapshot"), \
             mock.patch.object(deploy, "_systemctl_is",
-                              side_effect=lambda verb, unit: states[verb[3:]]), \
+                              side_effect=lambda verb, unit: states.get(verb[3:], False)), \
             mock.patch.object(deploy, "_systemctl", side_effect=systemctl), \
             mock.patch.object(deploy, "_remove_owned") as remove, \
-            mock.patch.object(audit, "flush_pending_firewall",
-                              side_effect=audit.AuditError("locked")):
+            mock.patch.object(audit, "restore_prior",
+                              side_effect=audit.AuditError("locked")), \
+            mock.patch.object(audit, "restore_immediate"):
         with th.assert_raises(deploy.DeployError):
             deploy.converge("off", "required")
     th.assert_true(states["active"],
-                   "failed evidence flush must restore the prior active service")
+                   "a failed Audit restore must restore the prior active service")
     th.assert_true(not remove.called,
                    "off refusal must preserve provenance assets for a safe retry")
 

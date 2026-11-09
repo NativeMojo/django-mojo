@@ -6,6 +6,7 @@ from mojo.helpers.settings import settings
 from mojo import errors as me
 from django.core.exceptions import ObjectDoesNotExist
 from django.db import transaction, models as dm
+from django.db.models import ForeignObjectRel
 import json
 import objict
 import datetime
@@ -33,6 +34,12 @@ COMMON_GRAPH_NAMES = frozenset(settings.get_static(
     "REST_COMMON_GRAPH_NAMES",
     ("default", "basic", "list", "simple", "detail", "detailed", "full")))
 
+# Grants that never make a caller "platform" for the list group policy
+# (MojoModel.rest_is_platform_list_caller).
+_NOT_PLATFORM_PERMS = frozenset(("all", "authenticated", "owner", "member"))
+# Models already logged for LIST_REQUIRES_GROUP without group scoping.
+_LIST_GROUP_MISCONFIG_LOGGED = set()
+
 # Sentinel: the request carried no `graph` key (see on_rest_save).
 _GRAPH_UNSET = object()
 
@@ -40,6 +47,13 @@ _GRAPH_UNSET = object()
 # including the encrypted secrets column (MojoSecrets.mojo_secrets). A model's
 # RestMeta.NO_SAVE_FIELDS adds to these (see get_no_save_fields).
 DEFAULT_NO_SAVE_FIELDS = ("id", "pk", "created", "uuid", "mojo_secrets")
+# Request-transport keys the parser merges into request.DATA from the query
+# string: `group` / `group_uuid` bind request.group (decorators/http.py),
+# `_mtab` is the middleware's tab id (middleware/mojo.py) and `graph` picks the
+# response graph (on_rest_get). On an existing row, one that would write
+# nothing is not field data, so it cannot turn an action-only request into a
+# full save of the loaded (possibly stale) row (#9250).
+REST_TRANSPORT_KEYS = frozenset({"graph", "group", "group_uuid", "_mtab"})
 # The only framework names RestMeta.ALLOW_SAVE_FIELDS can hand back.
 ALLOWABLE_SAVE_FIELDS = ("created", "uuid")
 
@@ -112,10 +126,10 @@ def _resolve_stamp_actor(request):
     also assumes that member's authority.
 
     Otherwise request.user, but ONLY when it is an actual model instance.
-    is_request_user() cannot tell a pseudo-user from a real User: ANONYMOUS_USER
-    and the system request's user are both objicts, and objict.__getattr__
-    answers EVERY attribute, so hasattr(user, "is_request_user") is True for
-    both (see board item 46). Assigning one to a ForeignKey raises
+    is_request_user() cannot tell the system request's user from a real User:
+    it is a signed-in objict, and objict.__getattr__ answers EVERY attribute,
+    marker included (see board item 46; ANONYMOUS_USER is refused since #9125
+    because it is not signed in). Assigning one to a ForeignKey raises
     ValueError: Cannot assign "{...}" ... must be a "User" instance.
 
     A non-attributable actor leaves the owner field alone — already the
@@ -149,6 +163,14 @@ _DEPRECATED_CAN_SAVE_WARNED = set()
 _ALWAYS_SENSITIVE_FIELDS = frozenset(["mojo_secrets"])
 
 
+def _dotted_protected_keys(value):
+    """The top-level keys of a JSON write that spell a path into the
+    "protected" root key ("protected.x"), sorted. objict item assignment
+    follows dots, so a merge into an objict would write them into it."""
+    return sorted(key for key in value
+                  if isinstance(key, str) and key.startswith("protected."))
+
+
 def _model_sensitive_fields(model):
     """RestMeta.SENSITIVE_FIELDS for `model`, unioned with the baseline.
 
@@ -163,6 +185,22 @@ def _model_sensitive_fields(model):
     return _ALWAYS_SENSITIVE_FIELDS.union(declared)
 
 
+def _declared_sensitive(model, field):
+    """True when `field`, resolved on `model`, is declared sensitive under its
+    name or its column name. A reverse relation has no column of its own: it is
+    judged by the foreign key it mirrors, on the model that holds that key."""
+    if isinstance(field, ForeignObjectRel):
+        names = {field.field.name, field.field.attname}
+        return bool(names & _model_sensitive_fields(field.related_model))
+    names = {field.name, getattr(field, "attname", None)}
+    return bool(names & _model_sensitive_fields(model))
+
+
+# The parser's own operators. They are valid only as a key's last segment;
+# anywhere else the walk would stop at them and judge less than the key names.
+_INTERIOR_REFUSED = frozenset(("not", "not_in"))
+
+
 def is_sensitive_filter_path(model, key):
     """True when any segment of an ORM lookup path names a sensitive field.
 
@@ -174,11 +212,22 @@ def is_sensitive_filter_path(model, key):
     so `?api_keys__token_hash__startswith=a` works from Group. Hopping to the
     related model at each segment is what makes the guard hold on both.
 
-    Sensitivity is tested BEFORE resolving the field, which is the fail-closed
-    order. A trailing lookup token (startswith / in / isnull / month) is not a
-    field, so the previous iteration leaves `current` None and the next one
-    returns False before any sensitivity test — a lookup token can therefore
-    never collide with a field name to produce a false positive.
+    Sensitivity is tested twice per segment. First AS WRITTEN, before
+    resolving, which is the fail-closed order for a declared name that does not
+    resolve. Then by the RESOLVED field (_declared_sensitive), because
+    get_field accepts the column name too: a foreign key declared as `user` is
+    refused as `user_id`, and one declared as `user_id` is refused as `user`.
+    `pk` resolves to the model's primary key. A reverse relation is judged by
+    its foreign key's declaration on the model that holds it, so every path
+    through it is refused, `__isnull` included. A hidden reverse relation
+    (`related_name="+"`, which Django still registers under the literal name
+    "+") is always refused, at any segment. A trailing lookup token
+    (startswith / in / isnull / month) is not a field, so the previous
+    iteration leaves `current` None and the next one returns False before any
+    sensitivity test — a lookup token can therefore never collide with a field
+    name to produce a false positive. The parser's own operators, `not` and
+    `not_in`, are refused anywhere but the last segment: the walk cannot see
+    past them, and the parser strips only the trailing one.
 
     JSON columns terminate the walk as SENSITIVE rather than as unknown:
     `?metadata__client_secret=x` is a JSON-path extraction the ORM applies
@@ -186,16 +235,26 @@ def is_sensitive_filter_path(model, key):
     shape on the aggregation surface. A model storing secrets in a JSON column
     must name the column itself in SENSITIVE_FIELDS.
     """
+    parts = key.split("__")
+    if any(part in _INTERIOR_REFUSED for part in parts[:-1]):
+        return True
     current = model
-    for part in key.split("__"):
+    for part in parts:
         if current is None:
             return False
         if part in _model_sensitive_fields(current):
             return True
         try:
-            field = current._meta.get_field(part)
+            if part == "pk":
+                field = current._meta.pk
+            else:
+                field = current._meta.get_field(part)
         except Exception:
             return False
+        if getattr(field, "hidden", False):
+            return True
+        if _declared_sensitive(current, field):
+            return True
         if field.is_relation:
             current = getattr(field, "related_model", None)
         elif field.get_internal_type() == "JSONField":
@@ -203,6 +262,309 @@ def is_sensitive_filter_path(model, key):
         else:
             current = None
     return False
+
+
+_BOOL_TRUE_TOKENS = frozenset(("true", "1", "t", "y", "yes", "on"))
+_BOOL_FALSE_TOKENS = frozenset(("false", "0", "f", "n", "no", "off"))
+
+# Lookups whose value Django compares as the field's own type. A relation-path
+# value is normalized only under these; text lookups (startswith, icontains,
+# regex, range, ...) reach the ORM exactly as sent.
+_TYPED_LOOKUPS = frozenset(("exact", "in", "gt", "gte", "lt", "lte")) | _DATE_COMPONENT_LOOKUPS
+
+
+def _parse_rest_bool(value, label):
+    """One strict boolean parser for every filter surface (#8556).
+
+    Accepts a real bool, int 0/1 and the usual tokens in any case. Anything
+    else is a 400 naming the key: silently reading a typo as False answered a
+    different question than the caller asked.
+    """
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, int) and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        token = value.strip().lower()
+        if token in _BOOL_TRUE_TOKENS:
+            return True
+        if token in _BOOL_FALSE_TOKENS:
+            return False
+    raise me.ValueException(
+        f"Invalid boolean for {label}: {value!r}", code=400, status=400)
+
+
+def _normalize_scalar(field, value, label, typed=True):
+    """Coerce ONE filter value to `field`'s Python type.
+
+    `typed` is False under a text lookup (startswith, icontains, ...): an
+    integer column then keeps the caller's text, so `?id__startswith=026`
+    still means the pattern "026", not 26.
+    """
+    internal = field.get_internal_type()
+    if internal == "BooleanField":
+        # ?flag=null has always meant False on a top-level Boolean; kept.
+        if value is None:
+            return False
+        return _parse_rest_bool(value, label)
+    if value is None or isinstance(value, bool):
+        return value
+    if internal in _DATE_FIELD_TYPES:
+        if isinstance(value, (datetime.datetime, datetime.date)):
+            return value
+        try:
+            return dates.parse_datetime(value)
+        except (TypeError, ValueError, OverflowError, OSError):
+            # OSError: an out-of-range epoch number (fromtimestamp, EOVERFLOW).
+            raise me.ValueException(
+                f"Invalid date for {label}: {value!r}", code=400, status=400)
+    # Integer columns under a typed lookup: a numeric string becomes an int;
+    # anything else goes to the ORM unchanged, which answers 400. Text lookups
+    # keep the string as sent.
+    if typed and (internal.endswith("IntegerField") or internal.endswith("AutoField")):
+        if isinstance(value, str) and value.strip().lstrip("-").isdigit():
+            return int(value)
+    return value
+
+
+def _normalize_field_value(field, value, label, lookup=None):
+    """Normalize a filter value for `field`, per element for a list.
+
+    `lookup` is a date-component lookup token (month, year, ...), a text
+    lookup token (startswith, icontains, ...) or None. A list stays a list:
+    turning `?flag__in=true,false` into one bool was the 500 behind #8556.
+    """
+    if lookup in _DATE_COMPONENT_LOOKUPS:
+        try:
+            if isinstance(value, list):
+                return [int(v) for v in value]
+            return int(value)
+        except (TypeError, ValueError):
+            raise me.ValueException(
+                f"Invalid value for {label}: {value!r}", code=400, status=400)
+    typed = lookup is None or lookup in _TYPED_LOOKUPS
+    if isinstance(value, list):
+        return [_normalize_scalar(field, v, label, typed) for v in value]
+    return _normalize_scalar(field, value, label, typed)
+
+
+def _split_in_value(value):
+    """An __in value as a list: split a query string on commas, wrap a JSON
+    scalar from a `_stats` bundle, keep a list as it is."""
+    if isinstance(value, str):
+        return value.split(",")
+    if isinstance(value, (list, tuple)):
+        return list(value)
+    return [value]
+
+
+def _resolve_filter_field(model, key):
+    """Walk an ORM lookup path; return (field, lookups) or (None, None).
+
+    The same `_meta` walk as is_sensitive_filter_path. `lookups` is what
+    follows the last field (["in"], ["month", "in"], [] for exact). Only ever
+    called AFTER the sensitive and viewer-restricted guards have passed the
+    key, and it reads nothing but `_meta`.
+    """
+    current, field = model, None
+    parts = key.split("__")
+    for index, part in enumerate(parts):
+        if current is None:
+            return field, parts[index:]
+        try:
+            found = current._meta.get_field(part)
+        except Exception:
+            if field is None:
+                return None, None
+            return field, parts[index:]
+        field = found
+        current = getattr(found, "related_model", None) if found.is_relation else None
+    return field, []
+
+
+def is_viewer_restricted_path(model, key, request):
+    """True when an ORM lookup path crosses a relation into a model that
+    declares NESTED_PRIVATE_LOOKUPS, names one of them, and the viewer lacks
+    that model's account view (#8648).
+
+    The filter and search twin of the serializer's nested strip:
+    `?user__requires_mfa=True` on the member list would otherwise tell the
+    viewer which members have a field they are not shown. A deny-list, so
+    email, username and name filters and search are untouched. Membership is
+    tested before the segment is resolved, so an unresolvable private name is
+    still refused. Only a hop INTO such a model is checked; the served
+    model's own fields are gated by its own read. No request (a job or the
+    shell building filters) leaves the path alone.
+    """
+    if request is None:
+        return False
+    current = model
+    for index, part in enumerate(key.split("__")):
+        if current is None:
+            return False
+        if index > 0:
+            private = getattr(getattr(current, "RestMeta", None), "NESTED_PRIVATE_LOOKUPS", None)
+            if (private and part in private
+                    and not current.rest_viewer_has_account_view(request)):
+                return True
+        try:
+            field = current._meta.get_field(part)
+        except Exception:
+            return False
+        current = getattr(field, "related_model", None) if field.is_relation else None
+    return False
+
+
+# Operator suffixes the REST filter parser rewrites itself (#8680).
+_PSEUDO_LOOKUPS = frozenset(("not", "not_in"))
+
+
+def _path_field(model, part):
+    """`part` resolved on `model`, `pk` included, or None."""
+    if model is None or part is None:
+        return None
+    try:
+        if part == "pk":
+            return model._meta.pk
+        return model._meta.get_field(part)
+    except Exception:
+        return None
+
+
+def _is_lookup_token(field, part):
+    if part in _PSEUDO_LOOKUPS:
+        return True
+    try:
+        return bool(field.get_lookup(part) or field.get_transform(part))
+    except Exception:
+        return False
+
+
+def _local_column_names(field):
+    """The names after a forward relation that still compare the local column:
+    `user__id`, `user__pk`, and the FK's to_field."""
+    names = {"id", "pk"}
+    names.update(name for name in (getattr(field, "to_fields", None) or []) if name)
+    target = getattr(field, "target_field", None)
+    if target is not None and getattr(target, "name", None):
+        names.add(target.name)
+    return names
+
+
+def _walk_lookup_path(model, key):
+    """Walk an ORM lookup key; return (path, hops, hidden) or None (#8680).
+
+    `path` is the field segments with trailing lookup tokens removed. `hops`
+    is every related model the key walks INTO: a reverse or many-to-many
+    relation always, whatever follows it, and a forward FK / O2O only when a
+    further field follows that is not its own column (`user__email` hops; `user`,
+    `user_id`, `user__id`, `user__in` and `user__isnull` do not). `hidden` is
+    True at the first hidden (`+`) relation, wherever it sits. None means a
+    forward segment did not resolve: the ORM refuses that key itself.
+    """
+    parts = key.split("__")
+    current, path, hops = model, [], []
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part.endswith("+"):
+            return path, hops, True
+        field = _path_field(current, part)
+        if field is None:
+            return None
+        if getattr(field, "hidden", False):
+            return path, hops, True
+        path.append(part)
+        index += 1
+        if not field.is_relation:
+            break
+        related = getattr(field, "related_model", None)
+        nxt = parts[index] if index < len(parts) else None
+        if nxt is not None and nxt.endswith("+"):
+            return path, hops, True
+        nxt_field = _path_field(related, nxt)
+        # A many-to-many has no column on this model: `tags`, `tags__id` and
+        # `tags__in` all join the through table, so it hops like a reverse.
+        reverse = (field.auto_created and not field.concrete) or field.many_to_many
+        if not reverse:
+            if nxt is None:
+                break
+            if nxt_field is None:
+                if _is_lookup_token(field, nxt):
+                    break
+                return None
+            if nxt in _local_column_names(field):
+                break
+        hops.append(related)
+        if related is None or nxt_field is None:
+            break
+        current = related
+    return path, hops, False
+
+
+def _viewer_can_list_all(model, request):
+    """Rule 3 of walk_denied: the viewer could list `model` in full."""
+    hook = getattr(model, "rest_viewer_can_list_all", None)
+    if hook is not None:
+        return bool(hook(request))
+    # Not a MojoModel (a through table, a Django model): only a signed-in
+    # superuser, never a key, a key-backed session or a group token.
+    user = getattr(request, "user", None)
+    return bool(getattr(user, "is_superuser", False)
+                and is_request_user(request)
+                and not is_key_backed_session(request)
+                and getattr(request, "api_key", None) is None
+                and getattr(request, "group_token", None) is None)
+
+
+def walk_verdict(model, key, request, search=False):
+    """None when `key` may walk where it goes, else "hidden" or "denied".
+
+    The list surfaces' relation rule (#8680). A key that hops into a related
+    model passes only when it is the root model's own RestMeta.GROUP_FIELD
+    path, a path the root declares in RestMeta.FILTER_RELATED (or, for
+    search, in SEARCH_FIELDS), or every model it hops into reports
+    rest_viewer_can_list_all for this viewer. A hidden (`+`) relation is
+    always refused, and so is `not` / `not_in` anywhere but the last
+    segment. Paths are compared with trailing lookups removed. Runs after the
+    sensitive and viewer-restricted guards, on the key as sent (before the
+    parser strips a trailing __not / __not_in). No request (a job or the shell
+    building filters) leaves the key alone.
+    """
+    if request is None:
+        return None
+    # `not` / `not_in` are operators only at the end of a key; the parser
+    # strips the suffix alone. Anywhere else the walk below would stop at it
+    # as a terminal lookup and judge a shorter path than the key names.
+    if any(part in _PSEUDO_LOOKUPS for part in key.split("__")[:-1]):
+        return "denied"
+    walked = _walk_lookup_path(model, key)
+    if walked is None:
+        return None
+    path, hops, hidden = walked
+    if hidden:
+        return "hidden"
+    if not hops:
+        return None
+    joined = "__".join(path)
+    rest_meta = getattr(model, "RestMeta", None)
+    group_field = getattr(rest_meta, "GROUP_FIELD", None)
+    if group_field and joined == group_field:
+        return None
+    declared = list(getattr(rest_meta, "FILTER_RELATED", None) or [])
+    if search:
+        declared.extend(getattr(rest_meta, "SEARCH_FIELDS", None) or [])
+    if joined in declared:
+        return None
+    for related in hops:
+        if related is None or not _viewer_can_list_all(related, request):
+            return "denied"
+    return None
+
+
+def walk_denied(model, key, request, search=False):
+    """True when walk_verdict refuses `key` for this viewer (#8680)."""
+    return walk_verdict(model, key, request, search=search) is not None
 
 
 def _warn_can_save_deprecated(cls_name):
@@ -254,6 +616,123 @@ class MojoModel:
         return getattr(cls.RestMeta, name, default)
 
     @classmethod
+    def _is_group_scoped(cls):
+        """True when the model has a direct ``group`` FK or declares a
+        ``RestMeta.GROUP_FIELD`` (which may be a related path). The ONE
+        definition the permission check and the list group policy share, so
+        they cannot drift."""
+        return bool(cls.get_rest_meta_prop("GROUP_FIELD", None)) or hasattr(cls, "group")
+
+    @classmethod
+    def rest_viewer_can_list_all(cls, request):
+        """True when `request` could list every row of this model (#8680).
+
+        The instance-free check walk_verdict asks of a model a filter, search,
+        sort or `_agg` path walks into. VIEW_PERMS without `owner` and
+        `member`; `all` and `authenticated` count only on a model that is not
+        group-scoped. An ApiKey needs ALLOW_API_KEY_GLOBAL; a group token
+        never passes. No VIEW_PERMS fails closed. User overrides this with its
+        account-view rule (#8648).
+        """
+        if getattr(request, "group_token", None) is not None:
+            return False
+        perms = [p for p in (cls.get_rest_meta_prop("VIEW_PERMS", None) or [])
+                 if p not in ("owner", "member")]
+        if cls._is_group_scoped():
+            perms = [p for p in perms if p not in ("all", "authenticated")]
+        if not perms:
+            return False
+        api_key = getattr(request, "api_key", None)
+        if api_key is not None:
+            return bool(cls.get_rest_meta_prop("ALLOW_API_KEY_GLOBAL", False)
+                        and api_key.has_permission(perms))
+        if "all" in perms:
+            return True
+        user = getattr(request, "user", None)
+        if not getattr(user, "is_authenticated", False):
+            return False
+        return bool(user.has_permission(perms))
+
+    @classmethod
+    def rest_list_requires_group(cls):
+        """True when non-platform list callers must name a group.
+
+        Either the model opts in with ``RestMeta.LIST_REQUIRES_GROUP = True``,
+        or the site lists it in ``REST_LIST_REQUIRES_GROUP`` (model labels,
+        e.g. ``["account.GroupMember"]``) — the way in for models a site does
+        not own. Read per call so the setting needs no restart.
+        """
+        if cls.get_rest_meta_prop("LIST_REQUIRES_GROUP", False):
+            return True
+        labels = settings.get_static("REST_LIST_REQUIRES_GROUP", None)
+        if not labels:
+            return False
+        if isinstance(labels, str):
+            labels = [labels]
+        wanted = {str(label).lower() for label in labels}
+        return cls._meta.label_lower in wanted
+
+    @classmethod
+    def rest_is_platform_list_caller(cls, request):
+        """The platform-authority predicate for the list group policy.
+
+        Mirrors ``requires_global_perms``: a real User, not key-backed and not
+        a group token, who is a superuser or holds one of the model's
+        VIEW_PERMS in their GLOBAL permissions. ``all``, ``authenticated``,
+        ``owner`` and ``member`` never count — and a GroupMember grant can
+        never make a caller platform. Session, JWT, OAuth-grant and per-user
+        API key sessions all act as the person and qualify; an ApiKey, a group
+        token or a custom bearer identity never does.
+        """
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            return False
+        if getattr(request, "group_token", None) is not None:
+            return False
+        if is_key_backed_session(request) or not is_request_user(request):
+            return False
+        if getattr(user, "is_superuser", False):
+            return True
+        perms = cls.get_rest_meta_prop("VIEW_PERMS", []) or []
+        if isinstance(perms, str):
+            perms = [perms]
+        perms = [p for p in perms if p not in _NOT_PLATFORM_PERMS]
+        return bool(perms) and user.has_permission(perms)
+
+    @classmethod
+    def rest_check_list_group(cls, request):
+        """Refuse a list with no resolved group when the model requires one.
+
+        Returns None to let the list continue; raises
+        ``ValueException("group required")`` (400) otherwise. It only narrows:
+        it never sets ``request.group`` and never authorizes anything, so every
+        request it lets through meets the unchanged permission checks.
+        Custom list endpoints that build their own querysets may call it.
+        """
+        if not cls.rest_list_requires_group():
+            return None
+        group_scoped = cls._is_group_scoped()
+        if group_scoped and getattr(request, "group", None) is not None:
+            return None
+        if restricted_identity(request) is not None:
+            # An ApiKey or group token always carries its group; None means
+            # its tenant is suspended, which already answers 403 with no rows.
+            return None
+        user = getattr(request, "user", None)
+        if user is None or not getattr(user, "is_authenticated", False):
+            # Keep today's 401.
+            return None
+        if cls.rest_is_platform_list_caller(request):
+            return None
+        if not group_scoped and cls.__name__ not in _LIST_GROUP_MISCONFIG_LOGGED:
+            _LIST_GROUP_MISCONFIG_LOGGED.add(cls.__name__)
+            logit.error(
+                f"LIST_REQUIRES_GROUP on {cls.__name__}, which is not group-scoped "
+                "— every non-platform list is refused (fail-closed). Add a group "
+                "FK or RestMeta.GROUP_FIELD, or remove the flag.")
+        raise me.ValueException("group required")
+
+    @classmethod
     def get_no_save_fields(cls):
         """
         Names the REST save never takes from a request body.
@@ -281,6 +760,30 @@ class MojoModel:
             if name not in allowed and name not in fields:
                 fields.append(name)
         return fields
+
+    def _rest_transport_noop(self, key, value):
+        """True when `key` is a transport key that would write nothing here.
+
+        Only on an existing row, only for REST_TRANSPORT_KEYS, and never when
+        the model has its own `set_<key>` setter. With no model field of that
+        name the key writes nothing. A many-to-one field (e.g. a `group` FK)
+        writes nothing only when the value is a plain id equal to the stored
+        one; a different id, a dict, a list or None takes the normal path, so
+        re-parenting and its permission check are unchanged (#9250).
+        """
+        if self.pk is None or key not in REST_TRANSPORT_KEYS:
+            return False
+        if callable(getattr(self, f"set_{key}", None)):
+            return False
+        field = self.get_model_field(key)
+        if field is None:
+            return True
+        if not (field.is_relation and field.many_to_one):
+            return False
+        if isinstance(value, bool) or not isinstance(value, (int, str)):
+            return False
+        current = getattr(self, field.attname, None)
+        return current is not None and str(value).strip() == str(current)
 
     @classmethod
     def get_rest_meta_graph(cls, graph_name):
@@ -442,8 +945,7 @@ class MojoModel:
         # group-membership branch below and the instance-group resolution —
         # otherwise a GROUP_FIELD-only model falls through to a flat, tenantless
         # user.has_permission check and leaks every tenant's rows.
-        GROUP_FIELD = cls.get_rest_meta_prop("GROUP_FIELD", None)
-        is_group_scoped = bool(GROUP_FIELD) or hasattr(cls, "group")
+        is_group_scoped = cls._is_group_scoped()
 
         if "all" not in perms:
             if request.user is None or not request.user.is_authenticated:
@@ -961,6 +1463,10 @@ class MojoModel:
             JsonResponse representing the list of resources.
         """
         # cls.debug("on_rest_handle_list")
+        # FIRST, before any permission branch: a model whose VIEW_PERMS say
+        # "authenticated" or "all" passes the check below and would serve the
+        # whole table. Count, _stats and download share this entry point.
+        cls.rest_check_list_group(request)
         if cls.rest_check_permission(request, "VIEW_PERMS"):
             return cls.on_rest_list(request)
 
@@ -1407,44 +1913,23 @@ class MojoModel:
         """Coerce a raw query-param value to the right Python type for filter().
 
         ``lookup`` is the trailing ``__<suffix>`` token from the filter key.
+        Under a text lookup (``startswith``, ``icontains``, ...) an integer
+        column keeps the value as sent.
         When it names a date-component lookup (``year``, ``month``, ``day``,
         ``quarter``, …), the value is coerced to int (or list-of-int for
         ``__in``) instead of being parsed as a datetime — this lets
         ``?created__month=4`` work on a ``DateTimeField`` without the value
         being mangled by ``dates.parse_datetime``.
+
+        A list (``__in`` / ``__not_in``) is normalized per element and stays a
+        list. Booleans go through the one strict parser: an unrecognized value
+        is a 400, never a silent False (#8556).
         """
         if lookup in _DATE_COMPONENT_LOOKUPS:
-            try:
-                if isinstance(value, list):
-                    return [int(v) for v in value]
-                return int(value)
-            except (TypeError, ValueError):
-                raise me.ValueException(
-                    f"Invalid value for {field_name}__{lookup}: {value!r}",
-                    code=400, status=400,
-                )
-
+            return _normalize_field_value(
+                None, value, f"{field_name}__{lookup}", lookup=lookup)
         field = cls.get_model_field(field_name)
-        # Preserve boolean values (e.g., __isnull filters) and do not coerce them to dates
-        if isinstance(value, bool):
-            return value
-        if field.get_internal_type() == "BooleanField":
-            if isinstance(value, str):
-                value = value.lower() in ("true", "1")
-            elif isinstance(value, int):
-                value = bool(value)
-            else:
-                value = bool(value)
-        elif value is not None:
-            if field.get_internal_type() in ["DateTimeField", "DateField"]:
-                if not isinstance(value, (datetime.datetime, datetime.date)):
-                    value = dates.parse_datetime(value)
-        elif field.get_internal_type() in ["IntegerField", "BigIntegerField"]:
-            if isinstance(value, (str, bool)):
-                value = int(value)
-            elif isinstance(value, bool):
-                value = int(value)
-        return value
+        return _normalize_field_value(field, value, field_name, lookup=lookup)
 
     @classmethod
     def _report_sensitive_probe(cls, request, key):
@@ -1530,6 +2015,21 @@ class MojoModel:
                 logit.warn(f"dropped sensitive filter on {cls.__name__}: {key}")
                 cls._report_sensitive_probe(request, key)
                 continue
+            # A field the viewer is not shown on a nested User is not
+            # filterable by them either (#8648). Dropped silently, with no
+            # incident: ordinary portal searches reach here.
+            if is_viewer_restricted_path(cls, key, request):
+                continue
+            # A path into a related model the viewer cannot list in full is
+            # the same count oracle one hop further (#8680): dropped with a
+            # warning, like the guards above. A hidden `+` link has no
+            # legitimate caller, so that one also raises an incident.
+            verdict = walk_verdict(cls, key, request)
+            if verdict is not None:
+                logit.warn(f"dropped related filter on {cls.__name__}: {key}")
+                if verdict == "hidden":
+                    cls._report_sensitive_probe(request, key)
+                continue
 
             # Determine if this is an exclusion filter
             is_exclusion = key.endswith("__not") or key.endswith("__not_in")
@@ -1541,20 +2041,33 @@ class MojoModel:
             trailing_lookup = key_parts[-1] if len(key_parts) > 1 else None
 
             if field_name in cls.__rest_field_names__ and cls._meta.get_field(field_name).is_relation:
-                # TODO Normalize relation field values
                 if key.endswith("__in"):
-                    value = value.split(",") if isinstance(value, str) else value
+                    value = _split_in_value(value)
                 elif key.endswith("__not_in"):
-                    # Convert __not_in to __in for exclude()
-                    key = key.replace("__not_in", "__in")
-                    value = value.split(",") if isinstance(value, str) else value
+                    # Convert the trailing __not_in to __in for exclude(). Only
+                    # the suffix: the guards judged the key as sent (#8680).
+                    key = key[:-len("__not_in")] + "__in"
+                    value = _split_in_value(value)
                 elif key.endswith("__not"):
-                    # Remove __not suffix for exclude()
-                    key = key.replace("__not", "")
+                    # Remove the trailing __not for exclude(). Only the suffix:
+                    # the guards judged the key as sent (#8680).
+                    key = key[:-len("__not")]
                 elif key.endswith("__isnull"):
-                    value = str(value).strip().lower() in ("true", "1", "yes", "y", "t")
+                    value = _parse_rest_bool(value, key)
                 elif value == "null":
                     value = None
+                # The value is normalized through the field the path ends on,
+                # exactly as a top-level filter is (#8556). This runs only
+                # after both guards above passed the key, and changes the
+                # value's type only, never the key or the queryset. A path
+                # ending on a relation compares pks and is left alone, as are
+                # text lookups and an explicit null.
+                field, lookups = _resolve_filter_field(cls, key)
+                if (field is not None and not field.is_relation and value is not None
+                        and all(part in _TYPED_LOOKUPS for part in lookups)):
+                    component = next(
+                        (part for part in lookups if part in _DATE_COMPONENT_LOOKUPS), None)
+                    value = _normalize_field_value(field, value, key, lookup=component)
                 target_dict[key] = value
             elif hasattr(cls, field_name):
                 # Partial-date field shorthand: ?created=2026-04 expands to a
@@ -1578,16 +2091,18 @@ class MojoModel:
                             continue
 
                 if key.endswith("__in"):
-                    value = value.split(",") if isinstance(value, str) else value
+                    value = _split_in_value(value)
                 elif key.endswith("__not_in"):
-                    # Convert __not_in to __in for exclude()
-                    key = key.replace("__not_in", "__in")
-                    value = value.split(",") if isinstance(value, str) else value
+                    # Convert the trailing __not_in to __in for exclude(). Only
+                    # the suffix: the guards judged the key as sent (#8680).
+                    key = key[:-len("__not_in")] + "__in"
+                    value = _split_in_value(value)
                 elif key.endswith("__not"):
-                    # Remove __not suffix for exclude()
-                    key = key.replace("__not", "")
+                    # Remove the trailing __not for exclude(). Only the suffix:
+                    # the guards judged the key as sent (#8680).
+                    key = key[:-len("__not")]
                 elif key.endswith("__isnull"):
-                    value = str(value).strip().lower() in ("true", "1", "yes", "y", "t")
+                    value = _parse_rest_bool(value, key)
                 elif value == "null":
                     value = None
 
@@ -1601,6 +2116,12 @@ class MojoModel:
                     if part in _DATE_COMPONENT_LOOKUPS:
                         normalized_lookup = part
                         break
+                if normalized_lookup is None:
+                    # A text lookup (startswith, icontains, ...) is passed on
+                    # so an integer column keeps the caller's pattern.
+                    normalized_lookup = next(
+                        (part for part in key.split("__")[1:]
+                         if part not in _TYPED_LOOKUPS), None)
                 target_dict[key] = cls.normalize_rest_value(
                     request, field_name, value, lookup=normalized_lookup,
                 )
@@ -1731,8 +2252,11 @@ class MojoModel:
         # icontains. An explicitly declared SEARCH_FIELDS naming a sensitive
         # column is filtered too: SENSITIVE_FIELDS wins, mirroring how
         # AGGREGATION_FIELDS cannot widen past the sensitive gate.
+        # Declared SEARCH_FIELDS are the author's consent to walk (#8680).
         search_fields = [
             f for f in search_fields if not is_sensitive_filter_path(cls, f)
+            and not is_viewer_restricted_path(cls, f, request)
+            and not walk_denied(cls, f, request, search=True)
         ]
         if not search_fields:
             # Nothing left to match against. Returning `queryset` unchanged
@@ -1839,6 +2363,17 @@ class MojoModel:
         if is_sensitive_filter_path(cls, bare):
             return queryset
         descending = sort_field.startswith('-')
+        # A relation sorts by its own column (#8680). `sort=<fk>` would
+        # otherwise order by the related model's Meta.ordering, and a reverse
+        # or many-to-many relation joins rows the caller may not see; those
+        # have no column here and are ignored.
+        relation = _path_field(cls, bare)
+        if relation is not None and relation.is_relation:
+            if (not relation.concrete or relation.many_to_many
+                    or not getattr(relation, "attname", None)):
+                return queryset
+            column = relation.attname
+            return queryset.order_by(f"-{column}" if descending else column)
         field = cls.get_model_field(bare)
         if field is not None and getattr(field, "null", False) \
                 and field.get_internal_type() in _DATE_FIELD_TYPES:
@@ -2013,6 +2548,8 @@ class MojoModel:
                 continue
             if key in post_save_actions:
                 post_save_data[key] = value
+                continue
+            if self._rest_transport_noop(key, value):
                 continue
             actions_only = False
             # Related-model permission evaluation may bind request.group to the
@@ -2356,8 +2893,8 @@ class MojoModel:
         - The incoming dict contains "__replace": true (stripped before saving)
 
         The "protected" root key is guarded on every path — merge, replace, and
-        non-dict overwrite — whether the incoming value carries it or an existing
-        one would be clobbered.
+        non-dict overwrite — whether the incoming value carries it (as "protected"
+        or as a dotted "protected.x" key) or an existing one would be clobbered.
         """
         # parse JSON strings into dicts/lists (e.g. form submissions send strings)
         if isinstance(field_value, str):
@@ -2374,7 +2911,11 @@ class MojoModel:
             # guard the "protected" root key — only superuser or users with PROTECTED_JSON_PERMS
             # can modify it; a merge touches it only when the incoming dict carries it, but a
             # replace also clobbers any existing protected subtree
-            touches_protected = "protected" in field_value or (should_replace and "protected" in existing_value)
+            # A dotted key ("protected.x") is a path into "protected" once the
+            # existing value is an objict, whose item assignment follows dots.
+            dotted = _dotted_protected_keys(field_value)
+            touches_protected = "protected" in field_value or bool(dotted) or \
+                (should_replace and "protected" in existing_value)
             if touches_protected:
                 if not self._can_edit_protected_json(request):
                     raise me.PermissionDeniedException("Permission denied: cannot modify protected metadata")
@@ -2391,6 +2932,7 @@ class MojoModel:
                     changed_keys = sorted(k for k in keys if incoming_prot.get(k) != existing_prot.get(k))
                 else:
                     changed_keys = ["*"]
+                changed_keys = changed_keys + dotted
                 self.model_logit(request, f"{username} modified {field_name}.protected keys: {', '.join(changed_keys)} on pk={self.pk}", kind="meta:protected_changed")
 
             if should_replace:
@@ -2407,7 +2949,8 @@ class MojoModel:
         else:
             # wholesale overwrite with/of a non-dict can also create or clobber "protected"
             if (isinstance(existing_value, dict) and "protected" in existing_value) or \
-                    (isinstance(field_value, dict) and "protected" in field_value):
+                    (isinstance(field_value, dict) and (
+                        "protected" in field_value or _dotted_protected_keys(field_value))):
                 if not self._can_edit_protected_json(request):
                     raise me.PermissionDeniedException("Permission denied: cannot modify protected metadata")
                 username = getattr(getattr(request, "user", None), "username", "unknown")

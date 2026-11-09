@@ -114,10 +114,12 @@ setup_tree() {
     cat > "$TMP/fixture/aws/ec2_bootstrap.sh" <<'EOF'
 #!/bin/bash
 echo "CMD ec2_bootstrap.sh" >> "$CALLLOG"
+echo "PROFILE_AT_BOOTSTRAP $(cat "$PROJ_PATH/var/profile" 2>/dev/null || echo none)" >> "$CALLLOG"
 EOF
     cat > "$TMP/fixture/aws/ec2_deploy.sh" <<'EOF'
 #!/bin/bash
 echo "CMD ec2_deploy.sh" >> "$CALLLOG"
+echo "PROFILE_AT_EC2_DEPLOY $(cat "$PROJ_PATH/var/profile" 2>/dev/null || echo none)" >> "$CALLLOG"
 EOF
     chmod +x "$TMP/fixture/aws/"*.sh
     tar -czf "$PAYLOAD/app.tar.gz" -C "$TMP/fixture" .
@@ -281,11 +283,21 @@ assert_has "$CALLLOG" "CMD pip install --no-cache-dir --upgrade django-mojo==${V
 
 echo "stage1.sh: var/profile"
 assert_eq "$(cat "$PROJ/var/profile" 2>/dev/null)" "prod" "var/profile contains exactly 'prod'"
-assert_eq "$(stat -f '%Lp' "$PROJ/var/profile" 2>/dev/null || stat -c '%a' "$PROJ/var/profile" 2>/dev/null)" \
+# GNU stat first: on Linux `stat -f` is filesystem status and exits 0, so the
+# BSD form must be the fallback, not the first try.
+assert_eq "$(stat -c '%a' "$PROJ/var/profile" 2>/dev/null || stat -f '%Lp' "$PROJ/var/profile" 2>/dev/null)" \
     "640" "var/profile is mode 640"
 assert_has "$CALLLOG" "CMD chown ec2-user:www $PROJ/var/profile" "var/profile is chowned ec2-user:www"
 assert_before "CMD ec2_deploy.sh" "CMD chown ec2-user:www $PROJ/var/profile" \
     "the profile is written AFTER ec2_deploy.sh (whose var sweep would otherwise be the last word)"
+# #9315: ec2_deploy.sh starts the config-sync timer and installs the jobs cron,
+# so the profile must already read prod while it runs, not only after it.
+assert_has "$CALLLOG" "PROFILE_AT_EC2_DEPLOY prod" \
+    "var/profile already reads prod while ec2_deploy.sh runs (#9315)"
+# ec2_bootstrap.sh enables crond with a per-minute bin/cron.py, which imports
+# settings: the profile must be down before bootstrap, right after the untar.
+assert_has "$CALLLOG" "PROFILE_AT_BOOTSTRAP prod" \
+    "var/profile already reads prod while ec2_bootstrap.sh runs (#9315 Part A)"
 assert_before "CMD chown ec2-user:www $PROJ/var/profile" "CMD python3 -m mojo.deploy.config_sync" \
     "the profile exists BEFORE config_sync, whose restart would otherwise boot settings.local"
 

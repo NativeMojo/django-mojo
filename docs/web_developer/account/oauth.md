@@ -4,26 +4,28 @@
 
 OAuth allows users to log in with a third-party provider (Google, etc.) without a password. The server handles the token exchange — your frontend only needs to redirect the user and handle the callback.
 
-**Supported providers:** `google`, `apple`, `github`
+**Supported providers:** `google`, `apple`, `github`, `microsoft`
 
-All three are group-toggleable auth-config methods: a group can disable a
+All four are group-toggleable auth-config methods: a group can disable a
 provider for login (`auth_config.login.methods`) or new-user signup
 (`auth_config.registration.methods`), and the hosted `/auth` and `/register`
 pages render a button for each enabled provider. See
-[Auth Config](auth_config.md).
+[Auth Config](auth_config.md). Google, Apple and GitHub are on by default;
+**Microsoft is off until an admin switches it on** on the Sign-in page.
 
-> **Trusted second factor.** OAuth is treated as a strong, trusted authentication event. Completing an OAuth login automatically confirms the user's email address and bypasses any local MFA requirement — see [Security Behaviour](#security-behaviour) below.
+> **Trusted second factor.** OAuth is treated as a strong, trusted authentication event. Completing an OAuth login bypasses any local MFA requirement. Google, Apple and GitHub logins also confirm the user's email address. A Microsoft login confirms it only when Microsoft has verified that email; a missing or unverified Microsoft email stays unconfirmed. See [Security Behaviour](#security-behaviour) below.
 
 ---
 
 ## Flow Overview
 
-**Google** — standard redirect flow:
+**Google, GitHub and Microsoft** — redirect flow through the backend:
 ```
 1. GET  /api/auth/oauth/google/begin        → get authorization URL
 2. Redirect user to authorization URL
-3. Google redirects back → your page ?code=...&state=...
-4. POST /api/auth/oauth/google/complete     → exchange code, get JWT
+3. Google redirects back to the backend     → /api/auth/oauth/google/callback
+4. Backend redirects browser                → your page ?code=...&state=...
+5. POST /api/auth/oauth/google/complete     → exchange code, get JWT
 ```
 
 **Apple** — backend relay required (Apple prohibits query-param redirects when email scope is requested):
@@ -43,7 +45,7 @@ Steps 3–4 are invisible to your JS — your page still receives `?code=` and `
 
 ## Step 1 — Get Authorization URL
 
-**GET** `/api/oauth/google/begin`
+**GET** `/api/auth/oauth/google/begin`
 
 **Optional query parameter:**
 
@@ -68,7 +70,7 @@ Redirect the user to `auth_url`. Store `state` if you need it client-side (the s
 If your app has a custom callback URL, pass it as `redirect_uri`:
 
 ```javascript
-const resp = await fetch('/api/oauth/google/begin?redirect_uri=' + encodeURIComponent('https://portal.example.com/auth/callback'));
+const resp = await fetch('/api/auth/oauth/google/begin?redirect_uri=' + encodeURIComponent('https://portal.example.com/auth/callback'));
 ```
 
 The server binds the `redirect_uri` to the state token — you do not need to re-send it in the complete step.
@@ -78,7 +80,7 @@ The server binds the `redirect_uri` to the state token — you do not need to re
 ## Step 2 — Redirect User
 
 ```javascript
-const { data } = await fetch('/api/oauth/google/begin').then(r => r.json());
+const { data } = await fetch('/api/auth/oauth/google/begin').then(r => r.json());
 window.location.href = data.auth_url;
 ```
 
@@ -146,9 +148,23 @@ The server automatically resolves which account to log in to:
 
 No manual linking step is required.
 
+**Microsoft is stricter about email.** It links by email only when Microsoft
+verified the address. If the address is unverified and already belongs to an
+account, `complete` refuses with `403`:
+
+```json
+{"status": false, "error": "An account already uses this email. Sign in with your existing method.", "code": 403}
+```
+
+Show that message and offer the person's usual sign-in method. If the address
+is unverified and unknown, the account is created **without an email**
+(`email: null`, not verified); the person can add one later through the
+normal change-email flow. Microsoft sign-ins that fail token validation
+return `401` "Microsoft sign-in could not be verified".
+
 ### Email Verification on Auto-Link
 
-Because the provider has confirmed ownership of the email address, the framework marks `is_email_verified = True` on the resolved account in all three cases above:
+For Google, Apple and GitHub the provider has confirmed ownership of the email address, so the framework marks `is_email_verified = True` on the resolved account in all three cases above (Microsoft: only when it verified the address, see above):
 
 - **Existing connection** — user was already verified when they first connected; flag unchanged
 - **Email match** — if the matched account was not yet verified, it is marked verified at link time
@@ -162,9 +178,9 @@ This means a user who signed up via password but never clicked their verificatio
 
 ### Email Verification
 
-OAuth confirmation is treated as equivalent to clicking an email verification link. The provider vouches for ownership of the address, so no separate verification step is needed.
+A Google, Apple or GitHub login is treated as equivalent to clicking an email verification link. The provider vouches for ownership of the address, so no separate verification step is needed. A Microsoft login counts as verification only when Microsoft has verified the address; otherwise the email stays unverified (see [Email Verification on Auto-Link](#email-verification-on-auto-link)).
 
-If your project has `REQUIRE_VERIFIED_EMAIL` enabled, users who log in via OAuth are unaffected by the gate — their email is marked verified by the OAuth flow itself.
+If your project has `REQUIRE_VERIFIED_EMAIL` enabled, users who log in via OAuth are not blocked by it: the gate applies only to email-based password login. Skipping the gate is not verification: a Microsoft user whose email Microsoft has not verified keeps an unverified email, and the gate still applies to them if they later log in by email and password.
 
 ### MFA Bypass
 
@@ -343,12 +359,14 @@ Add to your Django settings:
 GOOGLE_CLIENT_ID = "your-client-id.apps.googleusercontent.com"
 GOOGLE_CLIENT_SECRET = "your-client-secret"
 
-# The URL Google redirects back to after login
-# Must match one of the authorised redirect URIs in Google Console
-OAUTH_REDIRECT_URI = "https://your-app.example.com/oauth/google/complete"
+# Optional: the page the browser lands on after sign-in.
+# This is NOT the URL you register with Google (see below).
+OAUTH_REDIRECT_URI = "https://your-app.example.com/auth/oauth/google/complete"
 ```
 
-If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/oauth/<provider>/complete`.
+If `OAUTH_REDIRECT_URI` is not set, the server builds it from the request `Origin` header as `<origin>/auth/oauth/<provider>/complete`.
+
+The URL to register in the provider's console is the backend callback, `https://<login host>/api/auth/oauth/<provider>/callback`, once for each host your login page is served from. See [Sign-in Setup](signin_setup.md#callback-urls-and-domains).
 
 ### Apple Settings
 
@@ -373,6 +391,22 @@ GITHUB_CLIENT_SECRET = "your-github-oauth-app-client-secret"
 GitHub Sign In uses the standard redirect flow — identical to Google. Replace `google` with `github` in all endpoint URLs.
 
 > **Note:** If a GitHub user has set their email to private, the server automatically falls back to the GitHub emails API to retrieve their primary verified address. No extra configuration or frontend changes are needed.
+
+### Microsoft Settings
+
+```python
+MICROSOFT_CLIENT_ID     = "6731de76-14a6-49ae-97bc-6eba6914391e"
+MICROSOFT_CLIENT_SECRET = "your-client-secret-value"
+MICROSOFT_TENANT        = "common"   # or organizations, consumers, or a tenant GUID
+```
+
+Microsoft uses the same redirect flow as Google (a `GET` callback): replace
+`google` with `microsoft` in the endpoint URLs. Personal and work or school
+accounts can sign in with `common`. PKCE and the nonce are handled on the
+server; the frontend sees only `auth_url` and `state`. With the hosted pages or
+`mojo-auth.js`, call `MojoAuth.startMicrosoftLogin()`, like
+`startGoogleLogin()`. Setup steps for the Entra app are in the
+[Django developer OAuth reference](../../django_developer/account/oauth.md#microsoft-settings).
 
 ### Optional Settings
 
@@ -463,3 +497,6 @@ Admins with `manage_users` (or the combined `users` permission) bypass the locko
 | `400` | Unknown provider, missing params, or `redirect_uri` not on the allowlist |
 | `401` | Invalid or expired OAuth state token |
 | `403` | Account is disabled |
+| `403` | `begin`: the provider is switched off — for the named group, or, for a provider that is off by default (Microsoft), system-wide even with no group |
+| `403` | Microsoft: an account already uses this (unverified) email |
+| `401` | Microsoft: the ID token could not be verified |

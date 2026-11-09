@@ -47,6 +47,9 @@ class Notification(models.Model, MojoModel):
     class RestMeta:
         VIEW_PERMS = ["owner"]
         SAVE_PERMS = ["owner"]
+        # Owner-only, so these walks only ever reach the caller's own user
+        # (#8680). The sensitive and private-field guards still run first.
+        FILTER_RELATED = ["user__is_active", "user__last_login"]
         POST_SAVE_ACTIONS = ["mark_read"]
         LIST_DEFAULT_FILTERS = {"is_unread": True}
         GRAPHS = {

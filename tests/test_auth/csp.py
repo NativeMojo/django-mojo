@@ -6,7 +6,9 @@ What is covered
 * The live `GET /passkey` response — the ONLY hosted auth page that is not
   bouncer-gated, and therefore the only one whose real response headers a test
   client can assert (a cold client hitting `/auth`, `/register` or `/contact` is
-  served `bouncer_challenge.html`, which deliberately carries no CSP).
+  served `bouncer_challenge.html` instead; that page carries its own CSP, with
+  nonce'd scripts and per-page `frame-ancestors`, through the same
+  `_render_with_csp` — covered by test_bouncer_recovery.challenge_page).
 * In-process renders through `_serve_login` / `_serve_contact` /
   `_auth_context` + `render`, which reach every one of the four templates —
   that is what catches a child template someone forgot to nonce.

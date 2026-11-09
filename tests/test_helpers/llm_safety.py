@@ -93,7 +93,9 @@ def test_bedrock_route_may_admit_images_explicitly(opts):
 
     text_only = llm_safety.parse_policy(_bedrock_policy())
     hashes = set()
-    for capabilities in (["text", "images"], ["images", "text"]):
+    admitted = (["text", "images"], ["images", "text"], ["text", "tools", "images"],
+                ["images", "tools", "text"])
+    for capabilities in admitted:
         raw = _bedrock_policy()
         raw["routes"]["unattributed"]["capabilities"] = capabilities
         parsed = llm_safety.parse_policy(raw)
@@ -102,11 +104,11 @@ def test_bedrock_route_may_admit_images_explicitly(opts):
         assert parsed["hash"] != text_only["hash"], \
             "admitting images must change the policy hash so the operator re-agrees"
         hashes.add(parsed["hash"])
-    assert len(hashes) == 2, "capability order is part of the exact policy text"
+    assert len(hashes) == len(admitted), "capability order is part of the exact policy text"
     assert llm_safety.parse_policy(_bedrock_policy())["hash"] == text_only["hash"], \
         "an existing text-only Bedrock policy must hash exactly as before"
-    for capabilities in (["text", "tools"], ["images"], ["text", "images", "images"],
-                         ["text", "images", "tools"], ["text", "images", "prompt_cache"]):
+    for capabilities in (["images"], ["tools", "images"], ["text", "images", "images"],
+                         ["text", "images", "prompt_cache"], ["text", "images", "stream"]):
         raw = _bedrock_policy()
         raw["routes"]["unattributed"]["capabilities"] = capabilities
         try:
@@ -271,10 +273,18 @@ def test_public_call_has_no_adapter_bypass_parameters(opts):
         f"public call must not accept a provider client, got {tuple(call_parameters)}"
     assert "candidate" not in invoke_parameters and "allow_stopped" not in invoke_parameters, \
         f"production invoke must expose no stopped-state bypass, got {tuple(invoke_parameters)}"
-    for function in (llm.call, llm.ask, llm_safety.invoke):
+    for function in (llm.call, llm.ask, llm.stream, llm_safety.invoke,
+                     llm_safety.invoke_stream):
         effort = inspect.signature(function).parameters["reasoning_effort"]
         assert effort.default == "off" and effort.kind == inspect.Parameter.KEYWORD_ONLY, \
             f"{function.__name__} reasoning effort must be keyword-only with default off"
+    for function in (llm.call, llm.stream, llm_safety.invoke, llm_safety.invoke_stream):
+        parameters = inspect.signature(function).parameters
+        rounds = parameters["max_tool_rounds"]
+        assert rounds.default is None and rounds.kind == inspect.Parameter.KEYWORD_ONLY, \
+            f"{function.__name__} max_tool_rounds must be keyword-only with default None"
+        assert "client" not in parameters and "provider_factory" not in parameters, \
+            f"{function.__name__} must not accept a provider client or factory"
 
 
 @th.django_unit_test()
@@ -384,3 +394,96 @@ def test_host_feature_names_are_validated(opts):
         except ImproperlyConfigured as err:
             assert "LLM_HOST_FEATURES" in str(err), \
                 f"the error for {label} must name the setting, got {err}"
+
+
+@th.django_unit_test()
+def test_auto_sonnet_delegation_is_exactly_anthropic_assistant(opts):
+    from mojo.apps.account.services import llm_safety
+    for feature in ('assistant', 'configuration', 'model_discovery', 'unattributed'):
+        raw = _policy()
+        route = raw['routes'].pop('unattributed')
+        route['model'] = 'auto:sonnet'
+        raw['routes'][feature] = route
+        raw['features'] = {feature: _limits()}
+        if feature == 'assistant':
+            assert llm_safety.parse_policy(raw)['routes'][feature]['model'] == 'auto:sonnet', \
+                'explicit Anthropic Assistant delegation must parse without widening route keys'
+        else:
+            try:
+                llm_safety.parse_policy(raw)
+                assert False, f'{feature} must reject automatic Assistant delegation'
+            except llm_safety.LLMSafetyError as error:
+                assert error.code == 'policy_invalid', f'invalid delegation must fail safely: {error.code}'
+    for value in ('auto:opus', 'auto:', 'auto:sonnet-new'):
+        raw = _policy()
+        raw['routes']['unattributed']['model'] = value
+        try:
+            llm_safety.parse_policy(raw)
+            assert False, f'unsupported delegation {value} must fail closed'
+        except llm_safety.LLMSafetyError as error:
+            assert error.code == 'policy_invalid', f'bad token used wrong safe code: {error.code}'
+
+
+@th.django_unit_test()
+def test_bedrock_routes_may_declare_tools(opts):
+    from mojo.apps.account.services import llm_safety
+
+    text_only = llm_safety.parse_policy(_bedrock_policy())
+    for capabilities in (["text", "tools"], ["tools", "text"]):
+        raw = _bedrock_policy()
+        raw["routes"]["unattributed"]["capabilities"] = capabilities
+        parsed = llm_safety.parse_policy(raw)
+        assert parsed["routes"]["unattributed"]["capabilities"] == capabilities, \
+            f"a Bedrock tool route must parse unchanged: {parsed['routes']}"
+        assert parsed["hash"] != text_only["hash"], \
+            "adding tools to a route must require fresh policy activation"
+    for capabilities in (["tools"], ["text", "tools", "tools"],
+                         ["text", "tools", "prompt_cache"], ["text", "stream"]):
+        raw = _bedrock_policy()
+        raw["routes"]["unattributed"]["capabilities"] = capabilities
+        try:
+            llm_safety.parse_policy(raw)
+            assert False, f"Bedrock capabilities {capabilities} must be refused"
+        except llm_safety.LLMSafetyError as err:
+            assert err.code == "policy_invalid", \
+                f"invalid Bedrock capabilities must be policy_invalid, got {err.code}"
+
+
+@th.django_unit_test()
+def test_tool_round_arguments_are_validated_before_the_guard(opts):
+    from mojo.helpers import llm
+
+    for value in (0, 33, True, 2.0, "4"):
+        for function in (llm.call, llm.stream):
+            try:
+                function([{"role": "user", "content": "hello"}], feature="unattributed",
+                         max_tool_rounds=value)
+                assert False, f"{function.__name__} accepted max_tool_rounds={value!r}"
+            except ValueError as err:
+                assert "max_tool_rounds" in str(err), \
+                    f"the error for max_tool_rounds={value!r} must name it, got {err}"
+
+
+@th.django_unit_test()
+def test_tool_rounds_count_answered_tool_turns_only(opts):
+    from mojo.apps.account.services import llm_safety
+
+    answer = {"role": "user", "content": [
+        {"type": "tool_result", "tool_use_id": "t1", "content": "ok"}]}
+    ask = {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t1", "name": "lookup", "input": {}}]}
+    transcript = [{"role": "user", "content": "hi"}, ask, answer, ask, answer,
+                  {"role": "assistant", "content": "plain"}]
+    assert llm_safety._tool_rounds(transcript) == 2, \
+        "each user turn answering a tool request is one completed round"
+    assert llm_safety._tool_rounds("not a list") == 0, "malformed input counts no rounds"
+    assert llm_safety._tool_round_limit("bedrock", None) == llm_safety.BEDROCK_MAX_TOOL_ROUNDS \
+        and llm_safety._tool_round_limit("anthropic", None) is None \
+        and llm_safety._tool_round_limit("anthropic", 3) == 3, \
+        "Bedrock always has a round limit; Anthropic only when the caller sets one"
+    for value in (0, 33, True):
+        try:
+            llm_safety._tool_round_limit("bedrock", value)
+            assert False, f"an invalid round limit {value!r} must be refused"
+        except llm_safety.LLMSafetyError as err:
+            assert err.code == "loop_limit", f"invalid round limit used {err.code}"

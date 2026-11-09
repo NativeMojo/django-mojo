@@ -100,8 +100,10 @@ registration, passkey, and bouncer redirects.
 `hero_image_url_light` and `hero_image_url_dark` may replace it for their
 respective mode; each missing variant falls back to the common URL. Hero
 artwork is visible in `branded-panel` and `editorial`, not `minimal` or
-`compact`. The bouncer challenge also uses `app_title`, `logo_url`, and
-`accent_color`, and explains the account provider with `auth_provider_name`.
+`compact`. The bouncer challenge also uses `app_title`, `logo_url`,
+`accent_color`, `appearance` (and the `?auth_appearance=` override) and
+`custom_css` / `custom_css_url`, and explains the account provider with
+`auth_provider_name`.
 
 `registration.extra_fields` is the list of non-canonical fields the group has
 configured (promo codes, referral tokens, etc.). An empty list means no extra

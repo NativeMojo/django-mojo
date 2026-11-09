@@ -1,7 +1,8 @@
 # LLM Helper — Django Developer Reference
 
 Provider-neutral LLM facade with Anthropic and an AWS Bedrock Nova 2 Lite
-adapter (text, plus validated image input on an image route). Production requests use the mandatory
+adapter (text, validated image input, caller-declared tools, and streamed
+answers). Production requests use the mandatory
 [LLM safety boundary](../security/llm_safety.md).
 
 ```python
@@ -46,28 +47,79 @@ configuration reads:
 | `"general"` | Sonnet |
 | `"fast"` | Haiku |
 
-Guarded calls use the model owned by their policy route. `model=` may only
-repeat that exact model; it cannot select a different route model. The tier
-helpers do not override policy.
+Guarded calls use the exact literal model from their policy, except for the
+explicit Anthropic Assistant delegation `routes.assistant.model="auto:sonnet"`.
+Only that token enables automatic selection. Existing literal policies remain
+fixed until a deployment change and normal owner policy-hash activation.
+Inspect or clear any existing `LLM_ADMIN_MODEL` before opting in: it becomes
+an active pin on the delegated route.
 
-### How auto-detect ranks models
+On a delegated route the priority is owner-stored `LLM_ADMIN_MODEL`, then
+file-owned `LLM_ADMIN_MODEL`, then discovery. `LLM_HANDLER_MODEL` and the
+handler credential never substitute for this route. Literal policy and
+Bedrock models remain authoritative over legacy pins. `model=` can only
+repeat the resolved ID; it cannot override selection. One invocation snapshots
+that ID for mismatch checks, ledger, adapter and returned `model`, including
+calls from the streamed Assistant loop.
 
-Within the tier's family, the newest model wins, decided by the `created_at` timestamp the API returns — **not** by the shape of the model ID. A short alias (`claude-opus-4-8`) always beats a dated snapshot (`claude-opus-4-8-20260720`), even a newer one, because the alias follows the latest build. When a family has no alias, the newest snapshot is used.
+Automatic selection requires explicit provider metadata: `line="sonnet"`,
+`lifecycle="active"`, a real timezone-aware `created_at` release timestamp,
+adequate positive `max_tokens` for the effective configured output cap, and
+`capabilities.image_input.supported=true` if the route delegates images.
+Missing/unknown metadata and conflicting duplicate IDs are excluded. Newest
+release instant wins, with opaque ID as the deterministic tie breaker; names
+and version numbers do not choose the family. Client tools and prompt caching
+remain controlled by the existing policy and adapter capability checks; the
+Models API does not advertise a general client-tool support flag.
 
-ID length is deliberately not part of the ranking. Every alias within a generation is the same width (`claude-opus-4-1`, `claude-opus-4-8`), so it says nothing about recency.
+Modern dateless IDs are pinned release snapshots, not floating aliases.
+`get_model(use)` retains its older naming/alias preference and fallback IDs
+for legacy configuration callers only. It never selects the guarded automatic
+Assistant model; use `llm_safety.model_selection_state()` for passive runtime
+diagnostics.
 
-### Cache
+### Catalogue cache
 
-Model lists are cached in Redis (`mojo:llm:models`, 24h TTL) and shared across
-workers. If Redis is unavailable, a per-process in-memory cache is used
-instead. A refresh performs one guarded, timed page of at most 100 models—no
-unaccounted pagination. Call `get_models(force_refresh=True)` to bypass the
-cache.
+All catalogue consumers share a versioned cache scoped by policy hash,
+provider and exact discovery credential fingerprint. Discovery must use the
+same credential identity as the automatic Assistant. Normal owner/bootstrap
+GETs inspect cached state and never contact a provider.
+
+`llm_safety.route_state("assistant")` keeps `ready` strict: it requires a
+currently usable resolved ID. Its additive `can_invoke` field reports passive
+admission after policy agreement, stop and exact credential checks, allowing
+cold or expired automatic routes to reach the invocation guard. The normal
+agent, streamed agent, socket handler and Admin bootstrap use admission;
+none performs discovery during preflight or GET. `assistant_setup.is_ready()`
+is the enabled/bootstrap admission predicate. The invocation guard remains
+the authority for resolution, budgets, permits and the actual model.
+
+A complete catalogue is fresh for 24 hours. On expiry the first authorized
+invocation may refresh; an explicit owner refresh can bypass freshness. A
+failed or incomplete attempt may retain last-good data until seven days from
+its original success. Failures never extend that deadline. Expired data gives
+no effective automatic model. A successful complete catalogue that contains
+no compatible active Sonnet immediately invalidates the old selection.
+
+Redis coordinates a 30-second owner-token `SET NX EX` lock and 60-second
+attempt cooldown. Losers use usable cached data or return unavailable without
+waiting. A bounded process-local last-good cache follows the same age bounds;
+unknown Redis coordination never authorizes an uncontrolled network request.
+Refreshes use at most five pages of 100 models/500 total and a total deadline
+of the smaller of 20 seconds, discovery timeout and shared timeout. Each page
+passes safety controls, operation counting, breaker, permit and durable ledger
+independently, with one operation ID across pages. Missing/repeated cursors,
+a page failure, deadline or smaller installed loop budget make the refresh
+incomplete. SDK retries stay disabled; there is no background scheduler.
 
 ```python
-models = llm.get_models()               # cached model list (list of dicts)
-models = llm.get_models(force_refresh=True)  # force API call
+models = llm.get_models()  # shared cache; coordinated refresh on expiry
+models = llm.get_models(force_refresh=True)  # still obeys lock/cooldown/safety
 ```
+
+Owner refresh reports that request's result in `model.refresh`: a usable
+last-good model never turns a failed attempt into success. See the exact
+[owner API](../../web_developer/account/admin_portal/assistant.md).
 
 ## Quick Calls
 
@@ -87,17 +139,22 @@ response = llm.call(
     messages=[{"role": "user", "content": "Hello"}],
     system="You are a helpful assistant.",
     tools=[...],           # optional tool definitions
-    model="claude-sonnet-5",  # optional; must exactly match the policy route
+    # model omitted: policy literal or delegated resolved ID owns selection
     max_tokens=4096,       # optional
     reasoning_effort="off",  # default; Anthropic accepts only off
     feature="assistant",  # required for framework callers
     context={"conversation_id": 42, "operation_id": "stable-loop-uuid"},
+    max_tool_rounds=None,  # optional 1-32; Bedrock defaults to 8
 )
 # Returns a normalized response dict, including content and usage
 ```
 
 Raises `LLMExecutionError(code, retry_after=None)` when policy, controls,
-budgets, the circuit, persistence, or provider denies the request. Raw
+budgets, the circuit, persistence, or provider denies the request. Two budget
+codes matter to callers: `request_exceeds_budget` is permanent (the call alone
+is larger than the smallest `tokens_minute` limit), and `budget_exhausted` is
+retryable, with `retry_after` set to the seconds until the refusing window
+rolls over. See [How token budgets are charged](../security/llm_safety.md#how-token-budgets-are-charged). Raw
 SDK/provider text does not cross the adapter. Multi-call loops must reuse one
 unguessable `operation_id`; the guard increments it atomically. Omitted
 `feature` temporarily becomes separately budgeted `unattributed`; unknown
@@ -139,14 +196,17 @@ Messages have exactly `role` (`user` or `assistant`) and `content`; content is
 a nonblank string or a nonempty list of `{"type": "text", "text": "..."}`
 blocks with nonblank text.
 On a route that admits `images`, a user message may also carry image blocks
-from `llm.image_block()`; see
-[Image input](../security/llm_safety.md#image-input).
-System content accepts the same text forms. Tools, streaming,
-arbitrary model fields, and explicit cache controls are unsupported. The
-adapter sends no Bedrock guardrail configuration or application content filter.
+from `llm.image_block()`, in `llm.call()`, `llm.stream()` and tool loops alike;
+see [Image input](../security/llm_safety.md#image-input).
+System content accepts the same text forms. Tool turns are covered in
+[Tool use on Bedrock](#tool-use-on-bedrock) and streaming in
+[Streaming](#streaming). Documents (PDF), arbitrary model fields, and explicit
+cache controls are unsupported. The adapter sends no Bedrock guardrail
+configuration or application content filter.
 
 The response has `provider="bedrock"`, the pinned `model`, AWS request `id`,
-`stop_reason`, final `content` text blocks, and these usage classes:
+`stop_reason`, final `content` blocks (text, plus `tool_use` blocks on a tool
+request), and these usage classes:
 
 | Field | Meaning |
 |---|---|
@@ -158,9 +218,10 @@ The response has `provider="bedrock"`, the pinned `model`, AWS request `id`,
 Total input is the sum of the three input classes. Reasoning/redacted blocks
 never become answer text; there is no separate exact reasoning-token count
 to add to output. `end_turn` is complete; a text-bearing `max_tokens` result
-is partial. Empty, reasoning-only, filtered, malformed, over-cap, or over-1-MiB
-final output raises a safe provider error, retaining any validated billed
-usage in the ledger. No explicit cache checkpoints are sent, but implicit
+is partial; `tool_use` asks the caller to run tools. Whitespace-only text
+blocks are dropped from `content`. Empty, reasoning-only, filtered,
+malformed, over-cap, or over-1-MiB final output raises a safe provider error,
+retaining any validated billed usage in the ledger. No explicit cache checkpoints are sent, but implicit
 cache usage is still accounted for.
 
 An application-owned handler published with the existing `jobs.publish` can
@@ -170,6 +231,126 @@ different jobs from the same spoken turn need different ids. The operation
 counter expires, so durable attempts need their own bounds. Socket timeouts
 do not guarantee cancellation, and ambiguous `provider_*` failures must not
 be automatically replayed; see [retry semantics](../security/llm_safety.md#stable-failures-and-retry-semantics).
+
+### Streaming
+
+`llm.stream()` takes the same arguments as `call()` (its `operation`
+defaults to `"stream"`) and works on Bedrock routes only; an Anthropic route
+refuses it with `capability_unsupported`. It runs every guard step and
+dispatches `converse_stream` before it returns, so a refusal, or a provider
+error before the first event, raises `LLMExecutionError` from `stream()`
+itself — nothing has streamed and you can still answer with an error.
+
+```python
+with llm.stream(messages, system="Answer briefly.", feature="my_maestro_chat",
+                operation="chat", context={"operation_id": turn_id},
+                max_tokens=1024) as answer:
+    for event in answer:
+        if event["type"] == "text_delta":
+            send_to_client(event["text"])
+        else:  # "final", always the last event
+            response = event["response"]   # exactly what llm.call() returns
+            usage = response["usage"]
+            stop_reason = response["stop_reason"]
+```
+
+| Event | Shape | When |
+|---|---|---|
+| Text | `{"type": "text_delta", "text": "..."}` | Each non-empty piece of visible answer text, in order. Reasoning is never yielded. |
+| Final | `{"type": "final", "response": {...}}` | Once, last, after the whole answer validated and usage settled. `response` has the `call()` shape: `id`, `type="message"`, `role`, `provider`, `model`, `content`, `stop_reason`, `usage`. |
+
+`answer.response` holds the final response after the last event (`None`
+before). Tool requests arrive only in that final response, never earlier,
+so a tool is never started for an answer that then fails validation.
+
+A failure after streaming started raises `LLMExecutionError` from iteration
+with a `provider_*` code; text already delivered may be partial and must not
+be replayed automatically. The whole stream is bounded by the policy's
+`timeout_seconds`: a timer shuts the connection down at the deadline and
+iteration raises `provider_timeout`. That deadline counts your time between
+reads too, so keep the loop moving; a deadline passed while your code held
+the stream does not count against the provider's circuit.
+
+**Cancel** with `answer.close()` (the `with` block calls it). It is
+idempotent and never raises. Iterate the stream from synchronous code:
+
+- Called from an event-loop coroutine, or while another thread is blocked
+  reading the stream (a worker thread feeding a websocket, say), `close()`
+  only shuts the socket down and returns at once, with no database work.
+  The iterating thread settles the cancel on its next step and stops, so
+  keep iterating until the loop ends.
+- Called from synchronous code with no read in progress, `close()` settles
+  the cancel itself.
+
+A cancelled stream's ledger row finishes `status="failed"`,
+`error_code="cancelled"`. Its spend is unknown unless the final usage report
+had already arrived, so the full reservation normally stays charged. A
+cancel releases the provider's circuit as healthy only if the stream had
+already delivered provider events. A stream abandoned without `close()` is
+ended by the deadline timer; its lease expires and the ledger repair marks it
+`unknown`.
+
+### Tool use on Bedrock
+
+A Bedrock route whose policy lists `"tools"` (see
+[Bedrock routes](../security/llm_safety.md#bedrock-routes)) accepts declared
+tools in `call()` and `stream()`. The facade never runs a tool: it returns
+the model's requests, the caller runs them, and the caller sends the results
+back in the next call.
+
+```python
+TOOLS = [{
+    "name": "lookup_item",
+    "description": "Look up a board item by id.",
+    "input_schema": {"type": "object",
+                     "properties": {"id": {"type": "integer"}},
+                     "required": ["id"]},
+}]
+context = {"operation_id": turn_id}  # required with tools; same id every round
+messages = [{"role": "user", "content": "What is item 7 about?"}]
+
+while True:
+    response = llm.call(messages, tools=TOOLS, feature="my_maestro_chat",
+                        operation="chat", context=context, max_tool_rounds=4)
+    if response["stop_reason"] != "tool_use":
+        break  # final text answer in response["content"]
+    messages.append({"role": "assistant", "content": response["content"]})
+    results = []
+    for block in response["content"]:
+        if block["type"] == "tool_use":
+            text, failed = run_my_tool(block["name"], block["input"])
+            results.append({"type": "tool_result", "tool_use_id": block["id"],
+                            "content": text, "is_error": failed})
+    messages.append({"role": "user", "content": results})
+```
+
+- **Declaration:** exactly `name` (1–64 of `a-z A-Z 0-9 _ -`, unique),
+  nonblank `description`, and `input_schema` (a JSON-schema object whose
+  `type` is `"object"`); at most 64 tools. Any other key, such as
+  `cache_control`, is refused.
+- **Request:** a `tool_use` block `{"type": "tool_use", "id", "name",
+  "input"}` with `stop_reason == "tool_use"`. `input` is always a JSON
+  object; a tool with no input gets `{}`. Only declared names are accepted.
+- **Result:** the next user message answers every `tool_use` id of the
+  assistant message before it, with `{"type": "tool_result", "tool_use_id",
+  "content", "is_error"}`. `content` is a nonblank string or a list of text
+  blocks; `is_error` is optional and tells the model the tool failed.
+- **Echo the assistant content verbatim.** The adapter checks that each
+  result answers the preceding request and that tool turns come with the
+  same declared tools; a mismatch is refused with `provider_rejected`
+  before any reservation, ledger row or AWS call.
+- **Round limits.** Every tool call needs `context["operation_id"]`
+  (otherwise `operation_invalid`), reused for each call of one loop, so the
+  route's `max_loop_calls` bounds the loop across calls: a loop of N tool
+  rounds makes N + 1 calls. `max_tool_rounds` (1–32) also refuses, with
+  `loop_limit`, a transcript holding more answered rounds than the limit,
+  before any reservation or ledger row. Bedrock defaults to 8; Anthropic
+  callers keep their existing loops unless they pass a value.
+- Streaming works the same way: read the tool requests from the final
+  event's `response["content"]`.
+
+Nova 2 reports reasoning only as `[REDACTED]`, and the facade never returns
+reasoning blocks, so they are not echoed into tool turns.
 
 ## `model_choices()` — picker suggestions
 
@@ -185,9 +366,10 @@ families and sorted newest-first by the same `_rank_key` `get_model()` uses. The
 label is the API's `display_name`, or the id when it has none.
 
 **It never returns an empty list.** When the catalogue is unavailable — no key
-yet, or the API is unreachable — it returns the three `_FALLBACKS` aliases,
-which is exactly what resolution would fall back to anyway. A picker with
-nothing in it looks broken.
+yet, or the API is unreachable — it returns the three legacy `_FALLBACKS` IDs,
+for legacy use-case callers only. The owner setup contract uses known
+metadata choices (which may be empty), and automatic runtime never uses
+hardcoded fallback IDs.
 
 It reads the cache by default and does **not** fetch: a settings page that
 fetched on every render would spend a provider round trip to draw a dropdown.
@@ -205,7 +387,7 @@ good re-save whenever the cache has lapsed and the API is down.
 |---|---|
 | `LLM_ADMIN_API_KEY` | Checked first by `get_api_key()` |
 | `LLM_HANDLER_API_KEY` | Fallback — the platform key, settable from the built-in Admin's Assistant setup |
-| `LLM_ADMIN_MODEL` | If set, `get_model()` returns this (explicit pin) |
+| `LLM_ADMIN_MODEL` | Owner/file manual pin on a delegated Assistant route; legacy `get_model()` pin |
 | `LLM_HANDLER_MODEL` | Second-tier pin |
 | `LLM_SAFETY_POLICY` | Required file-owned provider routes and cost envelopes |
 | `LLM_SAFETY_POLICY_EXPECTED_HASH` | Protected owner-activated DB agreement; never edit directly |

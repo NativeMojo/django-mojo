@@ -60,7 +60,20 @@ def state(actor):
             entry["current"] = values.get(name, provider._static(name, entry.get("default")))
         entries.append(entry)
     revision = current["document"]["revision"] if current else None
+    # This flag describes the exact published target, never a loaded legacy
+    # URL/key fallback. A disabled tuple requires no hub network dependency.
+    topic_keys = ("DNSMAN_ACME_HUB_PROFILE_ID", "DNSMAN_ACME_HUB_URL", "DNSMAN_ACME_HUB_API_KEY")
+    topic_required = any(key in values for key in topic_keys) and any(values.get(key) for key in topic_keys)
+    topic_identity = None
+    if topic_required:
+        from mojo.apps.dnsman.fleet_settings import profile
+        chosen = profile(values.get(topic_keys[0]))
+        if chosen:
+            topic_identity = {"profile_id": chosen["id"],
+                              "consumer_project_uuid": chosen["consumer_project_uuid"]}
     return {"schema_version": 1, "revision": revision,
+            "shared_validation_required": bool(topic_required),
+            "shared_validation_identity": topic_identity,
             "version_id": current.get("version_id") if current else None,
             "entries": entries, "published": current is not None,
             "loaded_revision": provider._static(config_override.REVISION_KEY, None),
@@ -122,7 +135,7 @@ def _save(actor, payload, restoring=False):
             current = _read(s3, bucket, key, allowed)
             old_revision = current["document"]["revision"] if current else None
             if expected != old_revision:
-                raise merrors.ValueException("Fleet configuration changed; reload before publishing")
+                raise merrors.ValueException("Fleet configuration changed; reload before publishing", code=409, status=409)
             old_values = current["document"]["settings"] if current else {}
             if restoring:
                 historical = _read(s3, bucket, key, allowed, payload["version_id"])

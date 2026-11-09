@@ -34,6 +34,9 @@ ROOT_PATH = "/api/testit/oauth-consent-root"
 ROOT_RESOURCE = ORIGIN + ROOT_PATH
 
 SCRIPT_TAG_RE = re.compile(r"<script([^>]*)>", re.IGNORECASE)
+PAYLOAD_RE = re.compile(
+    r'<script id="oauth-approve-payload" type="application/json">(.*?)</script>',
+    re.DOTALL)
 
 
 def _verifier():
@@ -253,12 +256,24 @@ def test_not_available_page(opts):
               "no ENABLED resource means no authorization server either")
 
 
-def _approve_request(token=None, bearer="bearer", **overrides):
+def _post_approve(payload, token=None, bearer="bearer"):
+    """An approve request carrying exactly `payload` — nothing added."""
     from django.test import RequestFactory
     from objict import objict
     from mojo.apps.account.models import User
     from mojo.apps.account.services.oauth_server import resources
 
+    request = RequestFactory().post(f"{resources.SERVER_PATH}/approve", payload)
+    request.DATA = objict.fromdict(payload)
+    request.ip = "127.0.0.1"
+    request.user_agent = "testit"
+    request.user = User.objects.get(username=TEST_USER)
+    request.bearer = bearer
+    request.auth_token = objict(prefix="bearer", token=token) if token else None
+    return request
+
+
+def _approve_request(token=None, bearer="bearer", **overrides):
     verifier = _verifier()
     payload = {
         "client_id": CLIENT_ID,
@@ -271,14 +286,8 @@ def _approve_request(token=None, bearer="bearer", **overrides):
         "resource": RESOURCE,
     }
     payload.update(overrides)
-    request = RequestFactory().post(f"{resources.SERVER_PATH}/approve", payload)
-    request.DATA = objict.fromdict(payload)
-    request.ip = "127.0.0.1"
-    request.user_agent = "testit"
-    request.user = User.objects.get(username=TEST_USER)
-    request.bearer = bearer
-    request.auth_token = objict(prefix="bearer", token=token) if token else None
-    return request, verifier
+    payload = {k: v for k, v in payload.items() if v is not None}
+    return _post_approve(payload, token=token, bearer=bearer), verifier
 
 
 def _session_token(token_type="access", with_auth_time=True):
@@ -321,6 +330,55 @@ def test_approve_mints_a_code(opts):
                 "the approving session's auth_time must be copied onto the code")
 
 
+@th.django_unit_test("the page's own approve payload is accepted by approve")
+def test_rendered_payload_approves(opts):
+    import json
+    from mojo.apps.account.models import OAuthClient
+    from mojo.apps.account.services.oauth_server import codes, consent, resources
+    from mojo.apps.account.utils.jwtoken import JWToken
+
+    # The Approve button POSTs the page's data block unchanged, so that block —
+    # not a hand-built fixture — is what approve has to accept (maestro #8916).
+    request, verifier = _authorize_request(scope="mcp")
+    response = consent.handle_authorize(request, ORIGIN, registry=_registry())
+    assert_eq(response.status_code, 200,
+              f"a well-formed authorize request must render the page, "
+              f"got {response.status_code}")
+    match = PAYLOAD_RE.search(response.content.decode("utf-8"))
+    assert_true(match is not None,
+                "the consent page must carry its approve payload as a data block")
+    payload = json.loads(match.group(1))
+
+    token = _session_token()
+    result = consent.handle_approve(
+        _post_approve(payload, token=token), ORIGIN, registry=_registry())
+    url = result["redirect_url"]
+    query = parse_qs(urlsplit(url).query)
+    assert_true(url.startswith(REDIRECT),
+                f"approving the rendered payload must return the client's "
+                f"registered redirect, got {url}")
+    assert_eq(query.get("state"), ["state-value"],
+              f"the client's state must be echoed, got {query.get('state')}")
+    assert_eq(query.get("iss"), [f"{ORIGIN}{resources.SERVER_PATH}"],
+              f"the RFC 9207 issuer must ride along, got {query.get('iss')}")
+    raw_code = query.get("code", [None])[0]
+    assert_true(bool(raw_code), f"approve must hand back a code, got {url}")
+
+    # consume_code checks the client, the redirect and the PKCE verifier of the
+    # ORIGINAL authorize request; any mismatch raises.
+    client = OAuthClient.objects.get(client_id=CLIENT_ID)
+    row = codes.consume_code(raw_code, client, REDIRECT, verifier)
+    assert_eq(row.scope, "mcp",
+              f"the code must carry the requested scope, got {row.scope!r}")
+    assert_eq(row.resource, RESOURCE,
+              f"the code must be bound to the requested resource, "
+              f"got {row.resource!r}")
+    expected_auth_time = JWToken().decode(token, validate=False)["auth_time"]
+    assert_eq(row.auth_time, expected_auth_time,
+              f"the code must carry the approving session's auth_time "
+              f"{expected_auth_time}, got {row.auth_time}")
+
+
 @th.django_unit_test("approve refuses anything that is not an interactive session")
 def test_approve_requires_an_interactive_session(opts):
     from mojo import errors as merrors
@@ -355,6 +413,8 @@ def test_approve_does_not_trust_the_page(opts):
         (dict(redirect_uri="https://evil.example/cb"), "an unregistered redirect"),
         (dict(client_id="testit-oauth-unknown"), "an unknown client"),
         (dict(code_challenge_method="plain"), "a plain PKCE challenge"),
+        (dict(response_type="token"), "an implicit-flow response_type"),
+        (dict(response_type=None), "a missing response_type"),
         (dict(resource="https://elsewhere.example/api/x"), "an unknown resource"),
         (dict(scope="admin"), "a scope this server does not offer"),
     ]

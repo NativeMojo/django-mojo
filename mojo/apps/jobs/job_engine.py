@@ -18,11 +18,13 @@ from collections import Counter
 from datetime import datetime, timedelta
 from typing import Dict, List, Optional, Set, Tuple
 
-from django.db import close_old_connections
+from django.db import InterfaceError, OperationalError
 from django.db.models import F
+from redis.exceptions import ConnectionError as RedisConnectionError, TimeoutError as RedisTimeoutError
 
 from mojo.helpers.settings import settings
 from mojo.helpers import logit
+from mojo.helpers.async_db import database_connection_boundary, database_thread_target
 from .keys import JobKeys
 from .adapters import get_adapter
 from .models import Job, JobEvent
@@ -635,12 +637,21 @@ class JobEngine:
         )
         self.control_thread.start()
 
-    def _remove_from_processing(self, channel: str, job_id: str, max_retries: int = 3):
-        """Remove job from processing ZSET with retries to ensure cleanup."""
+    def _remove_from_processing(self, channel: str, job_id: str, max_retries: int = 3, stale_before=None):
+        """Remove a receipt, optionally only when still stale at this pass's cutoff."""
         for attempt in range(max_retries):
             try:
-                result = self.redis.zrem(self.keys.processing(channel), job_id)
-                if result or attempt == max_retries - 1:
+                if stale_before is None:
+                    result = self.redis.zrem(self.keys.processing(channel), job_id)
+                else:
+                    # One-key compare/delete is atomic on standalone and cluster
+                    # Redis. A worker may have replaced this ID after requeue.
+                    result = self.redis.get_client().eval(
+                        "local score = redis.call('ZSCORE', KEYS[1], ARGV[1]); "
+                        "if score and tonumber(score) <= tonumber(ARGV[2]) then "
+                        "return redis.call('ZREM', KEYS[1], ARGV[1]) end; return 0",
+                        1, self.keys.processing(channel), job_id, stale_before)
+                if stale_before is not None or result or attempt == max_retries - 1:
                     return result
                 time.sleep(0.1 * (attempt + 1))  # Exponential backoff
             except Exception as e:
@@ -1028,6 +1039,7 @@ class JobEngine:
         """Plan B: not used. Kept for compatibility."""
         return
 
+    @database_thread_target
     def execute_job(self, channel: str, job_id: str):
         """Execute job and handle all state updates (Plan B)."""
         job = None
@@ -1035,7 +1047,6 @@ class JobEngine:
             # Load job from database
             if JOBS_DEBUG:
                 logger.info(f"Loading job {job_id} from database...")
-            close_old_connections()
             if JOBS_DEBUG:
                 logger.info(f"Loading job {job_id} before durable claim...")
             # The compare-and-set below is the execution lock. Redis delivery
@@ -1043,6 +1054,11 @@ class JobEngine:
             job = Job.objects.get(id=job_id)
             if JOBS_DEBUG:
                 logger.info(f"Successfully loaded job {job_id} from database")
+        except (OperationalError, InterfaceError) as e:
+            # The row is not claimed. Keep the in-flight receipt so the
+            # existing reaper can recover this same delivery after DB recovery.
+            logger.warning(f"Database unavailable loading job {job_id}; retaining delivery: {e}")
+            return
         except Exception as e:
             logger.exception(f"Failed to load job {job_id}: {e}")
             # Remove from processing to avoid leak
@@ -1264,94 +1280,106 @@ class JobEngine:
                         stale_ids = []
                     for jid in stale_ids:
                         try:
-                            # Check if job should be retried before requeuing
-                            try:
-                                job = Job.objects.get(id=jid)
+                            with database_connection_boundary():
+                                # Check if job should be retried before requeuing
+                                try:
+                                    job = Job.objects.get(id=jid)
 
-                                # Already over — just clean up Redis. `failed`
-                                # and `expired` belong here as much as
-                                # `completed` and `canceled` do: the requeue
-                                # below cannot touch a non-running row anyway,
-                                # so leaving them out only meant the reaper
-                                # rewrote a finished job's story with a
-                                # max-retries claim on the way past. A node
-                                # that deploys itself produces exactly this
-                                # state — terminal row, engine killed before
-                                # the ZREM.
-                                if job.status in ('completed', 'canceled',
-                                                  'failed', 'expired'):
-                                    logger.debug(f"Reaper: Job {jid} already {job.status}, removing from processing")
-                                    self._remove_from_processing(ch, jid)
-                                    continue
-
-                                # Check if job is expired
-                                if job.is_expired:
-                                    logger.info(f"Reaper: Job {jid} expired, marking as expired instead of requeuing")
-                                    self._remove_from_processing(ch, jid)
-                                    job.status = 'expired'
-                                    job.finished_at = dates.utcnow()
-                                    job.save(update_fields=['status', 'finished_at'])
-                                    JobEvent.objects.create(
-                                        job=job, channel=ch, event='expired',
-                                        runner_id=self.runner_id, attempt=job.attempt,
-                                        details={'reason': 'reaper_expired'}
-                                    )
-                                    continue
-
-                                # Check retry limits (prevent infinite requeuing)
-                                if job.attempt >= job.max_retries:
-                                    logger.info(f"Reaper: Job {jid} is not retryable ({job.attempt}/{job.max_retries}), marking as failed")
-                                    self._remove_from_processing(ch, jid)
-                                    job.status = 'failed'
-                                    job.finished_at = dates.utcnow()
-                                    # Most jobs that land here were published
-                                    # max_retries=0 and exceeded nothing; what
-                                    # actually happened is that their in-flight
-                                    # lease ran out with no retry available.
-                                    job.last_error = "in-flight lease expired and the job is not retryable"
-                                    job.save(update_fields=['status', 'finished_at', 'last_error'])
-                                    JobEvent.objects.create(
-                                        job=job, channel=ch, event='failed',
-                                        runner_id=self.runner_id, attempt=job.attempt,
-                                        details={'reason': 'reaper_max_retries_exceeded'}
-                                    )
-                                    continue
-
-                                # Job can be retried. Return the durable row to
-                                # pending before publishing another Redis copy;
-                                # execute_job's compare-and-set claim fences
-                                # duplicate deliveries of the same ID.
-                                if job.status == 'running':
-                                    reset = Job.objects.filter(
-                                        pk=job.pk, status='running',
-                                    ).update(status='pending', runner_id=None)
-                                    if not reset:
-                                        self._remove_from_processing(ch, jid)
+                                    # Already over — just clean up Redis. `failed`
+                                    # and `expired` belong here as much as
+                                    # `completed` and `canceled` do: the requeue
+                                    # below cannot touch a non-running row anyway,
+                                    # so leaving them out only meant the reaper
+                                    # rewrote a finished job's story with a
+                                    # max-retries claim on the way past. A node
+                                    # that deploys itself produces exactly this
+                                    # state — terminal row, engine killed before
+                                    # the ZREM.
+                                    if job.status in ('completed', 'canceled',
+                                                      'failed', 'expired'):
+                                        logger.debug(f"Reaper: Job {jid} already {job.status}, removing from processing")
+                                        self._remove_from_processing(ch, jid, stale_before=cutoff)
                                         continue
-                                    job.status = 'pending'
-                                    job.runner_id = None
-                                elif job.status != 'pending':
-                                    self._remove_from_processing(ch, jid)
-                                    continue
-                                self._remove_from_processing(ch, jid)
-                                self.redis.rpush(self.keys.queue(ch), jid)
 
-                                JobEvent.objects.create(
-                                    job=job, channel=ch, event='retry',
-                                    runner_id=self.runner_id, attempt=job.attempt,
-                                    details={'reason': 'reaper_timeout'}
-                                )
-                                logger.info(f"Reaper requeued stale job {jid} on {ch} (attempt {job.attempt}/{job.max_retries})")
+                                    # Check if job is expired
+                                    if job.is_expired:
+                                        logger.info(f"Reaper: Job {jid} expired, marking as expired instead of requeuing")
+                                        job.status = 'expired'
+                                        job.finished_at = dates.utcnow()
+                                        job.save(update_fields=['status', 'finished_at'])
+                                        JobEvent.objects.create(
+                                            job=job, channel=ch, event='expired',
+                                            runner_id=self.runner_id, attempt=job.attempt,
+                                            details={'reason': 'reaper_expired'}
+                                        )
+                                        self._remove_from_processing(ch, jid, stale_before=cutoff)
+                                        continue
 
-                            except Job.DoesNotExist:
-                                # Job deleted from DB but still in Redis - clean it up
-                                logger.info(f"Reaper: Job {jid} not found in DB, removing from processing")
-                                self._remove_from_processing(ch, jid)
+                                    # Check retry limits (prevent infinite requeuing)
+                                    if job.attempt >= job.max_retries:
+                                        logger.info(f"Reaper: Job {jid} is not retryable ({job.attempt}/{job.max_retries}), marking as failed")
+                                        job.status = 'failed'
+                                        job.finished_at = dates.utcnow()
+                                        # Most jobs that land here were published
+                                        # max_retries=0 and exceeded nothing; what
+                                        # actually happened is that their in-flight
+                                        # lease ran out with no retry available.
+                                        job.last_error = "in-flight lease expired and the job is not retryable"
+                                        job.save(update_fields=['status', 'finished_at', 'last_error'])
+                                        JobEvent.objects.create(
+                                            job=job, channel=ch, event='failed',
+                                            runner_id=self.runner_id, attempt=job.attempt,
+                                            details={'reason': 'reaper_max_retries_exceeded'}
+                                        )
+                                        self._remove_from_processing(ch, jid, stale_before=cutoff)
+                                        continue
 
+                                    # Job can be retried. Return the durable row to
+                                    # pending before publishing another Redis copy;
+                                    # execute_job's compare-and-set claim fences
+                                    # duplicate deliveries of the same ID.
+                                    if job.status == 'running':
+                                        reset = Job.objects.filter(
+                                            pk=job.pk, status='running',
+                                        ).update(status='pending', runner_id=None)
+                                        if not reset:
+                                            self._remove_from_processing(ch, jid, stale_before=cutoff)
+                                            continue
+                                        job.status = 'pending'
+                                        job.runner_id = None
+                                    elif job.status != 'pending':
+                                        self._remove_from_processing(ch, jid, stale_before=cutoff)
+                                        continue
+                                    try:
+                                        self.redis.rpush(self.keys.queue(ch), jid)
+                                    except (RedisConnectionError, RedisTimeoutError) as e:
+                                        # The write may have landed. Keep the old
+                                        # receipt or a new worker's receipt intact;
+                                        # the next normal pass retries this same ID.
+                                        logger.warning(f"Reaper queue delivery uncertain for job {jid} on {ch}: {e}")
+                                        continue
+
+                                    JobEvent.objects.create(
+                                        job=job, channel=ch, event='retry',
+                                        runner_id=self.runner_id, attempt=job.attempt,
+                                        details={'reason': 'reaper_timeout'}
+                                    )
+                                    self._remove_from_processing(ch, jid, stale_before=cutoff)
+                                    logger.info(f"Reaper requeued stale job {jid} on {ch} (attempt {job.attempt}/{job.max_retries})")
+
+                                except Job.DoesNotExist:
+                                    # Job deleted from DB but still in Redis - clean it up
+                                    logger.info(f"Reaper: Job {jid} not found in DB, removing from processing")
+                                    self._remove_from_processing(ch, jid, stale_before=cutoff)
+
+                        except (OperationalError, InterfaceError) as e:
+                            # A DB outage is not proof the job is broken. Leave
+                            # its receipt available to the next bounded pass.
+                            logger.warning(f"Reaper database unavailable for job {jid} on {ch}; retaining delivery: {e}")
                         except Exception as e:
                             logger.warning(f"Reaper failed to handle job {jid} on {ch}: {e}")
                             # Remove from processing to prevent infinite retries on broken jobs
-                            self._remove_from_processing(ch, jid)
+                            self._remove_from_processing(ch, jid, stale_before=cutoff)
             except Exception as e:
                 logger.warning(f"Reaper loop error: {e}")
             # Event-interruptible sleep before the next pass (maestro #2789).

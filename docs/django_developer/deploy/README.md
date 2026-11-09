@@ -20,6 +20,10 @@ the installed framework scripts. When a legacy shim is launched as the
 application account, the packaged entry point re-enters itself once through
 passwordless `sudo` before it creates the transient unit or changes anything.
 
+Shared DNS validation uses the same deployment entry and ordinary Fleet/Portal
+controls. See [its rollout guide](../dnsman/HubUpgrade.md) for the one-time
+superuser enable action after a converged deployment.
+
 ## The shim contract
 
 A shim contains project setup only, then delegates:
@@ -90,14 +94,26 @@ The built-in `api` path:
 
 1. runs `manage.py check` before changing host configuration;
 2. runs `migrate_locked --noinput` only on the API canary when `--migrate` is
-   present, then runs `collectstatic`;
+   present, then runs `collectstatic`. `migrate_locked` takes Postgres advisory
+   lock `(1424, 1)` without waiting and refuses, naming the holding session's
+   pid, mode and application, when another session has it. Every fixed
+   advisory-lock namespace lives in `mojo/helpers/advisory_locks.py`; a new
+   lock takes a new number there;
 3. renders and installs the project's nginx, cron, and systemd files;
 4. applies explicit removals from `aws/node_retired.conf`;
 5. runs the real `nginx -t`;
 6. restarts `mojo-asgi`, reloads nginx, and requires `PROBE_URL` to answer
-   exactly HTTP 200.
+   exactly HTTP 200;
+7. removes stale project cron files (see "cron.d inventory" below) and
+   retires the running jobs scheduler (`jobman stop scheduler --grace 2`) so
+   the next `3_mojo_jobs` tick starts one from the new release — the scheduler
+   ticks `@schedule` functions, so the release is not live until it is
+   replaced. Both happen only after the probe, so a failed activation leaves
+   the old cron entry and the old scheduler in place. A scheduler that
+   survives is a logged warning (`aws-check` reports
+   `cron.heartbeat_missing`), not a failed release.
 
-Those last two checks are the final acceptance gates. A failed required command
+The nginx and probe checks are the final acceptance gates. A failed required command
 earlier in the transaction, such as dependency installation, migration, static
 collection, rendering, or service restart, also rolls the candidate back.
 There is no TLS semantic parser, certificate-lineage preservation, node-role
@@ -105,6 +121,27 @@ authority, RPM verification, file-integrity gate, trusted-change journal,
 ownership policy, or request-service policy in the deployment path.
 Independent observability tools may report drift, but they cannot veto a
 release.
+
+### cron.d inventory
+
+The framework ships three cron.d templates — `1_certbot`, `3_mojo_jobs` and
+`4_certbot_sync` — rendered with the project's `aws/cron.d/` overlay into
+`var/deploy/cron.d`, which is the node's cron contract. `2_mojo_cron`, the
+per-minute `bin/cron.py --run` entry, was retired when the scheduler took over
+the tick; the sweep below removes it from existing nodes.
+
+**Any `/etc/cron.d` file that names the project path must be in that
+contract**, i.e. live in `aws/cron.d/`. Activation sweeps every regular file
+in `/etc/cron.d` that mentions `$PROJ_PATH` — the exact path followed by `/`,
+whitespace or end of line, so `/opt/api` never matches `/opt/api2` or
+`/opt/api-admin` — and is not in the rendered contract, snapshotting it first
+so `--rollback-candidate` and `--activate-previous` restore it. The deploy
+log names the swept file but never prints its contents. Symlinks are never
+swept. Files that do not mention the path are left alone;
+`aws/node_retired.conf` remains the way to remove those. `check_node
+--section cron` grades the same rule. An operator cron that must mention the
+project path and survive deploys belongs in `aws/cron.d/` — a hand-installed
+one is swept on the next deploy, and its snapshot is only used by a rollback.
 
 ### Custom profiles
 
@@ -204,6 +241,14 @@ diagnostic never copies exception text or command output into deployment
 status. If activation already succeeded, recovery finishes publication and
 keeps the candidate live instead of rolling it back; that branch ends with the
 distinct fixed result `publication completed` or `publication recovery failed`.
+
+Recovery first writes one fixed line, `Deployment failed during <phase>;
+recovering`. When the transient unit fails, the launcher replays only the
+unit's own output (`_TRANSPORT=stdout`), never the sudo and PAM records its
+cgroup also writes, and keeps at most nine lines: the five before the last
+recovery line, that line, and the last three, which end with the fixed result.
+It reads the unit's whole output rather than a fixed number of entries, so the
+cause written just before recovery survives however much rollback prints. With no recovery line it keeps the last nine lines.
 
 Custom rollback uses the profile protocol above; `code` restores the checkout
 and packages and leaves activation to its external supervisor. The transaction
@@ -412,6 +457,34 @@ nodes and `platform-deploy` on non-API nodes.
 `--section shims` reports whether optional project scripts exist, are
 executable, and pass `bash -n`. A `mojo.deploy locate` shim is the valid
 permanent endpoint. These findings are advisory and are not deployment gates.
+
+`--section profile` checks `var/profile`, the marker that selects the settings
+module (#9315). Missing, empty, or not the expected profile is FAIL; an owner
+other than `--app-user:--web-user` or a mode other than 640 is WARN. The
+expected profile is `--expect-profile` (default `prod`), unless
+`var/django.conf` sets `MOJO_REQUIRED_PROFILE`, which wins. That key is found
+with a one-key grep; the rest of the conf is never read, and a value that is
+not a plain profile name is reported as ignored, never printed.
+
+### Requiring the production profile
+
+Stage 1 writes `var/profile` = `prod` before the project's bootstrap, and the
+skeleton's `ec2_deploy.sh` writes it on a box that has never served, before
+`mojo-asgi` is enabled. A golden-image clone whose image lacks the marker is
+repaired instead: its first-boot user data writes `prod` and then restarts
+`mojo-asgi` and the job engines, which may already have started on
+`settings.local`. An existing marker is never overwritten. To
+make a node refuse to run without it, add `MOJO_REQUIRED_PROFILE = prod` to
+the deployment's canonical `var/django.conf` (see
+[Settings Profile](../helpers/settings.md#requiring-a-profile-opt-in)).
+
+Check every node with `python3 -m mojo.deploy.check_node --section profile`
+and fix any marker **before** adding the key. config-sync applies a changed
+conf and restarts each node within about 60 seconds, and a node whose marker
+is missing then stops: ASGI exits on each restart, the job engine fails each
+cron minute, and `post_deploy` stops at `manage.py check`, before migrations.
+config-sync itself never imports Django, so a refused node can still pull a
+corrected conf.
 
 ## Other pre-Django node tools
 
@@ -678,11 +751,34 @@ node's static setting, for example `--node-type sites`. Its project-script and
 profile checks are advisory diagnostics, including under `--require-shims`;
 deployment itself does not call this tool.
 
+**`--section system_logs`** checks the node's disk and log rotation, on every
+node type. It only reads: `logrotate -d` is a dry run, and nothing is rotated,
+deleted or restarted. Run it as root (`sudo python3 -E -P -m
+mojo.deploy.check_node --section system_logs`) so the dry run and the
+`/var/log/messages*` total can read root-only files.
+
+| Finding | PASS | WARN | FAIL |
+|---|---|---|---|
+| root filesystem (`df -P /`) | under 75% used | 75-84% | 85% or more (the health monitor's `HEALTH_DISK_CRIT` default) |
+| logrotate health | clean dry run, service not failed | the dry run or the service state could not be read (timeout, ssh, sudo): unverified | `logrotate -d /etc/logrotate.conf` prints any `error:` line (`duplicate log entry`, a bad directive), or `logrotate.service` is failed |
+| messages archive size | `/var/log/messages*` totals 2 GiB or less (none at all is 0) | more than 2 GiB, or `du` failed (permission, timeout): unverified | |
+
+Every WARN and FAIL names its remedy. A duplicate entry usually means
+`/etc/logrotate.d/nginx` globs `/var/log/nginx/*.log` and so also claims
+MojoSec's `mojosec.json.log`: make its first line name nginx's own logs,
+`/var/log/nginx/access.log /var/log/nginx/error.log`. A large messages total
+usually means audit records reach rsyslog: add the rsyslog drop
+(`if $programname == 'audit' then stop`) and compress rotated messages. The
+framework does not manage rsyslog, logrotate compression or journald size;
+those stay host configuration.
+
 ### `jobman`
 
 `python3 -m mojo.deploy.jobman` starts, stops, and reports the foreground job
 engine and scheduler. Cron is the normal start authority, not merely a
-backstop. Before an API deployment can commit, `jobman repair` runs as root,
+backstop. The scheduler it starts also ticks the project's `@schedule`
+functions every minute (`JOBS_SCHEDULER_CRON_TICK`), so every node needs its
+scheduler running even when the leadership lock is held elsewhere. Before an API deployment can commit, `jobman repair` runs as root,
 hands only Jobman's own files to the exact installed cron account, and runs a
 no-spawn `jobman preflight` through the same fixed system Python and installed
 module used by cron, as that account.
@@ -698,21 +794,20 @@ if any process survives. It selects stop targets from the expected Jobman
 command scan, never from the application-writable pidfile alone. Because this
 handoff runs after the node result is recorded, its failure is an operational
 alarm; it does not roll back the activated release. The next every-minute cron
-tick starts the replacements. That fresh cron session is part of the MojoSec
-proof for firewall work, so the deploy process must not start the replacements
-directly.
+tick starts the replacements. The deploy process must not start them directly:
+a process started from the deploy's shell would give every broker sudo that
+session's Audit session, and the sensor would raise each one as an
+`auth.sudo_command` instead of recording it as expected automation.
 
 The cron entry calls `/usr/bin/python3 -E -P -m mojo.deploy.jobman` directly
 and keeps its bash parent alive until Jobman returns. This avoids the project's
-portable `env → bash → Python` wrapper chain, whose repeated execs share one PID
-and cannot be used as unambiguous Audit lineage. The project `bin/jobman` shim
+portable `env → bash → Python` wrapper chain. The project `bin/jobman` shim
 remains available for interactive commands.
 
 `start` runs `bin/jobs.py` through jobman's absolute current Python executable,
-not through the project's `/usr/bin/env` shebang. Besides pinning the child to
-the already-selected environment, this gives Linux Audit one unambiguous Python
-exec generation for MojoSec lineage. Jobman refuses to spawn if its interpreter
-is not an absolute executable path.
+not through the project's `/usr/bin/env` shebang, which pins the child to the
+already-selected environment. Jobman refuses to spawn if its interpreter is
+not an absolute executable path.
 
 **A root `start` demotes itself.** Invoked as root, `jobman start` resolves
 the application account (same ladder as the update transaction: cron entry →
@@ -734,7 +829,7 @@ automatically. For operator recovery, run
 `/usr/bin/python3 -E -P -m mojo.deploy.jobman --root /opt/api preflight` as the
 installed cron account, then run the same safe-path module command with
 `stop --root /opt/api`. The following cron tick
-starts the MojoSec-proven replacements. Use
+starts the replacements. Use
 `journalctl -t mojo-deploy-recycle` to inspect automated deploy handoffs; manual
 recovery commands report directly and do not write that tag.
 

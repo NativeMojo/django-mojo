@@ -35,9 +35,9 @@ rather than appending to it.
 
 | Key | Type | Default | Description |
 |-----|------|---------|-------------|
-| `app_title` | string | `"DJANGO MOJO"` | Brand name in card header |
+| `app_title` | string | `"DJANGO MOJO"` | Brand name in card header and on the bouncer challenge |
 | `auth_provider_name` | string | `"DJANGO MOJO"` | Account provider named on the bouncer challenge (for example, `"Maestro"`) |
-| `logo_url` | string | `""` | Logo image URL (header + hero panel) |
+| `logo_url` | string | `""` | Logo image URL (header + hero panel + bouncer challenge) |
 | `favicon_url` | string | `""` | Favicon URL or path. When set it is the **only** icon declared on the hosted auth pages — the deployment's own `/favicon/*` links and web manifest are suppressed. Not constrained to `https://` (a relative path is valid). |
 | `hero_image_url` | string | `""` | Left panel background image |
 | `hero_image_url_light` | string | `""` | Optional light-appearance hero image; falls back to `hero_image_url` |
@@ -49,12 +49,12 @@ rather than appending to it.
 | `back_to_website_label` | string | `"Back to website"` | Destination-aware back-link label |
 | `terms_url` | string | `""` | Terms & Conditions link on register page |
 | `layout` | string | `"minimal"` | `minimal`, `compact`, `branded-panel`, or `editorial`; legacy `card` and `fullscreen` map to `compact` and `branded-panel` |
-| `appearance` | string | `"system"` | `light`, `dark`, or `system` (`prefers-color-scheme`) |
+| `appearance` | string | `"system"` | `light`, `dark`, or `system` (`prefers-color-scheme`); the bouncer challenge follows it too |
 | `accent_color` | string | `"#6384ff"` | Six-digit hex accent shared by auth controls and the bouncer challenge |
 | `api_base` | string | `""` | API host (empty = same origin) |
 | `success_redirect` | string | `"/"` | Redirect target after login. Must resolve to `http`/`https` (a relative path is fine) — the auth page scheme-guards this value on its way to the browser, so a custom app scheme such as `myapp://home` is refused and sign-in dead-ends on **every** attempt. Point it at an `https` universal/app link instead. Not validated on write (`validate_auth_config` does not check it), so the failure surfaces at login, not at save |
-| `custom_css` | string | `""` | Inline CSS block injected after the theme stylesheet |
-| `custom_css_url` | string | `""` | `https://` URL to an external CSS file |
+| `custom_css` | string | `""` | Inline CSS block injected after the theme stylesheet (also on the bouncer challenge) |
+| `custom_css_url` | string | `""` | `https://` URL to an external CSS file (also on the bouncer challenge) |
 
 ### `registration`
 

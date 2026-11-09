@@ -655,12 +655,12 @@ def test_runtime_publishes_secret_free_status_with_collectors_disabled(opts):
 
 
 @th.django_unit_test()
-def test_runtime_reconciles_pending_even_when_journal_fails(opts):
+def test_runtime_annotates_pending_fim_even_when_journal_fails(opts):
     from mojo.mojosec.runtime import Runtime
 
     class FakeStore:
         def __init__(self):
-            self.reconciled = 0
+            self.annotated = 0
 
         def get_meta(self, key):
             return None
@@ -668,14 +668,12 @@ def test_runtime_reconciles_pending_even_when_journal_fails(opts):
         def load_ssh_sessions(self):
             return []
 
-        def load_audit_fragments(self):
-            return {}
+        def has_pending_annotations(self):
+            return True
 
         def annotate_pending_fim(self, *args, **kwargs):
+            self.annotated += 1
             return 0
-
-        def reconcile_pending_firewall(self):
-            self.reconciled += 1
 
     class BrokenJournal:
         name = "journal"
@@ -690,12 +688,13 @@ def test_runtime_reconciles_pending_even_when_journal_fails(opts):
     runtime.nginx = None
     runtime.fim = None
     runtime.integrity_collectors = {}
+    runtime.content_roots = ()
     runtime.collector_status = {}
     runtime.sender = mock.Mock(send_once=mock.Mock(return_value={"accepted": 0}))
     runtime._publish_status = mock.Mock()
     runtime.run_once()
-    th.assert_eq(runtime.store.reconciled, 1,
-                 "pending deadlines must reconcile on every cycle despite collector failure")
+    th.assert_eq(runtime.store.annotated, 1,
+                 "pending FIM annotation must run on every cycle despite collector failure")
 
 
 @th.django_unit_test()

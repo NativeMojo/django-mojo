@@ -79,6 +79,29 @@ def on_group_webhook_secret(request): ...   # touches request.group only
 def on_clear_queue(request): ...            # clears the global job queue
 ```
 
+The same **platform** test decides who may list a `LIST_REQUIRES_GROUP` model
+without naming a group: `Model.rest_is_platform_list_caller(request)` is true
+for a real user, not key-backed and not a group token, who is a superuser or
+holds one of the model's `VIEW_PERMS` globally (`all`, `authenticated`,
+`owner` and `member` never count). Everyone else gets 400 `"group required"`
+until they pass `?group=`. See
+[REST → Permissions](../rest/permissions.md#requiring-a-group-on-lists-list_requires_group).
+
+## Audit of Permission Changes
+
+Both permission dicts leave a `Log` record when a grant changes:
+
+- `User.add_permission`/`remove_permission` write `permission:added` /
+  `permission:removed`.
+- Every `GroupMember.save()` that changes a grant writes one
+  `member:permissions_changed` record with the actor, member, group, what was
+  added and removed, and names before and after (never the stored values). A
+  REST or invite request writes one record for all its changes. See
+  [Group → Permission change audit](../account/group.md#permission-change-audit).
+
+Only global `manage_logs`, `view_logs`, `security` or `admin` holders can read
+`Log`.
+
 ## Instance-Level Permission Hooks
 
 A model may override two per-instance hooks that the generic permission layer
@@ -403,7 +426,16 @@ manage their own file without `manage_files`/`files`.
 
 ### 1. Event CREATE_PERMS = `all` (intentional)
 
-The Event model allows anyone to create security events via `POST /api/incident/event`. This is the public reporting API used by frontend JavaScript to report security signals (XSS attempts, suspicious behavior, etc.). Viewing events requires `view_security`. This asymmetry is intentional and correct.
+Any signed-in caller (user, API key, group token) may submit a security event
+via `POST /api/incident/event`; anonymous callers are refused (`401`). The
+create does not use the generic field loop: `Event.on_rest_handle_create`
+(`mojo/apps/incident/services/event_intake.py`) stamps `uid`, `source_ip`,
+the group and the request provenance from the request, keeps the sender's
+claims as `claimed_*` metadata, records `metadata.reporter`, publishes the row
+once with `allow_default_llm=False`, and answers only
+`{"status": true, "data": {"id": n}}`. Viewing events requires
+`view_security`. Browser crash reports do not use this route: they go to the
+public, bounded `POST /api/incident/event/client` (maestro #4125).
 
 ## Design Guidelines
 

@@ -1029,6 +1029,9 @@ REFUSES_USER_API_KEYS = {
     "mojo.apps.account.rest.user.on_account_security_events_logout",
     "mojo.apps.account.rest.oauth.on_oauth_connection",
     "mojo.apps.account.rest.oauth_server.on_approve",
+    "mojo.apps.account.rest.oauth_server.on_device_lookup",
+    "mojo.apps.account.rest.oauth_server.on_device_approve",
+    "mojo.apps.account.rest.oauth_server.on_device_deny",
     # Operator routes that hand out lasting access to an account or a key
     # (#7635 step 2a, Brenda's review 105383).
     "mojo.apps.account.rest.admin_people.on_admin_user_password_reset",

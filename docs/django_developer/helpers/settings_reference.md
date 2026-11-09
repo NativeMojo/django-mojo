@@ -426,8 +426,8 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   [account/bouncer.md](../account/bouncer.md#cross-origin-embedding).
   Deliberately not readable from the DB/Redis settings plane, so a `Setting` row
   cannot change the origin policy at runtime.
-- `BOUNCER_CHALLENGE_BRAND`
-- `BOUNCER_CHALLENGE_LOGO_URL`
+- `BOUNCER_CHALLENGE_BRAND` — default empty (unset); per-group readable. Brand name for the hosted bot check, used when the group's `theme.app_title` is not configured (still the `DEFAULT_AUTH_CONFIG` default, `"DJANGO MOJO"`); a configured tenant title wins over it. See [account/bouncer.md](../account/bouncer.md#challenge-page-branding).
+- `BOUNCER_CHALLENGE_LOGO_URL` — default empty (no logo); per-group readable. Logo for the hosted bot check, used whenever `theme.logo_url` is empty. See [account/bouncer.md](../account/bouncer.md#challenge-page-branding).
 - `BOUNCER_CONTACT_PATH`
 - `BOUNCER_LEARN_CAMPAIGN_THRESHOLD`
 - `BOUNCER_LEARN_ENABLED`
@@ -658,8 +658,10 @@ reasoning: [edge README](../edge/README.md#settings),
   live `current` generation is never pruned.
 - `EDGE_KEEP_RELEASES` — **file-only** (`settings.get_static`), int, default
   `5`. Release directories retained per vhost, i.e. the web-app rollback depth;
-  the promoted release and anything a retained generation still symlinks are
-  exempt, so even `0` cannot delete what is being served.
+  the promoted release and anything a retained generation still symlinks
+  (its `.prev` fallback links included) are exempt, so even `0` cannot delete
+  what is being served. It also bounds how many earlier releases an open tab
+  can load chunks from: `0`–`1` none, `2` one, `3`+ two.
 - `EDGE_RELEASE_BUCKETS` — **DB-backed** (`settings.get`, `kind="list"`),
   default `[]`. The S3 buckets a web app may use; **fails closed** — with none
   declared no web app can be registered, no upload URL signed, and no node
@@ -1111,7 +1113,7 @@ Social-login (client-side) keys:
 - `OAUTH_STATE_TTL`
 
 Authorization-server keys — see
-[account/oauth_server.md](../account/oauth_server.md). All five are read with
+[account/oauth_server.md](../account/oauth_server.md). All ten are read with
 `get_static`, i.e. the **deployment file only**: a `manage_settings` holder must
 not be able to lengthen a credential lifetime through a database `Setting` row.
 Changing any of them needs a restart.
@@ -1126,6 +1128,19 @@ Changing any of them needs a restart.
   refresh token is forgiven as a lost response before reuse counts as replay
   and revokes the grant family.
 - `OAUTH_CODE_TTL` — int seconds, default `300`. Authorization-code lifetime.
+- `OAUTH_DEVICE_FLOW_ENABLED` — bool, default `False`. Turns on the RFC 8628
+  device authorization grant for headless clients. Off, `device_authorization`
+  and the verification page 404, the token endpoint refuses the device grant, and
+  discovery does not advertise it.
+- `OAUTH_DEVICE_CODE_TTL` — int seconds, default `600`, clamped to `60`–`1800`. How long a
+  device request waits for a person to approve it.
+- `OAUTH_DEVICE_INTERVAL` — int seconds, default `5`, minimum `1`. Minimum wait
+  between a device client's token polls; each `slow_down` adds 5 more.
+- `OAUTH_DEVICE_ALLOW_API` — bool, default `False`. Let device requests ask for
+  the `api` scope. Off, device sign-ins are `mcp`-only.
+- `OAUTH_DEVICE_MAX_TTL_DAYS` — int days, default `30`, clamped to 1–90. The
+  longest grant the approving person may choose (they pick from 30/60/90 within
+  this cap).
 
 The authorization server is inert until `BASE_URL` is set **and** at least one
 registered resource is enabled; until then every endpoint answers 404.
@@ -1155,6 +1170,17 @@ registered resource is enabled; until then every endpoint answers 404.
 
 ### REALTIME
 
+- `REALTIME_SUBSCRIBE_HANDLER` — dotted path to
+  `handler(user, topic, default) -> bool`, read from the Django settings file
+  only (`settings.get_static`; a database Setting row is ignored), default
+  unset. A project's own rule for who may take part in a topic. It can only
+  narrow django-mojo's own verdict, and is asked only when that verdict allows:
+  every client subscribe, the chat re-check on an open socket, the client chat
+  frames, the REST room reads and existing-DM reuse. Unset changes nothing.
+  Only `True` allows; an unloadable path, a non-callable, an exception or any
+  other return refuses. `mojo.apps.realtime.policy.allow_all` is the same as
+  unset; `.deny_all` refuses every topic it is asked about. See
+  [Chat permissions](../chat/permissions.md#a-projects-own-rule-for-who-takes-part-realtime_subscribe_handler).
 - `REALTIME_GROUP_TOPIC_PERMISSIONS` — **file-only** (`settings.get_static`), default `None` (disabled; existing behavior preserved). A nonempty list/tuple grants access to canonical `group:<positive id>` topics when an active User has any listed permission on an active group. Empty/malformed configuration denies group topics. Every protected delivery rechecks current access and drops/unsubscribes on denial. Configure only in deployments opting in. See [Group-topic permissions](../realtime/architecture.md#group-topic-permissions-opt-in).
 
 ### REDIS
@@ -1218,6 +1244,17 @@ registered resource is enabled; until then every endpoint answers 404.
   `@md.requires_global_perms(...)` instead (see
   [permissions.md](../core/permissions.md#global-vs-group-scoped-permission-checks)).
 
+### REST
+
+- `REST_LIST_REQUIRES_GROUP` — list of model labels (e.g.
+  `["account.GroupMember"]`), default unset. **file-only** (`settings.get_static`,
+  read per request). Each listed model behaves as if it declared
+  `RestMeta.LIST_REQUIRES_GROUP = True`: a non-platform caller who lists it with
+  no resolved group gets 400 `"group required"` (list, count, `_stats` and
+  download). The way to apply the policy to models a site doesn't own. Labels
+  match case-insensitively. See
+  [REST → Permissions](../rest/permissions.md#requiring-a-group-on-lists-list_requires_group).
+
 ### ROUTE53
 
 - `ROUTE53_PRICE_CACHE_HOURS` — per-TLD registrar price cache in the route53
@@ -1248,6 +1285,7 @@ registered resource is enabled; until then every endpoint answers 404.
 ### SHORTLINK
 
 - `SHORTLINK_BASE_URL`
+- `SHORTLINK_CREATE_PERMS` — list, default `[]`. **Settings file only** (read with `get_static`, never the database). When set, the quick-create route `POST /api/shortlink/link/create` needs one of these permissions (global, member in the request's group or a parent, or the API key's own). Empty = any signed-in caller.
 - `SHORTLINK_HOME_URL`
 - `SHORTLINK_SITE_NAME`
 
@@ -1378,3 +1416,13 @@ registered resource is enabled; until then every endpoint answers 404.
 
 - Source: static scan of `settings.get(...)`, `getattr(settings, ...)`, and `settings.KEY` across `mojo/` (excluding migrations).
 - Keys here are framework-known knobs only; project-specific settings may exist in your Django project and are not listed unless referenced by framework code.
+
+## Health Snapshot Identity and Internal State
+
+- `MOJO_ENVIRONMENT` — file-only explicit source environment identity.
+- `HEALTH_SNAPSHOT_ENVIRONMENT_ID` — file-only explicit fallback for installations without `MOJO_ENVIRONMENT`; conflicting values refuse identity.
+- `MOJO_HEALTH_PUBLICATION_STATE` — protected internal global Setting; bounded durable source generation/configuration heads, never health history. Generic Settings/Setup writers cannot change it.
+
+Collection reuses the frozen installation UUID/slug and existing fleet, jobs
+channel, Redis and primary database declarations. No new agent/collector
+configuration or public raw endpoint is created. See [health snapshots](../account/health_snapshot.md).

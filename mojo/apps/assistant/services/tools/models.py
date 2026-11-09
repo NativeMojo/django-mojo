@@ -58,35 +58,6 @@ def _is_sensitive_field(name):
     return any(s in name_lower for s in SENSITIVE_SUBSTRINGS)
 
 
-def _fk_spellings(model, path):
-    """``path`` spelled twice: each foreign-key segment by its relation name,
-    and by its column name.
-
-    ``user`` and ``user_id`` are one column, and a model's SENSITIVE_FIELDS
-    names only one of them. The shared helper compares a segment as written,
-    so it is asked about both spellings. This walk only respells; it decides
-    nothing about sensitivity.
-    """
-    by_name, by_column = [], []
-    current = model
-    for part in path.split("__"):
-        field = None
-        if current is not None:
-            try:
-                field = current._meta.get_field(part)
-            except Exception:
-                field = None
-        if field is None:
-            by_name.append(part)
-            by_column.append(part)
-            current = None
-            continue
-        by_name.append(field.name)
-        by_column.append(getattr(field, "attname", None) or field.name)
-        current = field.related_model if field.is_relation else None
-    return "__".join(by_name), "__".join(by_column)
-
-
 def _is_sensitive_input(model, path, lookup=True):
     """The one rule for what a caller may ask the model tools BY.
 
@@ -100,14 +71,21 @@ def _is_sensitive_input(model, path, lookup=True):
     lookups, so only a name the model declares counts and the JSON rule does
     not apply.
     """
-    from mojo.models.rest import is_sensitive_filter_path, _model_sensitive_fields
+    from mojo.models.rest import (
+        is_sensitive_filter_path, _model_sensitive_fields, _declared_sensitive,
+    )
 
     if any(_is_sensitive_field(segment) for segment in path.split("__")):
         return True
-    spellings = {path, *_fk_spellings(model, path)}
-    if not lookup:
-        return not _model_sensitive_fields(model).isdisjoint(spellings)
-    return any(is_sensitive_filter_path(model, spelling) for spelling in spellings)
+    if lookup:
+        return is_sensitive_filter_path(model, path)
+    if path in _model_sensitive_fields(model):
+        return True
+    try:
+        field = model._meta.get_field(path)
+    except Exception:
+        return False
+    return _declared_sensitive(model, field)
 
 
 def _deny_sensitive_input(model_label, path, surface, user, message):
@@ -135,9 +113,8 @@ def _blocked_search_fields(model):
     ``on_rest_list_search`` matches the search text against the model's
     SEARCH_FIELDS — every text column when none are declared — after dropping
     what the shared helper calls sensitive. It drops by that helper alone, so
-    a field only this module's rule refuses (a foreign key under its other
-    spelling, a name the heuristic catches) is still compared, and a search
-    then answers "which rows match this text" about it.
+    a field only this module's name heuristic refuses is still compared, and a
+    search then answers "which rows match this text" about it.
     """
     from mojo.models.rest import is_sensitive_filter_path
 
@@ -153,13 +130,32 @@ def _blocked_search_fields(model):
     ]
 
 
-def _validate_search(model, user, model_label):
-    """Refuse a search the shared search would run against a sensitive field.
+def _search_field_names(model):
+    """The fields ``on_rest_list_search`` compares against before its guards:
+    SEARCH_FIELDS, else every text column."""
+    fields = getattr(model.RestMeta, "SEARCH_FIELDS", None)
+    if fields is None:
+        fields = [
+            f.name for f in model._meta.get_fields()
+            if hasattr(f, "get_internal_type") and f.get_internal_type() in ("CharField", "TextField")
+        ]
+    return list(fields)
+
+
+def _validate_search(model, user, model_label, request=None):
+    """Refuse a search the shared search would run against a sensitive field,
+    or through a relation the list-walk rule refuses this viewer (#8680).
 
     The whole search is refused, targeted or not: the shared method takes no
     field list, so it cannot be told to leave one field out. Returns error
     dict or None.
     """
+    from mojo.models.rest import walk_denied
+
+    walked = [f for f in _search_field_names(model)
+              if walk_denied(model, f, request, search=True)]
+    if walked:
+        return {"error": f"Search on {model_label} is not available"}
     blocked = _blocked_search_fields(model)
     if not blocked:
         return None
@@ -425,8 +421,35 @@ def _resolve_group_by_field(model, name):
     return field.name
 
 
-def _validate_filter_keys(model, filters, valid_fields, user, model_label):
+def _resolve_ordering(model, ordering, valid_fields, user, model_label):
+    """Validate a query/export ordering; return (order_by value, error dict).
+
+    The REST sort rule (#8680): a relation orders by its own column. A
+    forward FK / OneToOne becomes its attname (``-group`` -> ``-group_id``),
+    not the related model's Meta.ordering. A reverse or many-to-many name has
+    no column here and would join rows the viewer may not see: refused.
+    """
+    order_field = ordering.lstrip("-")
+    if "__" in order_field:
+        return None, {"error": "Relational ordering is not supported"}
+    if _is_sensitive_input(model, order_field):
+        return None, _deny_sensitive_input(
+            model_label, order_field, "ordering", user,
+            f"Ordering on '{order_field}' is not allowed")
+    if order_field not in valid_fields:
+        return None, {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
+    field = model._meta.get_field(order_field)
+    if not field.is_relation:
+        return ordering, None
+    column = getattr(field, "attname", None)
+    if not field.concrete or field.many_to_many or not column:
+        return None, {"error": "Relational ordering is not supported"}
+    return ("-" if ordering.startswith("-") else "") + column, None
+
+
+def _validate_filter_keys(model, filters, valid_fields, user, model_label, request=None):
     """Validate filter keys against model fields. Returns error dict or None."""
+    from mojo.models.rest import is_viewer_restricted_path, walk_denied
     # ORM lookup suffixes that are not field names
     ORM_SUFFIXES = {"in", "not", "not_in", "isnull", "gte", "gt", "lte", "lt",
                     "exact", "iexact", "contains", "icontains", "startswith",
@@ -449,6 +472,17 @@ def _validate_filter_keys(model, filters, valid_fields, user, model_label):
 
         if base not in valid_fields:
             return {"error": f"Unknown field '{base}' on {model_label}"}
+
+        # A nested user's account fields are not filterable by a viewer who
+        # is not shown them, the REST filter guard's rule (#8648). No incident.
+        if is_viewer_restricted_path(model, key, request):
+            named = next((s for s in reversed(parts) if s not in ORM_SUFFIXES), key)
+            return {"error": f"Filtering on '{named}' is not available"}
+
+        # The REST list-walk rule (#8680): a path into a related model this
+        # viewer cannot list in full, and every hidden `+` link.
+        if walk_denied(model, key, request):
+            return {"error": f"Filtering on '{key}' is not available"}
 
     return None
 
@@ -480,6 +514,24 @@ def _validate_having_keys(having, aliases):
             if segment not in _HAVING_SUFFIXES:
                 return {"error": f"Invalid having lookup '{segment}' in '{key}'"}
     return None
+
+
+def _list_group_refusal(model, request, model_label):
+    """The assistant twin of ``MojoModel.rest_check_list_group``.
+
+    The tools take no group, so a model that requires one for list callers
+    (RestMeta.LIST_REQUIRES_GROUP or the REST_LIST_REQUIRES_GROUP setting) is
+    refused outright for a non-platform caller — never answered with the
+    cross-group union. Returns an error dict, or None to continue.
+    """
+    requires = getattr(model, "rest_list_requires_group", None)
+    if requires is None or not requires():
+        return None
+    if model.rest_is_platform_list_caller(request):
+        return None
+    return {"error": (
+        f"{model_label} can only be listed for one group, and the assistant "
+        "cannot choose a group; use the app's list for that group instead")}
 
 
 def _apply_owner_group_filter(model, request, queryset):
@@ -737,31 +789,28 @@ def _tool_query_model(params, user):
 
     # Validate filter keys
     valid_fields = _get_valid_field_names(model)
-    filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
+    filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label, request=request)
     if filter_err:
         return filter_err
 
-    # Validate ordering field — must be a direct field, no relational traversals
+    # Validate ordering field — a direct field; a relation by its own column
     ordering = params.get("ordering", "").strip()
     if ordering:
-        order_field = ordering.lstrip("-")
-        if "__" in order_field:
-            return {"error": f"Relational ordering is not supported"}
-        if _is_sensitive_input(model, order_field):
-            return _deny_sensitive_input(
-                model_label, order_field, "ordering", user,
-                f"Ordering on '{order_field}' is not allowed")
-        if order_field not in valid_fields:
-            return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
+        ordering, order_err = _resolve_ordering(model, ordering, valid_fields, user, model_label)
+        if order_err:
+            return order_err
 
     # Validate search
     search = params.get("search", "").strip()
     if search:
-        search_err = _validate_search(model, user, model_label)
+        search_err = _validate_search(model, user, model_label, request=request)
         if search_err:
             return search_err
 
     # Build queryset
+    refusal = _list_group_refusal(model, request, model_label)
+    if refusal:
+        return refusal
     queryset = model.objects.all()
 
     # Apply owner/group filtering (same as REST layer)
@@ -805,7 +854,14 @@ def _tool_query_model(params, user):
     graph, err = _resolve_assistant_graph(model, request, user, model_label, "query_model")
     if err:
         return err
-    results = model.queryset_to_dict(queryset[:limit], graph=graph)
+    # Nested rows (a member's user) read the viewer from ACTIVE_REQUEST
+    # (#8648): bind this tool's request, as the save tool does below.
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(request)
+    try:
+        results = model.queryset_to_dict(queryset[:limit], graph=graph)
+    finally:
+        ACTIVE_REQUEST.reset(token)
     total = queryset.count()
 
     logger.info("query_model", model_label, f"results={len(results)}", f"total={total}", f"user={user.id}")
@@ -822,6 +878,7 @@ def _tool_query_model(params, user):
     name="delete_model_instance",
     domain="models",
     permission="view_admin",
+    requires_operator_approval=True,
     description=(
         "Delete a single model instance by primary key. "
         "Respects RestMeta permissions: the model must have CAN_DELETE=True and "
@@ -944,6 +1001,9 @@ def _changed_field_names(model, data):
     domain="models",
     permission="view_admin",
     mutates=True,
+    # Generic model actions can require target-specific fresh authentication;
+    # this synthetic request cannot establish it for delegated execution.
+    requires_operator_approval=True,
     description=(
         "Create or update a single MojoModel instance. "
         "Pass `pk` to update an existing row; omit `pk` to create a new one. "
@@ -1238,6 +1298,7 @@ def _get_field_type(model, field_name):
 def _tool_aggregate_model(params, user):
     """Run aggregate queries on a model."""
     from django.db.models import Count, Sum, Avg, Min, Max
+    from mojo.models.rest import walk_denied
 
     err = _reject_caller_graph(params)
     if err:
@@ -1272,7 +1333,7 @@ def _tool_aggregate_model(params, user):
     # Validate filters
     valid_fields = _get_valid_field_names(model)
     if filters:
-        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
+        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label, request=request)
         if filter_err:
             return filter_err
 
@@ -1313,6 +1374,11 @@ def _tool_aggregate_model(params, user):
         if field not in valid_fields:
             return {"error": f"Unknown field '{field}' on {model_label}"}
 
+        # The REST list-walk rule (#8680): a reverse or many-to-many name
+        # joins the related table; a forward FK aggregates its own column.
+        if walk_denied(model, field, request):
+            return {"error": f"Aggregation on '{field}' is not available"}
+
         # Validate numeric requirement for sum/avg
         if func in ("sum", "avg"):
             field_type = _get_field_type(model, field)
@@ -1346,6 +1412,9 @@ def _tool_aggregate_model(params, user):
             return having_err
 
     # Build queryset
+    refusal = _list_group_refusal(model, request, model_label)
+    if refusal:
+        return refusal
     queryset = model.objects.all()
     queryset = _apply_owner_group_filter(model, request, queryset)
 
@@ -1600,31 +1669,28 @@ def _tool_export_data(params, user):
     # Validate filters
     valid_fields = _get_valid_field_names(model)
     if filters:
-        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label)
+        filter_err = _validate_filter_keys(model, filters, valid_fields, user, model_label, request=request)
         if filter_err:
             return filter_err
 
     # Validate ordering
     ordering = params.get("ordering", "").strip()
     if ordering:
-        order_field = ordering.lstrip("-")
-        if "__" in order_field:
-            return {"error": "Relational ordering is not supported"}
-        if _is_sensitive_input(model, order_field):
-            return _deny_sensitive_input(
-                model_label, order_field, "ordering", user,
-                f"Ordering on '{order_field}' is not allowed")
-        if order_field not in valid_fields:
-            return {"error": f"Unknown ordering field '{order_field}' on {model_label}"}
+        ordering, order_err = _resolve_ordering(model, ordering, valid_fields, user, model_label)
+        if order_err:
+            return order_err
 
     # Validate search
     search = params.get("search", "").strip()
     if search:
-        search_err = _validate_search(model, user, model_label)
+        search_err = _validate_search(model, user, model_label, request=request)
         if search_err:
             return search_err
 
     # Build queryset
+    refusal = _list_group_refusal(model, request, model_label)
+    if refusal:
+        return refusal
     queryset = model.objects.all()
     queryset = _apply_owner_group_filter(model, request, queryset)
 
@@ -1685,12 +1751,16 @@ def _tool_export_data(params, user):
     # Generate CSV — every row goes through the selected graph first, so its
     # excludes, extras and nested shapes are already applied. The formatter
     # only ever sees those dictionaries, never a model instance.
+    from mojo.models.rest import ACTIVE_REQUEST
+    token = ACTIVE_REQUEST.set(request)
     try:
         rows = model.queryset_to_dict(export_qs, graph=graph)
         csv_data = _rows_to_csv(rows, columns)
     except Exception as e:
         logger.warning("export_data csv error", model_label, str(e))
         return {"error": "CSV generation failed"}
+    finally:
+        ACTIVE_REQUEST.reset(token)
 
     row_count = len(rows)
 

@@ -90,3 +90,27 @@ def test_fleet_schema_catalog_bridge(opts):
         assert descriptor.default is None, "Catalog must not expose a secret default"
         assert admin_settings.is_catalog_protected(descriptor.key), "Registered fleet keys must reject generic global writes"
         assert "Example application" in admin_settings._section_names(rows), "Application sections must appear in the catalog"
+
+
+@th.django_unit_test()
+def test_publication_policies_are_independent_of_decode_and_keep_presence(opts):
+    from mojo.deploy import config_override as codec
+    with mock.patch.dict(codec._REGISTRY), mock.patch.dict(codec._PUBLICATION_POLICIES, {}, clear=True):
+        _register(codec, "TESTIT_POLICY_ONE", value_type="string", default="")
+        _register(codec, "TESTIT_POLICY_TWO", value_type="string", default="")
+        checked = []
+        codec.register_publication_policy("test_bundle", ("TESTIT_POLICY_ONE", "TESTIT_POLICY_TWO"),
+                                          lambda old, candidate: checked.append((old, candidate)))
+        document = {"TESTIT_POLICY_ONE": "one", "TESTIT_POLICY_TWO": "two"}
+        encoded = codec.encode_document(document, "a" * 32, "now", list(document))
+        codec.decode_document(encoded, list(document))
+        assert checked == [], "Schema import, encode and node decode must never run publication policy or external work"
+        codec.validate_publication(document, dict(document, GEOIP_PRIMARY_PROVIDER="mojo"))
+        assert checked == [], "An unrelated publication with the identical owned bundle must not invoke policy"
+        codec.validate_publication(document, {"TESTIT_POLICY_ONE": "one"})
+        assert checked == [(document, {"TESTIT_POLICY_ONE": "one"})], "Removing an owned field must reach policy with its absence preserved"
+        with th.assert_raises(ValueError):
+            codec.register_publication_policy("overlap", ("TESTIT_POLICY_ONE",), lambda old, new: None)
+        for reserved in ("DNSMAN_ACME_HUB_PROFILES", "DNSMAN_ACME_HUB_PROFILE_CATALOG", "DNSMAN_ACME_HUB_PROFILE_MODULES", "DNSMAN_ACME_HUB_PUBLICATION_POLICY"):
+            with th.assert_raises(ValueError):
+                _register(codec, reserved)

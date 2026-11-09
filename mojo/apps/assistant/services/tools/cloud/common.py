@@ -77,10 +77,11 @@ def _sensitive(key):
 def _scalar(value, budget):
     if isinstance(value, str):
         text = logit.mask_sensitive_data(value)
-        if len(text) > MAX_STRING:
+        max_string = budget.get("max_string", MAX_STRING)
+        if len(text) > max_string:
             # MAX_STRING is the CAP, marker included — a "bounded to 200" that
             # returns 201 characters is not bounded.
-            text = text[:MAX_STRING - len(TRUNCATED)] + TRUNCATED
+            text = text[:max_string - len(TRUNCATED)] + TRUNCATED
         budget["bytes"] += len(text)
         return text
     if isinstance(value, bool) or value is None or isinstance(value, (int, float)):
@@ -126,7 +127,7 @@ def _walk(value, depth, budget):
 
 
 def bounded(value, depth=DEFAULT_DEPTH, max_items=MAX_ITEMS,
-            max_nodes=MAX_NODES, max_bytes=MAX_BYTES):
+            max_nodes=MAX_NODES, max_bytes=MAX_BYTES, max_string=MAX_STRING):
     """A model-safe projection of one service envelope.
 
     Scalar leaves only, strings capped at ``MAX_STRING`` characters and run
@@ -143,7 +144,7 @@ def bounded(value, depth=DEFAULT_DEPTH, max_items=MAX_ITEMS,
     try:
         return _walk(value, depth, {
             "nodes": 0, "bytes": 0, "max_items": max_items,
-            "max_nodes": max_nodes, "max_bytes": max_bytes,
+            "max_nodes": max_nodes, "max_bytes": max_bytes, "max_string": max_string,
         })
     except Exception:
         logger.exception("cloud tools: a result could not be bounded")

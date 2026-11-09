@@ -1,4 +1,6 @@
 """Jobs domain tools — query jobs, stats, queue health, cancel, retry."""
+import ujson
+
 from mojo.apps.assistant import tool
 from mojo.helpers import dates
 
@@ -82,8 +84,8 @@ def _tool_query_job_events(params, user):
         {
             "id": e.pk,
             "job_id": e.job_id,
-            "kind": e.kind,
-            "message": (e.message or "")[:500],
+            "kind": e.event,
+            "message": ujson.dumps(e.details, sort_keys=True, ensure_ascii=False)[:500],
             "created": str(e.created),
         }
         for e in events
@@ -115,7 +117,7 @@ def _tool_query_job_logs(params, user):
         {
             "id": log.pk,
             "job_id": log.job_id,
-            "level": log.level,
+            "level": log.kind,
             "message": (log.message or "")[:500],
             "created": str(log.created),
         }

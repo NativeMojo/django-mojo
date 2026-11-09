@@ -37,7 +37,8 @@ Usage:
 
 Notes:
 - Only Mailbox-owned addresses can send (enforced via allow_outbound flag).
-- The envelope MAIL FROM and From header will be the Mailbox email.
+- The sender address remains the Mailbox email. DB templates can set a
+  display name with metadata.sender_name.
 - Domain verification is required unless allow_unverified=True is passed.
 - Attachments are not supported by this simple API. To send attachments,
   you can build a MIME message and call EmailSender.send_raw_email directly.
@@ -50,6 +51,7 @@ by the SNS webhooks.
 
 from __future__ import annotations
 
+from email.utils import formataddr
 from typing import Any, Dict, List, Optional, Sequence, Union
 from django.db import transaction
 
@@ -114,6 +116,18 @@ def _get_sender(access_key: Optional[str], secret_key: Optional[str], region: st
         secret_key=secret_key or settings.AWS_SECRET,
         region=region,
     )
+
+
+def _template_source(template, mailbox):
+    metadata = template.metadata
+    if not isinstance(metadata, dict) or "sender_name" not in metadata:
+        return mailbox.email
+    name = metadata["sender_name"]
+    if not isinstance(name, str) or len(name) > 255 or any(
+            ord(char) < 32 or ord(char) == 127 for char in name):
+        raise ValueError("EmailTemplate sender_name must be a string of at most 255 characters without control characters")
+    name = name.strip()
+    return formataddr((name, mailbox.email)) if name else mailbox.email
 
 
 # Public API
@@ -249,6 +263,7 @@ def send_with_template(
    tpl = EmailTemplate.get_or_load_from_seed(template_name)
    if not tpl:
        raise ValueError(f"EmailTemplate not found: {template_name}")
+   source = _template_source(tpl, mailbox)
    rendered = tpl.render_all(context or {})
 
    subject = (rendered.get("subject") or "").strip()
@@ -276,7 +291,7 @@ def send_with_template(
 
        try:
            resp = sender.send_email(
-               source=mailbox.email,
+               source=source,
                to_addresses=to_list,
                subject=subject or "",
                body_text=body_text,

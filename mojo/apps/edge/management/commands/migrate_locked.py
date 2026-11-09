@@ -23,9 +23,12 @@ from django.core.management import call_command
 from django.core.management.base import BaseCommand, CommandError
 from django.db import connection
 
-# Distinct from the dnsman advisory-lock namespaces (certs: 1421, acme: 1422)
-# so a deploy migration and a certificate issuance can never collide.
-LOCK_NAMESPACE = 1423
+from mojo.helpers import advisory_locks
+
+# Its own namespace, never shared: a deploy job holds shared-ACME admission
+# (1423) for its whole run, so a migrate lock on that key refused every
+# deploy's own migration in 1.39.0.
+LOCK_NAMESPACE = advisory_locks.MIGRATE
 LOCK_ID = 1
 
 
@@ -56,10 +59,14 @@ class Command(BaseCommand):
             cursor.execute(
                 "SELECT pg_try_advisory_lock(%s, %s)", [LOCK_NAMESPACE, LOCK_ID])
             acquired = bool(cursor.fetchone()[0])
+            if not acquired:
+                holder = advisory_locks.describe_holders(
+                    cursor, LOCK_NAMESPACE, LOCK_ID)
         if not acquired:
             raise CommandError(
-                "another process holds the migration lock — refusing to run "
-                "migrate concurrently")
+                "another process holds the migration lock "
+                f"({LOCK_NAMESPACE}, {LOCK_ID}) — refusing to run migrate "
+                f"concurrently: {holder}")
         try:
             self._migrate(options)
         finally:

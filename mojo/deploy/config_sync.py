@@ -409,7 +409,10 @@ def _finish_fleet_install(receipt, digest, target, config, restart):
             valid = False
         else:
             valid = fleet_config_role.write(receipt["target_revision"], digest,
-                                             receipt["request_service_required"])
+                                             receipt["request_service_required"],
+                                             request_service_profile=config.get(
+                                                 "CONFIG_SYNC_REQUEST_SERVICE_PROFILE",
+                                                 fleet_config_role.DEFAULT_PROFILE))
             if valid:
                 authority = fleet_config_role.read(receipt["target_revision"], digest)
                 valid = authority is not None

@@ -6,7 +6,7 @@ from unittest import mock
 from testit import helpers as th
 
 
-TEST_IP = "198.51.100.99"
+TEST_IP = "203.0.116.99"
 
 
 def _verified():
@@ -174,7 +174,7 @@ def test_ipv6_refused_before_desired_write(opts):
 def test_whitelist_reconciles_absence(opts):
     from mojo.apps.account.models import GeoLocatedIP
 
-    ip = "198.51.100.89"
+    ip = "203.0.116.89"
     GeoLocatedIP.objects.filter(ip_address=ip).delete()
     geo = GeoLocatedIP.objects.create(ip_address=ip)
     partial = {"status": "partial", "ok": False,

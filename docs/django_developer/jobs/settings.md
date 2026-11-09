@@ -248,6 +248,7 @@ a per-checkout value. Leave it unset in production. See
 | `JOBS_XPENDING_IDLE_MS` | `60000` (1 min) | Reclaim jobs idle for this long |
 | `JOBS_RUNNER_HEARTBEAT_SEC` | `5` | Heartbeat interval for runner liveness detection |
 | `JOBS_SCHEDULER_LOCK_TTL_MS` | `5000` (5s) | Scheduler leadership lock TTL (single-leader pattern) |
+| `JOBS_SCHEDULER_CRON_TICK` | `True` | Every scheduler process ticks `cron.run_now()` once at start and then every wall-clock minute from a daemon thread (every node, not only the lock holder). `False` opts out — pair it with an external tick, or no `@schedule` function runs. See [scheduled_tasks.md](scheduled_tasks.md#who-ticks-the-scheduler-process-on-every-node) |
 
 ## Webhook Configuration
 
@@ -317,3 +318,24 @@ JOBS_DEFAULT_EXPIRES_SEC = 3600  # 1 hour
 JOBS_IDLE_TIMEOUT_MS = 300000    # 5 minutes
 JOBS_DEFAULT_BACKOFF_MAX = 7200  # 2 hours
 ```
+
+## On-demand diagnostic collection
+
+| File-only setting | Default | Purpose |
+|---|---|---|
+| `ADMIN_FLEET_CONFIG_CHANNEL` | `"edge"` | Existing concrete common channel used by checked node diagnostics; no channel is accepted from a tool caller. |
+| `SYSINFO_MOUNTS` | `[]` | Up to eight absolute exact additional local data mount points. Missing configured mounts are unavailable, never reported as the parent root filesystem. |
+
+`SYSINFO_MOUNTS` is read with `settings.get_static`, so DB/Redis settings writes
+cannot add a diagnostic filesystem path. Root plus existing application/var/media
+paths determine relevant actual filesystems; aliases on the same mount are
+deduplicated, and the collector caps results at sixteen mounts. Missing configured
+mounts, invalid configuration, omitted mounts, read-only posture and unsupported
+inodes/load/swap remain explicit. `JOBS_RUNNER_HEARTBEAT_SEC * 3` remains the
+existing bounded roster freshness rule; the fleet reader introduces no separate
+runner/scheduler failure detector.
+
+Legacy `get_host_info()` keys/root `disk` and `jobs.get_sysinfo()` list dispatch
+remain compatible. Diagnostic collection is an explicit opt-in Python mode and
+is exposed through the source-authorized Assistant health service, without a
+new generic filesystem, process or command execution endpoint.

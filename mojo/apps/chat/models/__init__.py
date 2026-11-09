@@ -3,3 +3,4 @@ from .message import ChatMessage
 from .membership import ChatMembership
 from .reaction import ChatReaction
 from .read_receipt import ChatReadReceipt
+from .unread_exception import ChatUnreadException

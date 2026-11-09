@@ -66,6 +66,7 @@ class Book(models.Model, MojoModel):
 | `ALLOW_SAVE_FIELDS` | list | `[]` | Hands `created` and/or `uuid` back to the REST body. Any other name here is ignored |
 | `NO_SHOW_FIELDS` | list | `[]` | Fields never included in responses |
 | `SENSITIVE_FIELDS` | list | `[]` | Columns that may never be filtered, searched, sorted or aggregated on (see [Sensitive fields](#sensitive-fields)) |
+| `FILTER_RELATED` | list | `[]` | Relation paths every list caller may filter by, even one who cannot list the related model (see [Related-model walks](#related-model-walks)) |
 | `LOG_CHANGES` | bool | `False` | Auto-log field changes via logit |
 | `LOG_META_CHANGES` | bool | `False` | Auto-log key-level changes to all JSONFields via logit |
 | `PROTECTED_JSON_PERMS` | list | `[]` | Permissions required to modify the `"protected"` root key in any JSONField |
@@ -102,6 +103,7 @@ class Book(models.Model, MojoModel):
 > Assuming `NO_SAVE_FIELDS` alone protects a tenant field is how a real
 > cross-tenant write happened (mverify WalletSession, maestro item 2956).
 | `GROUP_FIELD` | str | `"group"` | Field name (or related path, e.g. `"agent__project"`) for group scoping — governs detail, list, and `?group=` permission checks |
+| `LIST_REQUIRES_GROUP` | bool | `False` | Non-platform list callers must name a group: with none resolved, list, count, `_stats` and download answer 400 `"group required"`. Group-scoped models only. The `REST_LIST_REQUIRES_GROUP` setting applies it to models you don't own — see [REST → Permissions](../rest/permissions.md#requiring-a-group-on-lists-list_requires_group) |
 | `CREATED_BY_OWNER_FIELD` | str or None | `"user"` | Auto-stamped with `request.user` on create **only when the body omits it**, and only when there is a real user to attribute to. `None` disables. See [REST Permissions — Create-time owner stamping](../rest/permissions.md#create-time-owner-stamping). |
 | `UPDATED_BY_OWNER_FIELD` | str or None | `"modified_by"` | Set to `request.user` on every update (who last modified). Left unchanged when there is no real user — e.g. a system-context save. See [REST Permissions](../rest/permissions.md). |
 | `ALT_PK_FIELD` | str | `"uuid"` | Field used for non-integer PK lookups |
@@ -202,6 +204,40 @@ filtered — hiding disabled users from `/api/user` is how an admin loses the
 ability to find one and re-enable it. Framework-wide there is exactly one
 declaration, `account.Notification` (`{"is_unread": True}`): read
 notifications are noise for the bell, and `mark_read` is a by-pk POST action.
+
+### Filter value normalization
+
+`MojoModel.build_rest_filters` converts every filter value to its field's type
+before `filter()` sees it. The list path, `_mode=count` and `_stats` share it.
+
+- **Per element.** An `__in` / `__not_in` value is split (query string) or
+  wrapped (JSON scalar) into a list, and each element is converted on its own;
+  the list stays a list.
+- **One strict boolean parser.** `true 1 t y yes on` / `false 0 f n no off`
+  in any case, a real bool, or int 0/1. Anything else raises
+  `ValueException` (400) naming the key. `__isnull` uses the same parser.
+  `?flag=null` on a Boolean still means False.
+- **Dates** go through `dates.parse_datetime`; an unparseable value, including
+  an epoch number too large for a date, is a 400. Date-component lookups
+  (`__month`, `__year`, ...) are coerced to int, as before. **Integers:** under
+  exact, `__in` and the comparisons a numeric string becomes an int; anything
+  else reaches the ORM unchanged, which answers 400. Under a text lookup
+  (`__startswith`, `__icontains`, ...) the value is passed as sent, so
+  `?id__startswith=026` is the pattern "026", not 26.
+- **Relation paths** (`?user__is_active=true`) are converted through the field
+  the path ends on, for exact, `__in`, `__not`, `__not_in`, comparisons and
+  date components only. A path ending on the relation itself (pk compare), a
+  text lookup and an explicit null are left as sent. The conversion runs only
+  after the sensitive-field and viewer-restricted guards have passed the key,
+  reads only `_meta`, and changes only the value's type: never the key, the
+  queryset or the caller's access.
+
+`normalize_rest_value(cls, request, field_name, value, lookup=None)` keeps its
+signature and stays the per-model override point for top-level fields; it now
+returns a list for a list. A consumer override whose only job was mapping
+Boolean strings (for example a garbage-to-False shim on a member or device
+list) is redundant and can be removed. Note the framework answers a malformed
+Boolean with a 400 rather than False.
 
 ### Aggregation modes
 
@@ -330,9 +366,25 @@ class RestMeta:
 - `__` drilling into a `JSONField` terminates the walk as sensitive, matching
   the aggregation layer. A model storing secrets in a JSON column must name the
   column itself.
+- A foreign key is refused under both spellings, and as `pk` when it is the
+  primary key. Declaring `"user"` refuses `user_id` too, and declaring
+  `"user_id"` refuses `user` and `user__<field>`. Each segment is tested as
+  written, then by the field it resolves to.
+- A reverse relation through a sensitive foreign key is refused for every path
+  through it, `__isnull` included: from `User`, `?vault_data__id=` and
+  `?vault_data__isnull=false` both read the hidden column. It is judged by the
+  declaration on the model that holds the foreign key.
+- A hidden relation (`related_name="+"`) is never filterable. Django still
+  registers it under the literal name `+`, which a caller can send as `%2B`,
+  so any segment that resolves to one is refused, whatever its foreign key
+  declares.
+- `not` / `not_in` are operators only as the last segment of a key. Anywhere
+  else (`?avatar__not__%2B__id__not=`) the key is refused, and the parser
+  strips only the trailing suffix, so the key that runs is the key that was
+  judged.
 - Lookup suffixes (`startswith`, `in`, `isnull`, `month`) can never produce a
-  false positive: sensitivity is tested before the field is resolved, so a
-  suffix that happens to share a field's name is already past the walk.
+  false positive: a suffix is not a field, so the walk has already stopped at
+  the field before it, and the suffix is never compared with a field name.
 
 **`mojo_secrets` is always sensitive on every model**, with no declaration
 needed. It lives on an abstract base shared by ~16 concrete models, several of
@@ -349,6 +401,63 @@ new model with a secret column is unprotected until it declares one. A
 name-substring heuristic was considered and rejected — it produces false
 positives on legitimate columns like `token_expires_at`, silently breaking
 working filters.
+
+#### Related-model walks
+
+A filter, `_mode=count`, `_stats`, `?search=`, `?sort=` or `_field=` path that
+walks **into** a related model is the same count oracle one hop further: the
+count answers questions about rows the caller cannot read. Since #8680 every
+such path goes through one rule, `mojo.models.rest.walk_verdict(model, key,
+request)` (`walk_denied` is its boolean form). It runs after the
+sensitive-field and private-lookup guards, on the key as sent.
+
+A segment **hops** into a related model when it is a reverse or many-to-many
+relation (with anything after it, `__id`, `__in` and `__isnull` included, or
+nothing: a many-to-many has no column on the model), or a forward foreign key
+or one-to-one followed by a field that is not its own column. `user`, `user_id`,
+`user__id`, `user__pk`, `user__in` and `user__isnull` compare the local column
+and are not hops. A hidden relation (`related_name="+"`) is always refused,
+for every caller, and raises a security event. `not` / `not_in` are
+operators only as the last segment (`user__email__not`); anywhere else in a
+key (`user__not__email`) the key is dropped, and the parser strips only that
+trailing suffix.
+
+A key that hops passes only when one of these holds, else it is dropped
+(filters, count, `_stats`, search, sort) or answered 400 (`_field=`):
+
+1. **It is the model's own `RestMeta.GROUP_FIELD` path** (trailing lookups
+   removed), e.g. Certificate `domain__group`. The server already scopes by
+   it. `OWNER_FIELD` is **not** an exemption: it defaults to `user`, and on a
+   group-scoped model such as File it would let a tenant manager filter by
+   uploaders' email.
+2. **The model declares it** in `RestMeta.FILTER_RELATED` (for `?search=`,
+   declared `SEARCH_FIELDS` count too):
+
+   ```python
+   class RestMeta:
+       FILTER_RELATED = ["user__username", "user__email", "user__display_name", "group__name"]
+   ```
+
+   A declared walk shows that related field to **every** list caller of the
+   model, so declare only what the model's graphs already show them.
+3. **The caller could list every row of each model it hops into**:
+   `MojoModel.rest_viewer_can_list_all(request)`. It reads the related
+   model's `VIEW_PERMS` without `owner` and `member`; `all` and
+   `authenticated` count only on a model that is not group-scoped. An ApiKey
+   passes only with that model's `ALLOW_API_KEY_GLOBAL`; a group token never
+   does; a model with no `VIEW_PERMS` fails closed. User overrides it with its
+   account-view rule (#8648). A related model that is not a MojoModel passes
+   only for a signed-in superuser.
+
+Sorting by a relation orders by its own column (`<fk>_id`); a reverse or
+many-to-many sort is ignored. The Assistant's model tools apply the same rule
+to `ordering` (refused rather than ignored) and to an aggregation's `field`. A path that does not resolve is left to the ORM,
+which refuses it as before. No request (a job or the shell building filters)
+leaves the key alone.
+
+**Consumers:** a scoped caller (a tenant manager, a group-level permission, an
+ApiKey) loses every undeclared walk into a model they cannot list in full.
+Declare the walks your screens need in `FILTER_RELATED`.
 
 Models can opt into a stricter allow-list by setting
 `AGGREGATION_FIELDS` on `RestMeta`:
@@ -580,11 +689,15 @@ def set_status(self, value):
 ### How it works
 
 1. Any key in `POST_SAVE_ACTIONS` found in `request.DATA` is held aside — it is **never written to the model**.
-2. The model is saved normally with all other fields.
-3. After save, the framework calls `self.on_action_<key>(value)` for each held-aside key.
+2. If the request carries other field data, or creates the row, the model is saved first with all of it. A request with **only** action keys on an existing row skips this save.
+3. After that, the framework calls `self.on_action_<key>(value)` for each held-aside key.
 4. If the handler returns a non-`None` dict, that dict is used as the API response instead of the normal serialized instance. Return a plain dict — the framework wraps it automatically (see [Return Values](decorators.md#return-values)).
 
 The default value is `["action"]`, meaning a field named `action` in any POST request is automatically treated as a post-save trigger.
+
+**Transport keys are not field data.** The request parser merges the query string into `request.DATA`, so `graph`, `group`, `group_uuid` and `_mtab` reach the save. On an existing row they do not count as fields when they would write nothing: the model has no field of that name, or `group` is the id the row already holds. So `POST /api/group/5?graph=basic&group=5` with `{"realtime_message": {...}}` runs the action without the generic pre-save. This is about `on_rest_save` only: the request dispatcher still calls `Group.touch()` on a group named by `group` or `group_uuid`, which saves that group when its last-activity time is due. A different `group` id still re-parents the row through its normal permission check, and a model's own `set_<key>` setter still runs.
+
+**The pre-save uses the row as it was loaded.** A body that mixes fields with an action saves the whole loaded row first, then runs the action, so it can write back values someone else changed in between. An action that needs a consistent row must lock and re-read it itself (`select_for_update()` inside `transaction.atomic()`) and save only the fields it changes.
 
 ### Setup
 
@@ -794,6 +907,7 @@ class RestMeta:
 
 - Any save attempt that includes `"protected"` in a JSONField value will raise a `403 PermissionDeniedException` if the user lacks the required permission.
 - The guard covers **every** write path: merges (the default), full replaces (`"__replace": true` or `JSON_REPLACE_FIELDS`), and non-dict overwrites (e.g. posting a list or string over a dict). A replace or overwrite that would **clobber an existing** `"protected"` subtree is denied the same as one that writes it — even if the incoming value doesn't contain a `"protected"` key.
+- A top-level key spelled as a path into it, `"protected.<key>"`, counts as writing `"protected"` too. When the stored value is an `objict`, item assignment follows the dots, so a merge would otherwise reach the subtree past the guard.
 - Changes to the `"protected"` key are **always** written to the audit log (`kind="meta:protected_changed"`) regardless of `LOG_CHANGES` or `LOG_META_CHANGES` — it is an unconditional security audit trail. On a replace, the logged changed-keys include keys that were removed.
 - When `LOG_META_CHANGES = True`, all root-level key changes to any JSONField are logged (`kind="meta:changed"`).
 

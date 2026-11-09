@@ -54,12 +54,12 @@ def _sync_enabled():
 def test_block_on_mojo_provider_enqueues_pushback(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.200").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.200").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.200", provider="mojo", threat_level=None,
+        ip_address="203.0.117.200", provider="mojo", threat_level=None,
     )
 
-    with _capture_pushback("203.0.113.200") as m_publish:
+    with _capture_pushback("203.0.117.200") as m_publish:
         geo.block(reason="test_pushback_mojo", ttl=600, broadcast=False,
                   sync_config=_sync_enabled())
 
@@ -71,12 +71,12 @@ def test_block_on_mojo_provider_enqueues_pushback(opts):
         f"wrong job path: {args[0]!r}"
     )
     payload = args[1]
-    assert payload["ip"] == "203.0.113.200", f"ip missing/wrong: {payload!r}"
+    assert payload["ip"] == "203.0.117.200", f"ip missing/wrong: {payload!r}"
     assert payload.get("threat_level") == "high", (
         f"expected threat_level=high in payload, got {payload!r}"
     )
     assert "idempotency_key" in kwargs and kwargs["idempotency_key"].startswith(
-        "geoip_sync:203.0.113.200:"
+        "geoip_sync:203.0.117.200:"
     ), f"idempotency key missing or wrong: {kwargs.get('idempotency_key')!r}"
 
 
@@ -84,12 +84,12 @@ def test_block_on_mojo_provider_enqueues_pushback(opts):
 def test_block_on_non_mojo_provider_does_not_enqueue(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.201").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.201").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.201", provider="maxmind", threat_level=None,
+        ip_address="203.0.117.201", provider="maxmind", threat_level=None,
     )
 
-    with _capture_pushback("203.0.113.201") as m_publish:
+    with _capture_pushback("203.0.117.201") as m_publish:
         geo.block(reason="test_no_pushback_maxmind", ttl=600, broadcast=False,
                   sync_config=_sync_enabled())
 
@@ -103,12 +103,12 @@ def test_block_on_non_mojo_provider_does_not_enqueue(opts):
 def test_block_when_from_sync_does_not_enqueue(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.202").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.202").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.202", provider="mojo", threat_level=None,
+        ip_address="203.0.117.202", provider="mojo", threat_level=None,
     )
 
-    with _capture_pushback("203.0.113.202") as m_publish:
+    with _capture_pushback("203.0.117.202") as m_publish:
         geo.block(reason="test_from_sync", ttl=600, broadcast=False,
                   from_sync=True, sync_config=_sync_enabled())
 
@@ -122,12 +122,12 @@ def test_block_when_from_sync_does_not_enqueue(opts):
 def test_block_when_sync_disabled_does_not_enqueue(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.203").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.203").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.203", provider="mojo", threat_level=None,
+        ip_address="203.0.117.203", provider="mojo", threat_level=None,
     )
 
-    with _capture_pushback("203.0.113.203") as m_publish:
+    with _capture_pushback("203.0.117.203") as m_publish:
         geo.block(reason="test_sync_disabled", ttl=600, broadcast=False,
                   sync_config={"sync_enabled": False,
                                "provider_url": "https://hub.example.com"})
@@ -141,12 +141,12 @@ def test_block_when_sync_disabled_does_not_enqueue(opts):
 def test_block_when_url_unset_does_not_enqueue(opts):
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.204").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.204").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.204", provider="mojo", threat_level=None,
+        ip_address="203.0.117.204", provider="mojo", threat_level=None,
     )
 
-    with _capture_pushback("203.0.113.204") as m_publish:
+    with _capture_pushback("203.0.117.204") as m_publish:
         geo.block(reason="test_no_url", ttl=600, broadcast=False,
                   sync_config={"sync_enabled": True, "provider_url": None})
 
@@ -160,12 +160,12 @@ def test_block_no_signal_rise_no_enqueue(opts):
     """When threat_level is already 'critical', block() doesn't push."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.205").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.205").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.205", provider="mojo", threat_level="critical",
+        ip_address="203.0.117.205", provider="mojo", threat_level="critical",
     )
 
-    with _capture_pushback("203.0.113.205") as m_publish:
+    with _capture_pushback("203.0.117.205") as m_publish:
         geo.block(reason="test_no_rise", ttl=600, broadcast=False,
                   sync_config=_sync_enabled())
 
@@ -180,9 +180,9 @@ def test_check_threats_flip_attacker_enqueues(opts):
     """check_threats() flipping is_known_attacker False->True triggers push-back."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.210").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.210").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.210", provider="mojo", threat_level="low",
+        ip_address="203.0.117.210", provider="mojo", threat_level="low",
         is_known_attacker=False, is_known_abuser=False,
     )
 
@@ -194,7 +194,7 @@ def test_check_threats_flip_attacker_enqueues(opts):
         "internal_stats": {},
     }
 
-    with _capture_pushback("203.0.113.210") as m_publish:
+    with _capture_pushback("203.0.117.210") as m_publish:
         geo.check_threats(check_internal=lambda ip: fake_internal,
                           sync_config=_sync_enabled())
 
@@ -210,9 +210,9 @@ def test_check_threats_no_flip_does_not_enqueue(opts):
     """If is_known_attacker stays True->True, no push."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.211").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.211").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.211", provider="mojo", threat_level="high",
+        ip_address="203.0.117.211", provider="mojo", threat_level="high",
         is_known_attacker=True, is_known_abuser=False,
     )
 
@@ -224,7 +224,7 @@ def test_check_threats_no_flip_does_not_enqueue(opts):
         "internal_stats": {},
     }
 
-    with _capture_pushback("203.0.113.211") as m_publish:
+    with _capture_pushback("203.0.117.211") as m_publish:
         geo.check_threats(check_internal=lambda ip: fake_internal,
                           sync_config=_sync_enabled())
 
@@ -243,12 +243,12 @@ def test_pushback_is_async_never_inline_http(opts):
     """
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.220").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.220").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.220", provider="mojo", threat_level=None,
+        ip_address="203.0.117.220", provider="mojo", threat_level=None,
     )
 
-    with _capture_pushback("203.0.113.220") as m_publish, \
+    with _capture_pushback("203.0.117.220") as m_publish, \
          mock.patch("mojo.apps.account.asyncjobs.requests.post") as m_post:
         geo.block(reason="test_async_only", ttl=600, broadcast=False,
                   sync_config=_sync_enabled())
@@ -265,13 +265,13 @@ def test_publish_failure_does_not_raise(opts):
     """If jobs.publish itself errors, block() must still succeed locally."""
     from mojo.apps.account.models.geolocated_ip import GeoLocatedIP
 
-    GeoLocatedIP.objects.filter(ip_address="203.0.113.221").delete()
+    GeoLocatedIP.objects.filter(ip_address="203.0.117.221").delete()
     geo = GeoLocatedIP.objects.create(
-        ip_address="203.0.113.221", provider="mojo", threat_level=None,
+        ip_address="203.0.117.221", provider="mojo", threat_level=None,
     )
 
     with _capture_pushback(
-            "203.0.113.221", side_effect=RuntimeError("redis down")):
+            "203.0.117.221", side_effect=RuntimeError("redis down")):
         # Should not raise
         geo.block(reason="test_publish_failure", ttl=600, broadcast=False,
                   sync_config=_sync_enabled())

@@ -132,7 +132,8 @@ Each `items[]` deployment additionally carries (additive, item 2225):
 
 **`detail.stderr_tail` is permission-dependent — in `node_evidence[]` and
 `diagnosis[]` alike.** When a node's update script fails, the detail can carry
-the last ten lines of that script's stderr. Those lines are redacted, but not
+a bounded excerpt of at most ten lines: the transaction's own output just
+before recovery began, then how recovery ended. Those lines are redacted, but not
 provably free of credentials, so the key is present **only** for callers
 holding `view_platform_security`, `manage_platform`, or `admin`. A caller with
 just `view_platform` receives the same entry with everything else intact

@@ -16,12 +16,18 @@ unconfigured: no BASE_URL, or no registered resource currently enabled.
 from . import resources
 
 
-def authorization_server_metadata(origin, registry=None):
-    """RFC 8414 authorization-server metadata, or None when not ready."""
+def authorization_server_metadata(origin, registry=None, device_enabled=None):
+    """RFC 8414 authorization-server metadata, or None when not ready.
+
+    The device endpoint and grant are advertised only while the deployment has
+    the flow switched on — `device_enabled` is the test seam for that switch.
+    """
     if not resources.is_ready(origin, registry):
         return None
+    if device_enabled is None:
+        device_enabled = resources.device_flow_enabled()
     iss = resources.issuer(origin)
-    return {
+    document = {
         "issuer": iss,
         "authorization_endpoint": f"{iss}/authorize",
         "token_endpoint": f"{iss}/token",
@@ -40,6 +46,10 @@ def authorization_server_metadata(origin, registry=None):
         "authorization_response_iss_parameter_supported": True,
         "client_id_metadata_document_supported": True,
     }
+    if device_enabled:
+        document["device_authorization_endpoint"] = f"{iss}/device_authorization"
+        document["grant_types_supported"].append(resources.DEVICE_GRANT)
+    return document
 
 
 def protected_resource_metadata(origin, path, registry=None):

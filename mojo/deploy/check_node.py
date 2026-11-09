@@ -43,6 +43,11 @@ it asks `python3 -m mojo.deploy.node_role resolve --json`, whose every output
 field is a validated role identifier or the empty string. No conf byte can
 reach this report through it. Do not widen that either.
 
+A second, equally narrow exception: the profile section greps var/django.conf
+for the one opt-in key MOJO_REQUIRED_PROFILE (#9315) and shows its value only
+when it is a plain profile name; any other value is reported as "ignored",
+never printed.
+
 A finding is one of:
 
     PASS   matches the contract
@@ -66,8 +71,10 @@ import shlex
 import subprocess
 import sys
 
-from mojo.deploy.mojosec import DEPLOY_STATE_PATH as MOJOSEC_DEPLOY_STATE_PATH
-from mojo.mojosec.store import PROCESS_NODE_CAP, PROCESS_PINNED_CAP
+from mojo.deploy.mojosec import (
+    DEPLOY_STATE_PATH as MOJOSEC_DEPLOY_STATE_PATH, RETIRED_FILES as MOJOSEC_RETIRED_FILES,
+    RETIRED_UNITS as MOJOSEC_RETIRED_UNITS,
+)
 
 PASS = "PASS"
 WARN = "WARN"
@@ -78,8 +85,9 @@ INFO = "INFO"
 # schedules and serves it, then the trailing edges (certs, config, shims,
 # leftovers).
 SECTIONS = (
-    "repo", "framework", "deployment", "roles", "cron", "systemd", "firewall", "mojosec", "nginx",
-    "certs", "config_plane", "shims", "legacy", "var_ownership", "jobs",
+    "repo", "framework", "deployment", "roles", "cron", "systemd", "firewall", "mojosec",
+    "system_logs", "nginx", "certs", "config_plane", "shims", "legacy", "var_ownership",
+    "profile", "jobs",
 )
 
 # The two deployment scripts are project-owned, so a broken installed
@@ -655,7 +663,10 @@ def check_cron(report, run, proj):
     # mentions the project path is ours; if the rendered set no longer ships
     # that name, one surviving means post_deploy has not run since it was
     # retired.
-    rc, out, _ = run(f"grep -lF -- {q(proj)} /etc/cron.d/* 2>/dev/null")
+    # Same boundary as the sweep: the exact path followed by `/`, whitespace
+    # or end of line, so /opt/api never grades /opt/api2's crons stale.
+    pattern = re.escape(proj) + "([/[:space:]]|$)"
+    rc, out, _ = run(f"grep -lE -- {q(pattern)} /etc/cron.d/* 2>/dev/null")
     if rc > 1 and not out:
         report.info("cron", "stale sweep skipped", "could not scan /etc/cron.d")
         return
@@ -755,6 +766,21 @@ def _mojosec_python(sudo, arguments, safe_path=True):
     return f"{sudo}/bin/sh -c {q(inner)}"
 
 
+def _mojosec_archive_check(directory="/var/log/nginx", uid=0, gid=0):
+    """The node-side one-liner for rotated security-log archives: at most 32,
+    each a regular file owned uid:gid with no group/other bits. The glob takes
+    dateext names (mojosec.json.log-YYYYMMDDHHMMSS[.gz]) and numbered ones."""
+    pattern = os.path.join(directory, "mojosec.json.log[-.]*")
+    return (
+        "import glob,os,stat;"
+        f"ps=glob.glob({pattern!r});"
+        "ok=len(ps)<=32 and all(stat.S_ISREG(os.lstat(p).st_mode) and "
+        f"os.lstat(p).st_uid=={int(uid)} and os.lstat(p).st_gid=={int(gid)} and "
+        "not(os.lstat(p).st_mode&0o077) for p in ps);"
+        "raise SystemExit(0 if ok else 1)"
+    )
+
+
 def _audit_mojosec_unit(report, run, sudo, mode="observe"):
     launcher = (
         "import importlib.util,os,stat,sys;"
@@ -796,170 +822,6 @@ def _audit_mojosec_unit(report, run, sudo, mode="observe"):
         report.fail("mojosec", "service unit byte drift",
                     "installed root unit differs from the package contract")
 
-    if mode == "observe":
-        companion_units = (
-            ("PROC_IDENTITY_SERVICE_TEXT",
-             "/etc/systemd/system/mojosec-proc-identity.service"),
-            ("PROC_IDENTITY_SOCKET_TEXT",
-             "/etc/systemd/system/mojosec-proc-identity.socket"),
-        )
-        for constant, path in companion_units:
-            metadata = _secure_metadata(run, path, "644", sudo=sudo)
-            projection = (
-                "import os,stat;from mojo.deploy import mojosec as m;"
-                f"p={path!r};want=getattr(m,{constant!r}).encode();"
-                "fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW);s=os.fstat(fd);"
-                "got=os.read(fd,len(want)+1);os.close(fd);"
-                "raise SystemExit(0 if stat.S_ISREG(s.st_mode) and s.st_uid==0 and "
-                "s.st_gid==0 and s.st_size==len(want) and got==want else 1)"
-            )
-            if (metadata is not None and metadata[1] and run(_mojosec_python(
-                    sudo, f"-c {q(projection)}", safe_path=True))[0] == 0):
-                report.passed("mojosec", "process identity helper unit",
-                              f"{os.path.basename(path)} is exact root-owned 0644")
-            else:
-                report.fail("mojosec", "process identity helper unit drift",
-                            f"{path} is absent, unsafe, or differs from the package")
-        socket_enabled = run(
-            "systemctl is-enabled --quiet mojosec-proc-identity.socket")[0] == 0
-        socket_active = run(
-            "systemctl is-active --quiet mojosec-proc-identity.socket")[0] == 0
-        if socket_enabled and socket_active:
-            report.passed("mojosec", "process identity helper socket",
-                          "root-only resolver socket is enabled and active")
-        else:
-            report.fail("mojosec", "process identity helper socket unavailable",
-                        "mojosec-proc-identity.socket must be enabled and active")
-
-        socket_path = "/run/mojosec-proc-identity.sock"
-        socket_metadata = run(
-            f"{sudo}test ! -L {q(socket_path)} && {sudo}test -S {q(socket_path)} && "
-            f"{sudo}stat -c '%U %G %a' {q(socket_path)} 2>/dev/null")
-        if socket_metadata[0] == 0 and socket_metadata[1].split() == [
-                "root", "root", "600"]:
-            report.passed("mojosec", "process identity socket permissions",
-                          "live resolver socket is root-owned 0600")
-        else:
-            report.fail("mojosec", "process identity socket permissions unsafe",
-                        "live resolver socket must be a root-owned 0600 Unix socket")
-
-        helper_properties = (
-            "User", "Group", "UMask", "WorkingDirectory", "FragmentPath",
-            "DropInPaths", "PartOf", "NoNewPrivileges", "PrivateTmp", "PrivateDevices",
-            "PrivateNetwork", "ProtectHome", "ProtectSystem",
-            "ProtectKernelTunables", "ProtectKernelModules", "ProtectKernelLogs",
-            "ProtectControlGroups", "ProtectClock", "ProtectHostname", "ProcSubset",
-            "ProtectProc",
-            "RestrictSUIDSGID", "LockPersonality", "RestrictRealtime",
-            "RestrictNamespaces", "RestrictAddressFamilies", "CapabilityBoundingSet",
-            "AmbientCapabilities",
-        )
-        helper_command = "systemctl show mojosec-proc-identity.service " + " ".join(
-            f"--property={name}" for name in helper_properties)
-        helper_rc, helper_out, _ = run(helper_command)
-        helper_found = {}
-        if helper_rc == 0 and len(helper_out) <= 16384:
-            for line in helper_out.splitlines():
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    helper_found[key] = value.strip()
-        helper_scalar = {
-            "User": "ec2-user", "Group": "ec2-user", "UMask": "0077",
-            "WorkingDirectory": "/",
-            "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.service",
-            "DropInPaths": "", "PartOf": "mojosec.service",
-            "NoNewPrivileges": "yes", "PrivateTmp": "yes",
-            "PrivateDevices": "yes", "PrivateNetwork": "yes", "ProtectHome": "yes",
-            "ProtectSystem": "strict", "ProtectKernelTunables": "yes",
-            "ProtectKernelModules": "yes", "ProtectKernelLogs": "yes",
-            "ProtectControlGroups": "yes", "ProtectClock": "yes",
-            "ProtectHostname": "yes", "ProtectProc": "invisible", "ProcSubset": "all",
-            "RestrictSUIDSGID": "yes",
-            "LockPersonality": "yes", "RestrictRealtime": "yes",
-            "RestrictNamespaces": "yes", "CapabilityBoundingSet": "",
-            "AmbientCapabilities": "",
-        }
-        helper_drift = [
-            f"{key}={helper_found.get(key, '<missing>')}"
-            for key, value in helper_scalar.items() if helper_found.get(key) != value
-        ]
-        if set(helper_found.get("RestrictAddressFamilies", "").split()) != {"AF_UNIX"}:
-            helper_drift.append("RestrictAddressFamilies=" + helper_found.get(
-                "RestrictAddressFamilies", "<missing>"))
-        if helper_drift:
-            report.fail("mojosec", "process identity helper sandbox drift",
-                        ", ".join(helper_drift[:12]))
-        else:
-            report.passed("mojosec", "process identity helper sandbox",
-                          "app user; no capabilities, IP network, or systemd drop-ins")
-
-        socket_properties = (
-            "FragmentPath", "DropInPaths", "Listen", "Triggers", "SocketMode",
-            "SocketUser", "SocketGroup",
-        )
-        socket_command = "systemctl show mojosec-proc-identity.socket " + " ".join(
-            f"--property={name}" for name in socket_properties)
-        socket_rc, socket_out, _ = run(socket_command)
-        socket_found = {}
-        if socket_rc == 0 and len(socket_out) <= 16384:
-            for line in socket_out.splitlines():
-                if "=" in line:
-                    key, value = line.split("=", 1)
-                    socket_found[key] = value.strip()
-        socket_expected = {
-            "FragmentPath": "/etc/systemd/system/mojosec-proc-identity.socket",
-            "DropInPaths": "",
-            "Listen": "/run/mojosec-proc-identity.sock (Stream)",
-            "Triggers": "mojosec-proc-identity.service",
-            "SocketMode": "0600",
-            "SocketUser": "root", "SocketGroup": "root",
-        }
-        socket_drift = [
-            f"{key}={socket_found.get(key, '<missing>')}"
-            for key, value in socket_expected.items() if socket_found.get(key) != value
-        ]
-        if socket_drift:
-            report.fail("mojosec", "process identity socket unit drift",
-                        ", ".join(socket_drift))
-        else:
-            report.passed("mojosec", "process identity socket unit",
-                          "exact listener, service target, mode, and no drop-ins")
-
-        yama_rc, yama_out, _ = run(
-            "cat /proc/sys/kernel/yama/ptrace_scope 2>/dev/null")
-        try:
-            yama = int(yama_out.strip())
-        except (TypeError, ValueError):
-            yama = 0
-        if yama_rc == 0 and yama >= 1:
-            report.passed("mojosec", "same-UID ptrace protection",
-                          f"kernel.yama.ptrace_scope={yama} protects helper startup")
-        else:
-            report.fail("mojosec", "same-UID ptrace protection unavailable",
-                        "resolver requires kernel.yama.ptrace_scope >= 1")
-        managed_ptrace = (
-            "import os,stat;from mojo.deploy import mojosec as m;"
-            "p=m.PTRACE_SYSCTL_PATH;fd=os.open(p,os.O_RDONLY|os.O_NOFOLLOW);"
-            "s=os.fstat(fd);got=os.read(fd,257);os.close(fd);"
-            "values=[v for v in (1,2,3) if got==m._ptrace_sysctl_text(v).encode()];"
-            "ok=(stat.S_ISREG(s.st_mode) and s.st_uid==0 and s.st_gid==0 and "
-            "stat.S_IMODE(s.st_mode)==0o644 and s.st_size==len(got) and "
-            "len(got)<=256 and len(values)==1);"
-            "print(values[0] if ok else '');raise SystemExit(0 if ok else 1)"
-        )
-        managed_rc, managed_out, _ = run(_mojosec_python(
-            sudo, f"-c {q(managed_ptrace)}", safe_path=True))
-        try:
-            managed_value = int(managed_out.strip())
-        except (TypeError, ValueError):
-            managed_value = 0
-        if (managed_rc == 0 and yama_rc == 0 and
-                managed_value == yama and managed_value >= 1):
-            report.passed("mojosec", "managed ptrace protection",
-                          f"persistent policy exactly preserves live value {managed_value}")
-        else:
-            report.fail("mojosec", "managed ptrace protection unavailable",
-                        "root-owned sysctl policy must exactly persist the live protected value")
     properties = (
         "User", "Group", "UMask", "WorkingDirectory", "Environment",
         "FragmentPath", "DropInPaths",
@@ -1128,21 +990,35 @@ def _valid_local_only_status(status):
     )
 
 
-def _valid_provenance_status(process):
-    if not isinstance(process, dict):
-        return False
-    audit_health = process.get("audit_health")
-    integer_fields = (process.get("process_nodes"),
-                      process.get("pending_firewall"),
-                      process.get("engine_anchors"))
-    return bool(
-        isinstance(audit_health, dict) and audit_health.get("healthy") is True and
-        audit_health.get("lost") == 0 and audit_health.get("backlog_limit", 0) >= 8192 and
-        all(isinstance(value, int) and not isinstance(value, bool)
-            for value in integer_fields) and
-        0 <= process["process_nodes"] <= PROCESS_NODE_CAP + PROCESS_PINNED_CAP and
-        0 <= process["pending_firewall"] <= 4096 and
-        process["engine_anchors"] >= 1)
+def _audit_retired_provenance_assets(report, run):
+    """Nothing of the retired lineage proof may survive a converge, in any mode."""
+    units = MOJOSEC_RETIRED_UNITS[1:]
+    inactive = run(
+        "if " + " || ".join(
+            f"systemctl is-active --quiet {name} || systemctl is-enabled --quiet {name}"
+            for name in units) + "; then exit 1; fi")[0] == 0
+    paths = tuple(f"/etc/systemd/system/{name}" for name in units) + \
+        MOJOSEC_RETIRED_FILES + ("/run/mojosec-proc-identity.sock",)
+    absent = run(" && ".join(f"test ! -e {q(path)}" for path in paths))[0] == 0
+    if inactive and absent:
+        report.passed("mojosec", "retired provenance assets absent",
+                      "no resolver, Audit health timer, stable helper or sidecar remains")
+    else:
+        report.fail("mojosec", "retired provenance assets remain",
+                    "the resolver units, Audit health timer, stable helper or sidecar "
+                    "are still installed or active",
+                    "sudo bash aws/post_deploy.sh")
+    # A retired unit that failed before removal stays listed as failed until
+    # reset-failed or a reboot (maestro #9813). Read-only; converge clears it.
+    rc, out, _ = run(
+        "for unit in " + " ".join(MOJOSEC_RETIRED_UNITS) +
+        "; do systemctl is-failed --quiet $unit && echo $unit; done; true")
+    failed = [name for name in out.split() if name in MOJOSEC_RETIRED_UNITS]
+    if failed:
+        report.warn("mojosec", "retired units marked failed",
+                    f"systemd still lists {', '.join(failed)} as failed although "
+                    "the units are gone",
+                    "sudo systemctl reset-failed " + " ".join(failed))
 
 
 def check_mojosec_runtime(report, run, sudo):
@@ -1249,24 +1125,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     if present.get("service unit"):
         _audit_mojosec_unit(report, run, sudo, mode)
 
-    if mode == "off":
-        inactive = run(
-            "if systemctl is-active --quiet mojosec-proc-identity.service || "
-            "systemctl is-active --quiet mojosec-proc-identity.socket || "
-            "systemctl is-enabled --quiet mojosec-proc-identity.socket; then exit 1; fi"
-        )[0] == 0
-        absent = run(
-            "test ! -e /etc/systemd/system/mojosec-proc-identity.service && "
-            "test ! -e /etc/systemd/system/mojosec-proc-identity.socket && "
-            "test ! -e /run/mojosec-proc-identity.sock && "
-            "test ! -e /etc/sysctl.d/90-mojosec-ptrace.conf"
-        )[0] == 0
-        if inactive and absent:
-            report.passed("mojosec", "process identity helper retired",
-                          "off mode has no active or installed resolver assets")
-        else:
-            report.fail("mojosec", "process identity helper remains in off mode",
-                        "disable the resolver socket/service and remove managed assets")
+    _audit_retired_provenance_assets(report, run)
 
     if mode == "observe" and present.get("runtime config"):
         command = _mojosec_python(
@@ -1285,9 +1144,6 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     provenance_assets = (
         ("Audit rollback state", "/etc/mojosec/audit-state.json", "600"),
         ("Audit managed policy", "/etc/audit/rules.d/70-mojosec.rules", "600"),
-        ("Audit health unit", "/etc/systemd/system/mojosec-audit-health.service", "644"),
-        ("Audit health timer", "/etc/systemd/system/mojosec-audit-health.timer", "644"),
-        ("Audit stable helper", "/usr/local/lib/mojosec/mojosec_audit.py", "755"),
     )
     publish_assets = (
         ("publish broker", "/usr/local/sbin/mojo-publish-broker", "755"),
@@ -1360,31 +1216,16 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                 generated_exact and
                 policy_digest == expected_audit.get("generation") and
                 active_digest == expected_audit.get("rules") and
-                all(key in audit_rules for key in (
-                    "mojosec-root-exec", "mojosec-app-exec", "mojosec-sudo"))):
+                "mojosec-sudo" in audit_rules and
+                not any(key in audit_rules for key in (
+                    "mojosec-root-exec", "mojosec-app-exec"))):
             report.passed("mojosec", "active Audit provenance",
-                          "managed selective rules are loaded with zero loss")
+                          "the managed sudo watch is loaded with zero loss and no exec rules")
         else:
             report.fail("mojosec", "active Audit provenance unhealthy",
-                        "active rules/status differ, are lossy, or still disable task auditing")
-        sidecar = _secure_metadata(
-            run, "/run/mojosec/audit-health.json", "600", sudo=sudo)
-        if sidecar is not None and sidecar[1]:
-            report.passed("mojosec", "Audit health sidecar",
-                          "root-only constrained live health is present")
-        else:
-            report.fail("mojosec", "Audit health sidecar absent or unsafe",
-                        "suppression is disabled without a fresh root-owned sidecar")
-        timer = run("systemctl is-active mojosec-audit-health.timer 2>&1")[1]
-        capabilities = run(
-            "systemctl show mojosec-audit-health.service "
-            "-p CapabilityBoundingSet -p AmbientCapabilities --value 2>&1")[1]
-        if timer == "active" and set(capabilities.lower().split()) == {"cap_audit_control"}:
-            report.passed("mojosec", "Audit health publisher",
-                          "timer active with constrained Audit control capability")
-        else:
-            report.fail("mojosec", "Audit health publisher unavailable",
-                        "timer/capability drift disables suppression")
+                        "active rules/status differ, are lossy, still carry the retired "
+                        "exec rules, or disable task auditing",
+                        "sudo bash aws/post_deploy.sh")
         legacy = run(
             f"{sudo}grep -R -E 'NOPASSWD:.*(iptables|ipset)' /etc/sudoers /etc/sudoers.d "
             "2>/dev/null")[1]
@@ -1495,18 +1336,6 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                             "missing or unhealthy core collectors: " + ", ".join(unhealthy))
             else:
                 report.passed("mojosec", "collector health", "journal and nginx are healthy")
-            process = status.get("provenance")
-            if isinstance(process, dict):
-                if _valid_provenance_status(process):
-                    report.passed("mojosec", "provenance health",
-                                  "Audit epoch, bounded graph, and post-cutover engine are healthy")
-                else:
-                    report.fail("mojosec", "provenance health unhealthy",
-                                "suppression is disabled until the current Audit epoch is healthy")
-            else:
-                report.fail("mojosec", "provenance health absent or malformed",
-                            "post-cutover status must report Audit health, graph bounds, "
-                            "and at least one live engine anchor")
             integrity = status.get("integrity")
             if integrity is not None:
                 identity = integrity.get("identity") if isinstance(integrity, dict) else None
@@ -1642,14 +1471,7 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
                 else:
                     report.fail("mojosec", "security log metadata drift",
                                 "standard dedicated log must be root:root 0600")
-                archive_check = (
-                    "import glob,os,stat;"
-                    "ps=glob.glob('/var/log/nginx/mojosec.json.log.*');"
-                    "ok=len(ps)<=32 and all(stat.S_ISREG(os.lstat(p).st_mode) and "
-                    "os.lstat(p).st_uid==0 and os.lstat(p).st_gid==0 and "
-                    "not(os.lstat(p).st_mode&0o077) for p in ps);"
-                    "raise SystemExit(0 if ok else 1)"
-                )
+                archive_check = _mojosec_archive_check()
                 if run(_mojosec_python(
                         sudo, f"-c {q(archive_check)}"))[0] == 0:
                     report.passed("mojosec", "security log archives",
@@ -1683,6 +1505,96 @@ def check_mojosec(report, run, mode, sudo, expected_sensor_id=""):
     else:
         report.fail("mojosec", "public status metadata drift",
                     "/run/mojosec/status.json must be root:root 0640")
+
+
+# ---------------------------------------------------------------------------
+# system logs — root disk and log rotation, read-only
+# ---------------------------------------------------------------------------
+
+ROOT_DISK_WARN = 75
+ROOT_DISK_FAIL = 85  # the health monitor's HEALTH_DISK_CRIT default
+MESSAGES_WARN_BYTES = 2 * 1024 ** 3
+
+
+def check_system_logs(report, run, sudo):
+    """Root filesystem use, logrotate health and the /var/log/messages total.
+    Reads only: `logrotate -d` is a dry run, and nothing is rotated, removed
+    or restarted."""
+    rc, out, _ = run("df -P / 2>/dev/null")
+    used = None
+    if rc == 0 and out:
+        fields = out.splitlines()[-1].split()
+        if len(fields) >= 5 and fields[4].rstrip("%").isdigit():
+            used = int(fields[4].rstrip("%"))
+    if used is None:
+        report.info("system_logs", "root filesystem unreadable", "df -P / gave no usage line")
+    elif used >= ROOT_DISK_FAIL:
+        report.fail("system_logs", "root filesystem nearly full",
+                    f"/ is {used}% used (FAIL at {ROOT_DISK_FAIL}%)",
+                    "free space now: check /var/log (du -xh /var/log | sort -h) and the journal "
+                    "(journalctl --disk-usage)")
+    elif used >= ROOT_DISK_WARN:
+        report.warn("system_logs", "root filesystem filling",
+                    f"/ is {used}% used (WARN at {ROOT_DISK_WARN}%, FAIL at {ROOT_DISK_FAIL}%)",
+                    "find what is growing: du -xh /var/log | sort -h; journalctl --disk-usage")
+    else:
+        report.passed("system_logs", "root filesystem", f"/ is {used}% used")
+
+    dry_rc, dry_run, dry_err = run(f"{sudo}/usr/sbin/logrotate -d /etc/logrotate.conf 2>&1",
+                                   timeout=60)
+    errors = [line.strip() for line in dry_run.splitlines()
+              if line.strip().startswith("error:")]
+    duplicates = [line for line in errors if "duplicate log entry" in line]
+    _, service, _ = run("systemctl is-failed logrotate.service 2>/dev/null")
+    service = service.strip()
+    if duplicates:
+        report.fail("system_logs", "logrotate duplicate log entry", duplicates[0][:200],
+                    "two logrotate stanzas claim one file; make the first line of "
+                    "/etc/logrotate.d/nginx name nginx's own logs, /var/log/nginx/access.log "
+                    "/var/log/nginx/error.log, instead of a /var/log/nginx/*.log glob")
+    elif errors:
+        report.fail("system_logs", "logrotate configuration error", errors[0][:200],
+                    "logrotate skips the stanza it names; fix that file, then re-run "
+                    "sudo logrotate -d /etc/logrotate.conf until it prints no error")
+    elif service == "failed":
+        report.fail("system_logs", "logrotate.service failed",
+                    "the last scheduled rotation failed, so logs are no longer rotated",
+                    "read journalctl -u logrotate.service, fix the stanza it names, then "
+                    "systemctl reset-failed logrotate.service")
+    elif dry_rc != 0:
+        # No logrotate diagnostic: the probe itself failed (timeout, ssh,
+        # sudo, missing binary), so rotation health is unknown, not clean.
+        report.warn("system_logs", "logrotate health unverified",
+                    f"dry run exited {dry_rc}: {(dry_err or dry_run or 'no output')[:200]}",
+                    "run sudo logrotate -d /etc/logrotate.conf on the node and read its errors")
+    elif service not in ("active", "inactive", "activating", "deactivating"):
+        report.warn("system_logs", "logrotate health unverified",
+                    f"logrotate.service state unreadable: {service or 'no answer'}",
+                    "run systemctl is-failed logrotate.service on the node")
+    else:
+        report.passed("system_logs", "logrotate health",
+                      "dry run clean and logrotate.service not failed")
+
+    # No match is a measured zero; a du failure (permission, timeout) is not.
+    inner = ('set -- /var/log/messages*; [ -e "$1" ] || { echo 0; exit 0; }; '
+             'out=$(du -cb -- "$@") || exit 1; printf "%s\\n" "$out" | tail -n 1')
+    du_rc, du_out, du_err = run(f"{sudo}/bin/sh -c {q(inner)}")
+    total_line = du_out.split()
+    if du_rc != 0 or not total_line or not total_line[0].isdigit():
+        report.warn("system_logs", "messages archive size unverified",
+                    f"du exited {du_rc}: {(du_err or du_out or 'no output')[:200]}",
+                    "run sudo du -cb /var/log/messages* on the node")
+        return
+    total = int(total_line[0])
+    gib = total / 1024 ** 3
+    if total > MESSAGES_WARN_BYTES:
+        report.warn("system_logs", "messages archive size",
+                    f"/var/log/messages* totals {gib:.1f} GiB (WARN above 2 GiB)",
+                    "find the noisy source; for audit records add the rsyslog drop "
+                    "(if $programname == 'audit' then stop) and compress rotated messages")
+    else:
+        report.passed("system_logs", "messages archive size",
+                      f"/var/log/messages* totals {gib:.1f} GiB")
 
 
 # ---------------------------------------------------------------------------
@@ -2300,6 +2212,73 @@ def check_var_ownership(report, run, proj, app_user, web_user):
 
 
 # ---------------------------------------------------------------------------
+# profile
+
+def check_profile(report, run, proj, app_user, web_user, expect="prod"):
+    """var/profile names the settings module every process loads (#9315).
+
+    The second bounded conf exception: the opt-in MOJO_REQUIRED_PROFILE key in
+    var/django.conf is found with a one-key grep, and only a plain profile
+    name from that line is ever shown. Nothing else in the conf is read.
+    """
+    from mojo.helpers.settings.helper import (
+        REQUIRED_PROFILE_KEY, required_profile_from_text,
+    )
+    marker = f"{proj}/var/profile"
+    conf = f"{proj}/var/django.conf"
+    _, line, _ = run(
+        f"grep -E '^[[:space:]]*{REQUIRED_PROFILE_KEY}[[:space:]]*=' {q(conf)} "
+        "2>/dev/null | tail -n 1")
+    state, required = required_profile_from_text(line)
+    if state == "set":
+        expect = required
+        report.info("profile", f"{REQUIRED_PROFILE_KEY} = {required}",
+                    "django.conf requires this profile: the app, jobs, cron and "
+                    "manage.py refuse to start without a matching marker")
+    elif state == "malformed":
+        report.info("profile", f"{REQUIRED_PROFILE_KEY} ignored",
+                    "django.conf has the key but its value is not a plain "
+                    "profile name, so the guard is dormant")
+    else:
+        report.info("profile", f"{REQUIRED_PROFILE_KEY} not set",
+                    "the guard is off (opt-in); a missing marker silently "
+                    "runs settings.local")
+
+    fix = (f"echo {expect} > {marker} && chown {app_user}:{web_user} {marker} "
+           f"&& chmod 640 {marker}, then restart mojo-asgi")
+    if not exists(run, marker):
+        report.fail("profile", "var/profile missing",
+                    "every process on this node loads settings.local",
+                    fix)
+        return
+    _, value, _ = run(f"cat {q(marker)} 2>/dev/null")
+    value = value.strip()
+    if not value:
+        report.fail("profile", "var/profile empty",
+                    "the settings import fails or falls back", fix)
+        return
+    if value != expect:
+        shown = value[:64] if re.match(r"^[A-Za-z0-9_-]+$", value) else "an unexpected value"
+        report.fail("profile", f"var/profile reads {shown}",
+                    f"expected {expect}", fix)
+        return
+    report.passed("profile", "var/profile", f"reads {expect}")
+    st = stat_of(run, marker)
+    if st is None:
+        report.info("profile", "var/profile metadata", "cannot stat")
+        return
+    user, group, mode = st
+    if user != app_user or group != web_user:
+        report.warn("profile", f"var/profile owner {user}:{group}",
+                    f"provisioning writes it {app_user}:{web_user}",
+                    f"chown {app_user}:{web_user} {marker}")
+    if mode != "640":
+        report.warn("profile", f"var/profile mode {mode}",
+                    "provisioning writes it 640",
+                    f"chmod 640 {marker}")
+
+
+# ---------------------------------------------------------------------------
 # jobs
 # ---------------------------------------------------------------------------
 
@@ -2442,6 +2421,10 @@ def main(argv):
     parser.add_argument("--require-shims", action="store_true",
                         help="grade a forked aws/ script or an undeclared "
                              "template collision FAIL instead of WARN")
+    parser.add_argument("--expect-profile", default="prod",
+                        help="the settings profile var/profile must name; a "
+                             "MOJO_REQUIRED_PROFILE key in var/django.conf "
+                             "overrides it (default: prod)")
     parser.add_argument("--section", default="all",
                         help=f"comma-separated subset of: {', '.join(SECTIONS)}")
     parser.add_argument("--json", action="store_true",
@@ -2504,6 +2487,8 @@ def main(argv):
                       args.mojosec_sensor_id)
     if "firewall" in wanted:
         check_firewall(report, run, sudo)
+    if "system_logs" in wanted:
+        check_system_logs(report, run, sudo)
     if "nginx" in wanted and node_type == "api":
         check_nginx(report, run, repo, sudo, args.probe_url, retired_confd,
                     args.web_user, roles["foreign"]["conf.d"])
@@ -2526,6 +2511,9 @@ def main(argv):
         check_legacy(report, run, proj, repo, retired_cron)
     if "var_ownership" in wanted:
         check_var_ownership(report, run, proj, args.app_user, args.web_user)
+    if "profile" in wanted:
+        check_profile(report, run, proj, args.app_user, args.web_user,
+                      expect=args.expect_profile)
     if "jobs" in wanted:
         check_jobs(report, run, proj, node_type=node_type)
 

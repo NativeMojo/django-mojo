@@ -35,10 +35,9 @@ Six names are refused at parse time, so a manifest can never take them:
 package-owned and converged after the install loop (role removal would delete
 what the deploy just installed); `systemd/mojo-asgi.service` has its lifecycle
 decided by the sealed request-service authority instead; and
-`systemd/mojosec.service`, `systemd/mojosec-audit-health.service` and
-`systemd/mojosec-audit-health.timer` are the security sensor's own units —
-claiming one for a role would disable and delete the sensor on every other
-node, as a journaled trusted change nobody would alarm on.
+`systemd/mojosec.service` is the security sensor's own unit — claiming it for
+a role would disable and delete the sensor on every other node, as a journaled
+trusted change nobody would alarm on.
 
     python3 -m mojo.deploy.node_role resolve --project-path /opt/api
     python3 -m mojo.deploy.node_role resolve --project-path /opt/api --json
@@ -88,16 +87,14 @@ BOOTSTRAP_REL = os.path.join("var", "bootstrap.conf")
 KINDS = ("conf.d", "cron.d", "systemd")
 
 # Names a manifest may not claim for a role — see the module docstring. The
-# three MojoSec unit names are MIRRORED from mojo.deploy.mojosec (SERVICE_PATH,
-# AUDIT_HEALTH_SERVICE_PATH, AUDIT_HEALTH_TIMER_PATH) rather than imported:
-# this module is a lean CLI the audit runs over ssh and must not drag the
-# sensor installer in behind it. A test pins the two against each other so they
-# cannot drift.
+# MojoSec unit name is MIRRORED from mojo.deploy.mojosec (SERVICE_PATH) rather
+# than imported: this module is a lean CLI the audit runs over ssh and must not
+# drag the sensor installer in behind it. A test pins the two against each
+# other so they cannot drift.
 REFUSED_NAMES = {
     "conf.d": ("00_django_mojo_runtime.conf", "00_mojosec.conf"),
     "cron.d": (),
-    "systemd": ("mojo-asgi.service", "mojosec.service",
-                "mojosec-audit-health.service", "mojosec-audit-health.timer"),
+    "systemd": ("mojo-asgi.service", "mojosec.service"),
 }
 
 

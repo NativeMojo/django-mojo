@@ -404,9 +404,12 @@ def test_phone_send_success_over_wire(opts):
         assert_true(row.is_test,
                     "a +1555 send in the test project must be flagged is_test")
         stored = User.objects.get(pk=opts.sms_user_id).get_secret("phone_verify_code")
-        assert_true(stored is not None and stored in row.body,
-                    f"the persisted SMS body must contain the stored code "
-                    f"{stored!r}, got body {row.body!r}")
+        assert_true(stored is not None,
+                    "the send must store a phone verification code")
+        assert_true(stored not in row.body,
+                    f"the persisted SMS body must not contain the stored code, got body {row.body!r}")
+        assert_eq(row.body, "Your verification code is: [redacted]",
+                  f"the persisted SMS body must be the redacted template, got {row.body!r}")
     finally:
         opts.client.logout()
         _clear_phone_verify_secrets(opts)

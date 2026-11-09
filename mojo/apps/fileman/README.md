@@ -370,7 +370,16 @@ download_url = backend.get_url(file_obj.file_path, expires_in=3600)
 ### Check File Access Permissions
 
 ```python
-# Check if user can access file
+# Authorize a request: the framework predicate checks the file's own group.
+# It rebinds request.group to the file's group, so restore it afterwards.
+original_group = request.group
+try:
+    allowed = File.rest_check_permission(request, "VIEW_PERMS", file_obj)
+finally:
+    request.group = original_group
+
+# can_be_accessed_by trusts the group passed in and passes any public file;
+# do not use it to authorize a request.
 can_access = file_obj.can_be_accessed_by(user=request.user, group=user_group)
 
 # Public files

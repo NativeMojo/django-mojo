@@ -1,6 +1,7 @@
-# Approvals — the boundary in front of every mutating assistant tool
+# Approvals — per-action confirmation for assistant tools
 
-`mutates=True` is no longer a hint to the model. It is an enforced contract:
+For the built-in Assistant and proposal-only MCP grants, `mutates=True` is an
+enforced contract:
 
 > A mutating tool cannot run until **this exact operator** approves **this exact
 > argument set**, over an **authenticated transport**, within a **bounded
@@ -9,13 +10,16 @@
 A tool call from the model is a *proposal*. The server stores a `PendingAction`,
 renders an operator-facing card, and returns a tool result that says plainly that
 nothing happened. Only `approvals.resolve()` — driven by a human decision arriving
-over REST or the WebSocket — ever calls a mutating handler.
+over REST or the WebSocket — calls the handler for that proposal.
 
-The one exception is state the caller alone owns: a tool may declare an
+A tool for state the caller alone owns can declare an
 `owner_state` predicate, and when it returns exactly `True` for a call — a
 user-tier memory, a user-tier skill the caller owns — the handler runs directly
-and files the same success event. Shared state (global and group tiers, anyone
-else's skill) still takes the card. See
+and files the same success event. Shared memories/skills (global and group tiers,
+anyone else's skill) always take the card. A
+separately consented MCP execution grant can also execute eligible ordinary
+mutations directly, with live authority checks; protected tools keep the card.
+See [MCP delegation](#mcp-delegation-and-protected-tools) and
 [Declaring a mutating tool](#declaring-a-mutating-tool).
 
 - Service: `mojo/apps/assistant/services/approvals.py`
@@ -31,17 +35,18 @@ else's skill) still takes the card. See
 (`run_assistant` and `run_assistant_ws`) funnel through, including parallel tool
 batches and parallel plan steps. Putting the branch there — after the permission
 check, before `_call_handler` — means there is exactly one place a mutating tool
-could reach its handler, and it does not.
+could reach its handler, with explicit owner-state and delegated branches.
 
 Consequences worth stating explicitly, because they are the point:
 
-- **No opt-out FLAG exists — only a per-call predicate.** A per-tool exemption is
+- **No per-tool opt-out flag exists.** A per-tool exemption is
   the first thing a future tool author would reach for, and it would undo the
-  guarantee. The one exemption that exists, `owner_state`, is not a flag: it is a
+  guarantee. `owner_state` is not a flag: it is a
   `(params, user) -> bool` evaluated against the arguments of *this* call, and
   only a literal `True` opens the direct path. False, a truthy non-bool, a
-  raising predicate, or no predicate all propose the card. The success event
-  fires either way.
+  raising predicate, or no predicate never grant an owner-state exemption.
+  A declared owner-state predicate that does not return `True` keeps the card,
+  including under MCP delegation. The success event fires for either execution path.
   `write_memory`, `delete_memory` and the three skill writers declare it for the
   caller's OWN tier only — a user-tier memory, a user-tier skill the caller owns.
   Global and group memories, global and group skills, and anyone else's skill
@@ -57,23 +62,52 @@ Consequences worth stating explicitly, because they are the point:
   `agent.VALID_BLOCK_TYPES`, so a model-emitted ` ```assistant_block ` claiming
   `type: "approval"` is dropped by `_validate_block()`.
 
-### MCP is a third PROPOSING transport, and it can never resolve
+### MCP delegation and protected tools
 
 `mojo/apps/assistant/mcp/server.py` dispatches a remote AI client's `tools/call`
-through the same `_execute_tool`, so a mutating tool called over MCP produces an
+through the same `_execute_tool`. With a plain `mcp` grant, a shared mutation
+produces an
 ordinary `PendingAction` — bound to the calling operator, in that grant's own
 conversation — and returns `approvals.proposal_result()` as the tool result.
-Nothing runs. That is the whole reason remote access is safe to offer: the
-external model proposes, and the operator still resolves in the Admin.
+Nothing runs until the operator resolves it in Admin.
 
-**Resolution stays REST/WS with an interactive session.** An MCP access token's
-audience is the MCP path and nothing else, so presenting it at
+`mcp mcp:execute` is separate connection consent, offered only at the exact MCP
+resource through PKCE or device authorization. Existing `mcp` and `api` grants
+are unchanged. Before an eligible ordinary mutation, `mcp_execution.decision`
+re-reads the live user/client/grant, checks token and conversation binding,
+permission, `authorize`, superuser and infrastructure requirements, and
+normalizes arguments. It returns the actual handler result and records an
+unsuppressed attempt before dispatch plus a correlated success/failure outcome,
+identifying the user, grant, client, conversation, server-owned invocation id and
+redacted argument fingerprint. An attempt-reporter exception prevents dispatch;
+a returned error or exception can follow partial effects. It creates no
+approval record or synthetic human decision, and does not turn the request into
+an interactive session. Direct calls have no pending-action dedupe or single-use
+claim; reconcile uncertain outcomes before retrying.
+
+Per-action approval is retained for any tool with `fresh_auth_seconds`, `preview`
+or `requires_operator_approval=True`, and any handler declaring `approval` or
+`**kwargs` (or an uninspectable signature). A configured freshness declaration
+remains protected even when its current window resolves to zero. Extension
+authors use `requires_operator_approval=True` when the operation requires human
+confirmation beyond connection consent. Generic model saves and deletes
+(`save_model_instance`, `delete_model_instance`) retain explicit per-action
+approval: saves can invoke dynamic fresh-auth hooks/actions, and deletion keeps
+its human-confirmation contract. An `owner_state` predicate that
+does not return exactly `True` also remains a proposal; delegation cannot widen
+shared/global memory or skill writes.
+
+**Resolution is not offered over MCP.** An exact MCP resource token's audience
+is the MCP path and nothing else, so presenting it at
 `POST /api/assistant/action` is a 401 at the framework chokepoint — there is no
 code path that lets a remote client approve its own proposal. The client can
 only *watch*, through the two MCP-only read tools (`list_pending_actions`,
 `get_pending_action`), and only for cards it proposed itself: both are scoped to
 its conversation, because `render_block` ships redacted `args` and up to 8 KB of
-`preview`. See [MCP transport](mcp.md).
+`preview`. The tool result names the installation, its `approval_url` and the
+Admin conversation-history location so the client can explain the hand-off and
+stop. The separate `api` grant's existing REST reach is unchanged. See
+[MCP transport](mcp.md).
 
 **Accepted property: a remote client can seed the operator's own chat context.**
 A client holding an `mcp` grant writes the operator's `user`-tier memories and
@@ -154,7 +188,7 @@ yesterday's rules.
 
 ## Declaring a mutating tool
 
-All seven arguments are accepted by both `register_tool()` and `@tool(...)`.
+These arguments are accepted by both `register_tool()` and `@tool(...)`.
 
 | Argument | Meaning |
 |---|---|
@@ -163,19 +197,20 @@ All seven arguments are accepted by both `register_tool()` and `@tool(...)`.
 | `requires_managed_infrastructure=False` | Tool is hidden from the model and refused at proposal and execution when `infrastructure.is_external()`. |
 | `summarize=None` | `(params, user) -> str`. One operator-facing sentence for the card. Must contain no secret. Default: `"<tool_name> will run with the arguments below."` |
 | `preview=None` | `(params, user) -> {"summary": str, "details": <json>, "revision": str}`. Read-only. See below. |
-| `owner_state=None` | `(params, user) -> bool`. When it returns **exactly `True`** for a call, the handler runs directly on every transport and the `assistant:tool:<name>` event still fires; anything else proposes a card. Only for state the caller alone owns. See below. |
+| `requires_operator_approval=False` | Keep a genuine per-action confirmation even under MCP execution consent. Does not grant permission or waive any other gate. |
+| `owner_state=None` | `(params, user) -> bool`. When it returns **exactly `True`** for a call, the handler runs directly on every transport and the success event still fires; anything else proposes a card, including under MCP delegation. Only for state the caller alone owns. See below. |
 | `authorize=None` | `(user) -> bool`, allowed on **any** tool, mutating or not. See below. |
 
-**Passing any of the first six without `mutates=True` raises `ValueError` at
+**Passing a mutating-only argument without `mutates=True` raises `ValueError` at
 import time.** A misdeclared tool breaks the import rather than degrading
 silently. `fresh_auth_seconds` must be a positive `int`, `"configured"`, or
 `None`;
 `summarize`/`preview`/`owner_state`/`authorize` must be callable or `None`.
 
 **`owner_state` cannot be combined with `fresh_auth_seconds`,
-`requires_managed_infrastructure` or `preview`** — also a `ValueError` at import.
-Those three are enforced only inside `propose()`/`resolve()`, so a tool that
-declared one and then skipped the card would silently lose the gate.
+`requires_managed_infrastructure`, `preview` or `requires_operator_approval`** —
+also a `ValueError` at import. A tool that declared one and then skipped the card
+through owner-state would silently lose the gate.
 `requires_superuser` and `authorize` stay legal: both run in `user_can_use_tool`,
 before the branch that can exempt a call. `summarize` stays legal too — it only
 ever renders a card.
@@ -459,8 +494,10 @@ told so.
 | `assistant:approval:denied` | 6 | resolution refused — filed with `report_event_suppressed`, key `<user_id>:<failure_code>` plus a budget, because the unknown-id case has no bound tool and an id-guessing loop must not mint unbounded keys |
 | `assistant:approval:failed` | 6 | handler raised or returned an error |
 | `assistant:tool:<name>` | 5 | success — **unchanged**, so existing RuleSets keep firing |
+| `assistant:execution:<name>` | 5 | delegated attempt before handler dispatch, unsuppressed |
+| `assistant:execution_failed:<name>` | 5 / 6 | delegated returned error / exception, unsuppressed; outcome may be partial |
 
-Each lifecycle point also writes one `logit.Log` row:
+Each approval lifecycle point also writes one `logit.Log` row:
 `kind="assistant:approval:<state>"`, `model_name="assistant.PendingAction"`,
 `model_id=<pk>`, with a payload carrying `conversation_id`, `tool`,
 `args_fingerprint` and `decision`. The message carries argument **names** only.
@@ -495,7 +532,10 @@ and deletes terminal rows older than 30 days. Correctness never depends on it;
 
 ## Built-in mutating tools and their Admin twins
 
-60 built-in tools declare `mutates=True`. Every one is gated. The extra gates
+Built-in tools declaring `mutates=True` take the approval path in chat and
+proposal-only MCP mode, apart from owner-state calls. Explicit MCP execution
+consent opens eligible ordinary tools; the protected contracts above remain
+proposals. The extra gates
 mirror whatever the visual Admin endpoint that performs the same operation
 requires — so a tool is never easier to reach through chat than through the
 portal.
@@ -511,7 +551,8 @@ portal.
 | `cancel_job`, `retry_job`, `run_job`, `run_scheduled_task_now` | jobs | `manage_jobs` | `jobs/rest/control.py` — `requires_global_perms('manage_jobs','jobs')` | — |
 | `create_scheduled_task`, `update_scheduled_task`, `delete_scheduled_task` | jobs | `manage_jobs` | `jobs/rest/scheduled_task.py` — RestMeta CRUD | — |
 | `create_group`, `invite_to_group` | groups | `manage_groups` | `account/rest/group.py` — RestMeta CRUD + `group/member/invite` | — |
-| `save_model_instance`, `delete_model_instance`, `export_data` | models | `view_admin` | generic RestMeta CRUD; no single twin | — |
+| `save_model_instance`, `delete_model_instance` | models | `view_admin` | generic RestMeta save/delete; dynamic save-action freshness and deletion confirmation remain protected | `requires_operator_approval=True` |
+| `export_data` | models | `view_admin` | generic export; no single twin | — |
 | `write_memory`, `delete_memory` | memory | `assistant` | `assistant/rest/memory.py` — `requires_perms('assistant')` | `owner_state` (`tier == "user"`) |
 | `save_skill` | skills | `assistant` | `assistant/rest/assistant.py` skill CRUD | `owner_state` (`tier == "user"`) |
 | `update_skill`, `delete_skill` | skills | `assistant` | `assistant/rest/assistant.py` skill CRUD | `owner_state` (the caller's own user-tier skill) |

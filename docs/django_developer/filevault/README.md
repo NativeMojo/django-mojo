@@ -94,7 +94,7 @@ When a client sends a multipart form POST with a `document` file field, the flow
 
 1. `MojoModel.on_rest_save_file("document", file)` is called
 2. It sees that the `document` field's related model (`VaultFile`) has `create_from_file`
-3. `VaultFile.create_from_file(file, name, request=...)` encrypts and uploads the file
+3. `VaultFile.create_from_file(file, name, request=...)` encrypts and uploads the file. When it takes the group from the request, a person must be an active member of that group or hold a global `manage_vault`/`files`/`manage_files` grant (`vault.require_group_writer`), else 403 before anything is saved
 4. The resulting `VaultFile` instance is assigned to `contract.document`
 
 The client can also pass `password`, `description`, and `metadata` in the same request body, and they'll be forwarded to the vault.
@@ -266,7 +266,7 @@ For password-protected files, add a password verification step before unlock, an
 | POST | `/api/filevault/file` | Create vault file record (metadata only) |
 | PUT | `/api/filevault/file/<id>` | Update vault file metadata |
 | DELETE | `/api/filevault/file/<id>` | Delete vault file (also removes S3 object) |
-| POST | `/api/filevault/file/upload` | Upload and encrypt a file |
+| POST | `/api/filevault/file/upload` | Upload and encrypt a file (group members or global vault/files holders) |
 | POST | `/api/filevault/file/<id>/unlock` | Generate a signed download token |
 | POST | `/api/filevault/file/<id>/password` | Verify password without downloading |
 | GET | `/api/filevault/file/download/<token>` | Download decrypted file (public, token-secured) |
@@ -277,7 +277,7 @@ For password-protected files, add a password verification step before unlock, an
 |--------|----------|-------------|
 | GET | `/api/filevault/data` | List vault data records |
 | GET | `/api/filevault/data/<id>` | Get vault data metadata |
-| POST | `/api/filevault/data/store` | Encrypt and store JSON data |
+| POST | `/api/filevault/data/store` | Encrypt and store JSON data (group members or global vault/files holders) |
 | POST | `/api/filevault/data/<id>/retrieve` | Decrypt and return stored data |
 
 ---

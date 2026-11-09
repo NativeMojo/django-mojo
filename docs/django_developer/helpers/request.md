@@ -103,6 +103,17 @@ if is_request_user(request):
     ...  # a real User is driving this request
 ```
 
+### `is_signed_in_user(user)`
+The same test for a user object you already hold: it needs the
+`is_request_user` marker **and** `is_authenticated`. Use it instead of a
+hand-rolled `hasattr(user, "is_request_user")`. The signed-out user
+(`ANONYMOUS_USER`) is an `objict`, which answers `hasattr` for any name, so the
+marker alone called a signed-out visitor a real user (#9125); it is refused
+now. The system stand-in user from `system_request()` is signed in by
+construction and still passes, because server code relies on it passing its
+own permission checks. Neither stand-in is a model instance, so never assign
+one to a `ForeignKey` because this returned `True`.
+
 ## Request Data Parsing
 
 `request.DATA` is already set by `MojoMiddleware`. In rare cases where you need to parse outside of middleware:

@@ -32,6 +32,23 @@ PROVIDER_AUTH_ERROR = (
     "policy route and its selected credential.")
 
 
+def _llm_error_message(code, retry_after=None):
+    """Plain message for a failed LLM call; never includes provider text."""
+    if code == "provider_authentication":
+        return PROVIDER_AUTH_ERROR
+    if code == "provider_rate_limited":
+        return "LLM API rate limit reached. Please wait a moment and try again."
+    if code == "request_exceeds_budget":
+        return ("This conversation is too large for the configured LLM token "
+                "budget. Start a new conversation or ask a shorter question.")
+    if code == "budget_exhausted":
+        if retry_after:
+            return ("The LLM token budget is used up for now. "
+                    f"Try again in {retry_after} seconds.")
+        return "The LLM token budget is used up for now. Try again later."
+    return f"Assistant request failed safely ({code})."
+
+
 def _build_request_meta(request):
     """Slim objict with the HTTP context tools may need.
 
@@ -714,12 +731,12 @@ def _get_system_prompt(user=None, group=None):
         return base
 
     try:
-        from mojo.apps.assistant.services.memory import build_memory_prompt, is_global_empty
+        from mojo.apps.assistant.services.memory import build_memory_prompt, is_global_empty, _can_write_tier
         memory_section = build_memory_prompt(user, group=group) if user else ""
         if memory_section:
             return base + "\n\n" + memory_section
-        # If global memory is empty, inject onboarding
-        if user and is_global_empty():
+        # If global memory is empty, inject onboarding — only for users who can write it
+        if user and is_global_empty() and _can_write_tier("global", user):
             return base + ONBOARDING_PROMPT
     except Exception:
         logger.exception("Failed to build memory prompt")
@@ -932,7 +949,7 @@ def _owner_state_decision(tool_entry, tool_input, user):
 
 def _execute_tool(
         block, registry, user, conversation, tools, on_event, tool_calls_made,
-        request_meta=None, _reporter=None, pending_actions=None):
+        request_meta=None, _reporter=None, pending_actions=None, execution_grant=None):
     """
     Execute a single tool call with permission gate, approval gate, meta-tool
     handling, and event reporting.
@@ -940,8 +957,9 @@ def _execute_tool(
     This is the ONLY place a tool handler is dispatched from an agent turn, and
     both ``run_assistant`` and ``run_assistant_ws`` funnel through it — which is
     why the approval gate lives here and nowhere else. A ``mutates=True`` tool
-    never reaches ``_call_handler`` from here unless its ``owner_state``
-    predicate returns exactly True for this call; otherwise it produces a
+    reaches ``_call_handler`` directly only when its ``owner_state`` predicate
+    returns exactly True or a separately consented MCP execution grant passes
+    the live delegation checks for an ordinary tool. Otherwise it produces a
     ``PendingAction`` the operator must resolve (see ``services/approvals.py``).
     No prompt wording can route around this. An owner-state call is dispatched on
     ``normalize_args``-validated arguments, so skipping the card never means
@@ -963,6 +981,15 @@ def _execute_tool(
     owner = (_owner_state_decision(tool_entry, tool_input, user) if allowed
              else objict.objict(exempt=False, args=tool_input, error=None))
     call_args = owner.args
+    delegated = objict.objict(exempt=False, error=None, audit="")
+    if (allowed and tool_entry.get("mutates") and not owner.exempt
+            and execution_grant is not None):
+        from mojo.apps.assistant.services import mcp_execution
+        delegated = mcp_execution.decision(
+            tool_entry, tool_input, user, execution_grant, conversation, request_meta)
+        if delegated.exempt:
+            call_args = delegated.args
+            user = delegated.user
 
     if not tool_entry:
         tool_result = {"error": f"Unknown tool: {tool_name}"}
@@ -998,9 +1025,11 @@ def _execute_tool(
         tool_result = owner.error
         logger.info("Refused arguments for owner-state tool %s: %s",
                     tool_name, tool_result["error"])
-    elif tool_entry.get("mutates") and not owner.exempt:
-        # THE GATE. A mutating tool call is a PROPOSAL, never an execution
-        # (owner-state calls branch to the direct path below).
+    elif delegated.error is not None:
+        tool_result = delegated.error
+    elif tool_entry.get("mutates") and not (owner.exempt or delegated.exempt):
+        # Built-in Assistant, old grants and protected tools remain proposals.
+        # Only validated owner-state/delegated calls reach the direct path.
         try:
             tool_result, approval_block = approvals.propose(
                 user, conversation, tool_name, tool_entry, tool_input,
@@ -1030,7 +1059,12 @@ def _execute_tool(
     else:
         # `call_args` is the raw input for every read-only and meta tool, and the
         # normalized input for an owner-state tool taking the direct path.
+        delegated_correlation = ""
         try:
+            if delegated.exempt:
+                delegated_correlation = mcp_execution.record_attempt(
+                    tool_name, call_args, user, conversation, delegated.audit,
+                    reporter=_reporter)
             if on_event:
                 on_event("tool_call", {
                     "tool": tool_name,
@@ -1056,19 +1090,38 @@ def _execute_tool(
             )
             if tool_entry.get("mutates") and not (
                     isinstance(tool_result, dict) and "error" in tool_result):
-                # Owner-state direct execution. Same category, level and shape
+                # Owner-state or delegated execution. Same category and level
                 # as the event approvals.resolve() files for an approved
                 # execution, so RuleSets keyed on it keep firing. Every other
                 # mutating tool still reports from approvals.resolve().
                 _report_event(
                     f"assistant:tool:{tool_name}", 5, f"Assistant tool: {tool_name}",
-                    f"User {user.email} (id={user.pk}) executed owner-state mutating "
+                    f"User {user.email} (id={user.pk}) executed "
+                    f"{delegated_correlation or 'owner-state'} mutating "
                     f"tool '{tool_name}' directly. conv={conversation.pk}",
                     user=user, model_name="account.User", model_id=user.pk,
                     _reporter=_reporter)
+            elif delegated_correlation:
+                _report_event(
+                    f"assistant:execution_failed:{tool_name}", 5,
+                    f"Delegated MCP failure: {tool_name}",
+                    f"User {user.email} (id={user.pk}) returned an error for "
+                    f"'{tool_name}' under {delegated_correlation}. "
+                    f"conv={conversation.pk}. Outcome potentially partial; "
+                    "inspect current state before retrying.",
+                    user=user, _reporter=_reporter)
         except Exception as exc:
             logger.exception("Tool %s failed", tool_name)
             tool_result = {"error": f"Tool '{tool_name}' encountered an internal error."}
+            if delegated_correlation:
+                _report_event(
+                    f"assistant:execution_failed:{tool_name}", 6,
+                    f"Delegated MCP exception: {tool_name}",
+                    f"User {user.email} (id={user.pk}) raised an exception for "
+                    f"'{tool_name}' under {delegated_correlation}. "
+                    f"conv={conversation.pk}. Outcome potentially partial; "
+                    "inspect current state before retrying.",
+                    user=user, _reporter=_reporter)
             try:
                 input_keys = list(call_args.keys()) if isinstance(call_args, dict) else []
             except Exception:
@@ -1372,7 +1425,7 @@ def run_assistant(
 
     from mojo.apps.account.services import llm_safety
     route = llm_safety.route_state("assistant")
-    if not route["ready"]:
+    if not route.get("can_invoke", route["ready"]):
         return {"error": route.get("error") or "credential_missing",
                 "status_code": 503}
 
@@ -1606,22 +1659,20 @@ def run_assistant(
     except Exception as e:
         logger.exception("Assistant agent failed for user %s", user.pk)
         code = getattr(e, "code", "assistant_internal_error")
-        if code == "provider_authentication":
-            error = PROVIDER_AUTH_ERROR
-        elif code == "provider_rate_limited":
-            error = "LLM API rate limit reached. Please wait a moment and try again."
-        else:
-            error = f"Assistant request failed safely ({code})."
+        retry_after = getattr(e, "retry_after", None)
         _report_event(
             "assistant:error:api", 7, "Assistant LLM request failed",
             f"code={code} user_id={user.pk} conversation_id={conversation.pk}",
             user=user)
-        return {
-            "error": error,
+        result = {
+            "error": _llm_error_message(code, retry_after),
             "conversation_id": conversation.pk,
             "pending_actions": pending_actions,
             "status_code": 500,
         }
+        if retry_after:
+            result["retry_after"] = retry_after
+        return result
 
 
 def run_assistant_ws(user, message, conversation_id, on_event=None,
@@ -1644,7 +1695,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
 
     from mojo.apps.account.services import llm_safety
     route = llm_safety.route_state("assistant")
-    if not route["ready"]:
+    if not route.get("can_invoke", route["ready"]):
         return {"error": route.get("error") or "credential_missing"}
 
     try:
@@ -1814,11 +1865,9 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
             "assistant:error:api", 7, "Assistant WS LLM request failed",
             f"code={code} user_id={user.pk} conversation_id={conversation.pk}",
             user=user)
-        if code == "provider_authentication":
-            return {"error": PROVIDER_AUTH_ERROR,
-                    "pending_actions": pending_actions}
-        if code == "provider_rate_limited":
-            return {"error": "LLM API rate limit reached. Please wait a moment and try again.",
-                    "pending_actions": pending_actions}
-        return {"error": f"Assistant request failed safely ({code}).",
-                "pending_actions": pending_actions}
+        retry_after = getattr(e, "retry_after", None)
+        result = {"error": _llm_error_message(code, retry_after),
+                  "pending_actions": pending_actions}
+        if retry_after:
+            result["retry_after"] = retry_after
+        return result

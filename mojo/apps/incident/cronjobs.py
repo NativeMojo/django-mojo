@@ -208,8 +208,22 @@ def check_traffic_concentration(force=False, verbose=False, now=None):
 @schedule(minutes="*/3")
 def check_system_health(force=False, verbose=False, now=None):
     if not HEALTH_MONITORING_ENABLED:
-        return
-    _ensure_health_defaults()
-    jobs.publish(
-        func="mojo.apps.incident.asyncjobs.check_system_health",
-        payload={})
+        # Enrollment already authorizes quiet snapshot collection. It does
+        # not enable legacy incident rules, notifications or resource fanout.
+        import time
+        from mojo.apps.account.services.health_snapshot import resolve_identity, SnapshotError
+        try:
+            resolve_identity(deadline=time.monotonic()+1)
+        except SnapshotError:
+            return
+    else:
+        _ensure_health_defaults()
+    from mojo.apps.incident import reporter
+    from mojo.apps.incident.services import health_liveness
+    result = health_liveness.collect(now=now,
+        report_fn=reporter.report_event if HEALTH_MONITORING_ENABLED else None)
+    # Only CPU/memory/disk fanout remains in Jobman. Liveness above has
+    # already run, including when no scheduler or runner can execute a job.
+    if HEALTH_MONITORING_ENABLED and result["runners"].get("live_count", 0):
+        jobs.publish(func="mojo.apps.incident.asyncjobs.check_system_health", payload={})
+    return result

@@ -63,21 +63,35 @@ PROBE_SECONDS="${PROBE_SECONDS:-30}"
 APP_USER="${APP_USER:-ec2-user}"
 WEB_USER="${WEB_USER:-www}"
 ASGI_WORKERS="${ASGI_WORKERS:-4}"
-NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
-SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
-CRON_ETC="${CRON_ETC:-/etc/cron.d}"
 if [ "$(id -u)" = "0" ]; then
     # Root never accepts an ambient interpreter path. `-E -P` below removes
     # application environment and project cwd from the import search path.
     JOBMAN_SYSTEM_PYTHON="/usr/bin/python3"
     JOBMAN_SUDO="/usr/bin/sudo"
+    # The /etc locations are test seams; root writes to and, since the
+    # stale-cron sweep, deletes from them, so root reads the fixed paths only.
+    NGINX_ETC="/etc/nginx"
+    SYSTEMD_ETC="/etc/systemd/system"
+    CRON_ETC="/etc/cron.d"
 else
     JOBMAN_SYSTEM_PYTHON="${JOBMAN_SYSTEM_PYTHON:-/usr/bin/python3}"
     JOBMAN_SUDO="${JOBMAN_SUDO:-/usr/bin/sudo}"
+    NGINX_ETC="${NGINX_ETC:-/etc/nginx}"
+    SYSTEMD_ETC="${SYSTEMD_ETC:-/etc/systemd/system}"
+    CRON_ETC="${CRON_ETC:-/etc/cron.d}"
 fi
 
 log() { echo "[$(date '+%H:%M:%S')] $*"; }
 die() { echo "[$(date '+%H:%M:%S')] FATAL: $*" >&2; exit 1; }
+
+# The stale-cron sweep matches $PROJ_PATH as an exact ERE literal followed by a
+# boundary, so the path must be one that can be matched: no trailing slash
+# (render strips it too), never the root directory, no newline.
+PROJ_PATH="${PROJ_PATH%/}"
+case "$PROJ_PATH" in
+    ""|*[$'\n']*) die "invalid project path" ;;
+esac
+PROJ_PATH_RE="$(printf '%s' "$PROJ_PATH" | sed 's/[][\.*^$+?(){}|]/\\&/g')"
 valid_node_type() { [[ "$1" =~ ^[a-z][a-z0-9_-]{0,31}$ ]]; }
 safe_name() { [[ "$1" =~ ^[A-Za-z0-9][A-Za-z0-9._@-]{0,127}$ ]]; }
 
@@ -138,7 +152,11 @@ safe_destination() {
 record_file() {
     local destination="$1" key
     safe_destination "$destination" || die "unsupported deployment destination: $destination"
-    grep -Fq "$(printf '\t%s' "$destination")" "$FILES" 2>/dev/null && return 0
+    # Whole-field match: a substring match would let a recorded
+    # /etc/cron.d/5_reports_v2 hide /etc/cron.d/5_reports, which the sweep
+    # would then delete without a snapshot.
+    awk -F'\t' -v d="$destination" '$2 == d { found = 1 } END { exit !found }' \
+        "$FILES" 2>/dev/null && return 0
     key="$(printf '%s' "$destination" | cksum | awk '{print $1}')"
     printf '%s\t%s\n' "$key" "$destination" >> "$FILES"
     if [ -e "$destination" ] || [ -L "$destination" ]; then
@@ -246,6 +264,50 @@ remove_retired() {
         record_file "$destination"
         rm -f -- "$destination"
     done < "$PROJ_PATH/aws/node_retired.conf"
+}
+
+# Retire every /etc/cron.d file that names this project but is not in the
+# rendered contract — the rule check_node's cron section grades against. The
+# match is the exact path followed by `/`, whitespace or end of line, so
+# /opt/api never sweeps /opt/api2 or /opt/api-admin. Only regular files are
+# swept (symlinks are skipped), and each one is snapshotted first so
+# --rollback-candidate / --activate-previous put it back. This is what
+# removes the retired per-minute 2_mojo_cron entry on an existing node. It
+# runs after the API probe, right before the scheduler is retired, so on the
+# first adopting deploy the old crond tick keeps covering the minutes the
+# activation itself takes.
+sweep_stale_cron() {
+    local path name
+    for path in "$CRON_ETC"/*; do
+        [ -f "$path" ] && [ ! -L "$path" ] || continue
+        name="$(basename "$path")"
+        safe_name "$name" || continue
+        [ -f "$PROJ_PATH/var/deploy/cron.d/$name" ] && continue
+        grep -qE -- "$PROJ_PATH_RE([/[:space:]]|$)" "$path" || continue
+        record_file "$path"
+        rm -f -- "$path"
+        # Name only: a cron line can carry an inline credential, and this log
+        # line lands in the deploy journal.
+        log "WARNING: retired stale project cron $name (snapshotted for rollback)"
+    done
+}
+
+# The scheduler now ticks @schedule functions, so the release is not live
+# until the running (pre-upgrade) scheduler is replaced. jobman start never
+# replaces a live process, so stop it here — after the API probe accepted the
+# candidate — and let the next 3_mojo_jobs tick start the new one; its start
+# tick covers the minute it comes up in. The engine is left alone: on the
+# platform-deploy path it is the process running this deploy, and the
+# detached recycle retires both afterwards. A survivor is an alarm
+# (aws-check cron.heartbeat_missing), not a failed release.
+retire_scheduler() {
+    set_phase scheduler_retire
+    if (cd / && "$JOBMAN_SYSTEM_PYTHON" -E -P -m mojo.deploy.jobman \
+            --root "$PROJ_PATH" stop scheduler --grace 2); then
+        log "Retired the running scheduler; the jobs cron starts its replacement"
+    else
+        log "WARNING: scheduler did not stop; the cron tick resumes only after it is restarted (aws-check cron.heartbeat_missing will report it)"
+    fi
 }
 
 prepare_jobman_cron_restart() {
@@ -363,6 +425,8 @@ activate_api() {
     set_phase api_probe
     log "Probing API"
     probe_api || die "candidate API did not return HTTP 200"
+    sweep_stale_cron
+    retire_scheduler
 }
 
 activate_previous_api() {

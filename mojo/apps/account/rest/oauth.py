@@ -273,7 +273,26 @@ def _lookup_known_user(provider_name, profile):
     ).select_related("user").first()
     if conn:
         return conn.user
+    # An email the provider did not verify must not borrow another account's
+    # bypass_geofence (profiles without the key keep today's lookup).
+    if not profile.get("email_verified", True):
+        return None
     return User.lookup(email=profile["email"])
+
+
+def _fallback_username(provider_name, uid):
+    """A free username from the provider identity, e.g. ``ms-<first 12 of oid>``.
+
+    Used when an account is created without an email. Grows the oid slice on
+    collision and finally uses the whole identity.
+    """
+    prefix = {"microsoft": "ms"}.get(provider_name, provider_name)
+    ident = "".join(ch for ch in uid.split(":")[-1].lower() if ch.isalnum())
+    for size in (12, 16, 24, len(ident)):
+        candidate = f"{prefix}-{ident[:size]}"
+        if not User.objects.filter(username=candidate).exists():
+            return candidate
+    return f"{prefix}-{uid}".lower()
 
 
 def _find_or_create_user(provider_name, profile, state_data=None, request=None):
@@ -284,6 +303,14 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
     3. Neither                   -> create User + OAuthConnection, return (user, conn, True)
 
     Path 3 raises PermissionDeniedException if OAUTH_ALLOW_REGISTRATION is False.
+
+    A profile carrying ``email_verified`` (Microsoft) trusts the email only
+    when it is True. An unverified email that matches a User is refused before
+    any side effect; an unverified or missing email with no match creates the
+    user WITHOUT claiming the address (email=None, kept on the connection),
+    so magic link or a password reset to that address can never reach an
+    account whose provider identity belongs to someone else. Profiles without
+    the key (Google, Apple, GitHub) keep the rule above unchanged.
 
     When path 3 runs and state_data carries an active group_uuid, the new user
     is also added to that group as a GroupMember and USER_REGISTERED_HANDLER
@@ -296,6 +323,7 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
     uid = profile["uid"]
     email = profile["email"]
     display_name = profile.get("display_name")
+    email_trusted = profile.get("email_verified", True)
 
     # 1. Existing connection
     conn = OAuthConnection.objects.filter(
@@ -306,6 +334,9 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
 
     # 2. Existing user by email — OAuth has confirmed ownership of this address
     user = User.lookup(email=email)
+    if user and not email_trusted:
+        raise merrors.PermissionDeniedException(
+            "An account already uses this email. Sign in with your existing method.", 403, 403)
     if user and not user.is_email_verified:
         user.is_email_verified = True
         user.save(update_fields=["is_email_verified", "modified"])
@@ -326,11 +357,17 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
                 if provider_name not in (_reg_cfg.registration.methods or []):
                     raise merrors.PermissionDeniedException(
                         "Account registration via this provider is not permitted")
-        user = User(email=email)
-        user.username = user.generate_username_from_email()
+        if email_trusted:
+            user = User(email=email)
+            user.username = user.generate_username_from_email()
+        else:
+            user = User(email=None)
+            user.username = user.generate_username_from_names(
+                profile.get("given_name") or "", profile.get("family_name") or "",
+                fallback=_fallback_username(provider_name, uid))
         if display_name:
             user.display_name = display_name
-        user.is_email_verified = True
+        user.is_email_verified = bool(email_trusted)
         user.set_unusable_password()
         user.save()
         logit.info("oauth", f"Created new user {user.username} via {provider_name}")
@@ -402,6 +439,22 @@ def _vetted_bounce_scheme(frontend_uri, allowlisted):
 # Begin
 # -----------------------------------------------------------------
 
+def _uses_state_data(svc):
+    """True when the provider overrides begin_state (PKCE / nonce providers)."""
+    from mojo.apps.account.services.oauth.base import OAuthProvider
+    return type(svc).begin_state is not OAuthProvider.begin_state
+
+
+def _call_provider(svc, method, state_data, *args, **kwargs):
+    """Call a provider method, passing state_data only to providers that use it.
+
+    Google, Apple and GitHub keep exactly today's call shape.
+    """
+    if _uses_state_data(svc):
+        kwargs["state_data"] = state_data
+    return getattr(svc, method)(*args, **kwargs)
+
+
 @md.GET("auth/oauth/<str:provider>/begin")
 @md.public_endpoint()
 @md.requires_geofence(scope="auth")
@@ -432,8 +485,17 @@ def on_oauth_begin(request, provider):
     # toggleable login method (google/apple/github); providers outside
     # LOGIN_METHODS are never gated here.
     if provider in auth_config.LOGIN_METHODS:
-        auth_config.assert_login_method(
-            provider, auth_config.resolve_group_from_request(request))
+        group = auth_config.resolve_group_from_request(request)
+        auth_config.assert_login_method(provider, group)
+        # With no group, a provider that is off by default (microsoft) is
+        # still refused unless the system config switches it on: that switch
+        # is the admin's only way to turn it off. Default-on providers stay
+        # ungated here, as before.
+        if group is None and provider not in auth_config.DEFAULT_LOGIN_METHODS:
+            methods = auth_config.resolve_auth_config(None, request=request).login.methods or []
+            if provider not in methods:
+                raise merrors.PermissionDeniedException(
+                    "This sign-in method is not available for this app", 403, 403)
 
     # frontend_uri = where the browser lands after the callback bounce
     custom_frontend_uri = request.DATA.get("redirect_uri", "")
@@ -486,8 +548,14 @@ def on_oauth_begin(request, provider):
     if group_uuid:
         state_extra["group_uuid"] = group_uuid
 
+    # Per-sign-in secrets (PKCE verifier, nonce) stay in the server-side state
+    # record; only the opaque state key reaches the browser.
+    if _uses_state_data(svc):
+        for key, value in svc.begin_state().items():
+            state_extra.setdefault(key, value)
     state = svc.create_state(extra=state_extra)
-    auth_url = svc.get_auth_url(state=state, redirect_uri=callback_uri)
+    auth_url = _call_provider(svc, "get_auth_url", state_extra,
+                              state=state, redirect_uri=callback_uri)
 
     return JsonResponse({
         "status": True,
@@ -675,8 +743,9 @@ def on_oauth_complete(request, provider):
     redirect_uri = state_data.get("redirect_uri") or _get_redirect_uri(request, provider)
 
     try:
-        tokens = svc.exchange_code(code=code, redirect_uri=redirect_uri)
-        profile = svc.get_profile(tokens)
+        tokens = _call_provider(svc, "exchange_code", state_data,
+                                code=code, redirect_uri=redirect_uri)
+        profile = _call_provider(svc, "get_profile", state_data, tokens)
     except ValueError as exc:
         raise merrors.PermissionDeniedException(str(exc), 401, 401)
 

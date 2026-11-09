@@ -278,6 +278,18 @@ def www_dir(generation, vhost_id):
     return f"{generation_dir(generation)}/www/{int(vhost_id)}"
 
 
+# How many earlier releases a site keeps servable for already-open tabs. The
+# installer stages `www/<id>.prev1` and `.prev2` links; the renderer names
+# them by fixed suffix so the text stays a pure function of its inputs.
+FALLBACK_SLOTS = (1, 2)
+
+
+def www_fallback_dir(generation, vhost_id, n):
+    if n not in FALLBACK_SLOTS:
+        raise me.ValueException(f"edge renderer refused fallback slot {n!r}")
+    return f"{www_dir(generation, vhost_id)}.prev{n}"
+
+
 def current_link():
     return f"{edge_root()}/current"
 
@@ -533,21 +545,65 @@ def _mojosec_receiver_location(upstream, knobs):
     return "\n".join(blocks)
 
 
-# Hashed build assets — safe to cache forever because their names change when
-# their bytes do. This location declares add_header, so it re-emits the
+# Static file caching. Pages (`location /`) are `no-cache`: a browser must
+# recheck them, which costs a 304. A file whose name carries a build hash is
+# safe to cache forever because its name changes when its bytes do; anything
+# else is `no-cache`. Each location declares add_header, so each re-emits the
 # security header block (nginx add_header inheritance is replace-not-merge).
+#
+# A static file missing from the current release is answered from the
+# releases this node served before (`www/<id>.prev1`, `.prev2`), so a tab
+# opened before a deploy can still load its lazy chunks. Pages never fall
+# back.
 _ASSET_EXTENSIONS = (
     r"css|js|mjs|map|ico|svg|gif|png|jpe?g|webp|avif|woff2?|ttf|otf|eot")
 
+# `name-XXXXXXXX.ext` / `name.XXXXXXXX.ext`: 8+ URL-safe base64 characters
+# (Rollup's hash alphabet) with at least one digit or upper-case letter, so
+# `vendor-libraries.js` is not mistaken for a hash. Case-sensitive on
+# purpose: under `~*` the lookahead would match lower case too.
+HASHED_ASSET_RE = (
+    r"^/.+[.-](?=[A-Za-z0-9_-]*[0-9A-Z])[A-Za-z0-9_-]{8,}"
+    rf"\.({_ASSET_EXTENSIONS})$")
 
-def _asset_cache_location():
+_IMMUTABLE = ('        add_header Cache-Control '
+              '"public, max-age=31536000, immutable" always;')
+_NO_CACHE = '        add_header Cache-Control "no-cache" always;'
+
+
+def _fallback_chain(name, cache_line, generation, vhost):
+    """Named locations `@<name>_prev1` -> `@<name>_prev2` -> 404."""
+    out = []
+    for n in FALLBACK_SLOTS:
+        nxt = (f"@{name}_prev{n + 1}" if n + 1 in FALLBACK_SLOTS
+               else "=404")
+        out.extend([
+            "",
+            f"    location @{name}_prev{n} {{",
+            f"        root {www_fallback_dir(generation, vhost.pk, n)};",
+            _header_block("        "),
+            cache_line,
+            f"        try_files $uri {nxt};",
+            "    }",
+        ])
+    return out
+
+
+def _static_locations(generation, vhost):
     return "\n".join([
+        f'    location ~ "{HASHED_ASSET_RE}" {{',
+        _header_block("        "),
+        _IMMUTABLE,
+        "        try_files $uri @edge_hashed_prev1;",
+        "    }",
+        *_fallback_chain("edge_hashed", _IMMUTABLE, generation, vhost),
+        "",
         f"    location ~* \\.({_ASSET_EXTENSIONS})$ {{",
         _header_block("        "),
-        "        add_header Cache-Control "
-        "\"public, max-age=31536000, immutable\" always;",
-        "        try_files $uri =404;",
+        _NO_CACHE,
+        "        try_files $uri @edge_static_prev1;",
         "    }",
+        *_fallback_chain("edge_static", _NO_CACHE, generation, vhost),
     ])
 
 
@@ -611,9 +667,11 @@ def _site_body(vhost, generation):
             "",
         ])
     parts.extend([
-        _asset_cache_location(),
+        _static_locations(generation, vhost),
         "",
         "    location / {",
+        _header_block("        "),
+        _NO_CACHE,
         fallback,
         "    }",
     ])

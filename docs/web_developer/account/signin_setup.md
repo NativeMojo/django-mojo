@@ -1,6 +1,6 @@
 # Sign-in Setup API (Admin)
 
-Configure the platform login page and its Google / Apple / GitHub sign-in.
+Configure the platform login page and its Google / Apple / GitHub / Microsoft sign-in.
 Requires global `manage_settings` or `admin` (superusers pass). API keys and
 group tokens are refused.
 
@@ -27,7 +27,8 @@ group tokens are refused.
          "configured": true, "source": "admin", "value": "ABCDE12345", "hint": null},
         {"key": "APPLE_PRIVATE_KEY", "label": "Private key (.p8)", "secret": true, "multiline": true,
          "configured": false, "source": "none", "value": null, "hint": null}
-      ]
+      ],
+      "notices": []
     }]
   }
 }
@@ -36,6 +37,25 @@ group tokens are refused.
 `auth` is the public view of the resolved system login config. `source` is
 `admin` (saved here), `deployment` (server config file) or `none`. Secret
 fields never carry `value`.
+
+`notices` is a list of `{"tone": "warning" | "danger" | "info", "text": "..."}`
+to show on the card; it is `[]` for every provider but Microsoft, whose card
+warns about the client secret's expiry:
+
+```json
+{"name": "microsoft", "label": "Microsoft", "enabled": false, "ready": false,
+ "missing": ["Client secret value"],
+ "fields": [
+   {"key": "MICROSOFT_CLIENT_ID", "label": "Application (client) ID", ...},
+   {"key": "MICROSOFT_CLIENT_SECRET", "label": "Client secret value", "secret": true, ...},
+   {"key": "MICROSOFT_TENANT", "label": "Tenant", ...},
+   {"key": "MICROSOFT_CLIENT_SECRET_EXPIRES", "label": "Secret expires on (YYYY-MM-DD)", ...}
+ ],
+ "notices": [{"tone": "info", "text": "Record the secret's expiry date so this page can warn you"}]}
+```
+
+`missing` lists only required fields: the Microsoft tenant (empty means
+`common`) and the expiry date are optional.
 
 ## POST /api/account/admin/signin
 
@@ -59,5 +79,30 @@ login and registration.
 ```
 
 Errors are `400 {"status": false, "error": "..."}` — for example removing
-`password` from `login.methods`, an Apple key that is not a `.p8`, or a key
-that does not belong to the provider. Changes apply on the next page load.
+`password` from `login.methods`, an Apple key that is not a `.p8`, a Microsoft
+client ID that is not a GUID, a Microsoft tenant that is not `common`,
+`organizations`, `consumers` or a GUID, an expiry that is not `YYYY-MM-DD`, or
+a key that does not belong to the provider. Changes apply on the next page load.
+
+## Callback URLs and domains
+
+Each provider card carries `callback_urls`, one per origin the login page is
+likely served from, and `domains`, their host names. `callback_url` is the
+first of them. Register **every** URL in `callback_urls` with the provider:
+sign-in from an origin whose callback is not registered fails at the
+provider. The URL is always the backend callback,
+`https://<login host>/api/auth/oauth/<provider>/callback`, never your own page.
+Apple's Services ID also wants each entry of `domains`.
+
+Saved credentials apply to the next sign-in; there is no deploy or restart.
+
+## What the on/off switch does
+
+`enabled` shows or hides the provider's button on the hosted login page: it
+edits the system `login.methods` and `registration.methods`. It is not an API
+restriction. A direct `GET /api/auth/oauth/<provider>/begin` that names no
+group still starts sign-in for Google, Apple or GitHub while they are switched
+off. A request that names a group is checked against that group's resolved
+methods, which inherit the switch unless the group sets its own. Microsoft,
+which is off by default, is refused at `/begin` without a group until it is
+switched on.

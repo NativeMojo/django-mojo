@@ -857,6 +857,49 @@ def test_registration_is_gated_on_proof(opts):
         f"the converge leg published {published.call_count} deploy jobs, not one"
 
 
+@th.django_unit_test("a clone that quarantined itself fails as clone_refused, never runner_missing (#9315)")
+def test_powered_off_clone_is_reported_as_refused(opts):
+    from mojo.apps.aws.services import capacity
+    from mojo.helpers.aws import ec2 as ec2_helper
+    from mojo.helpers.aws import elbv2 as elbv2_helper
+
+    source = {"instance_id": NODE_A, "name": "mojo-api-a", "state": "running",
+              "instance_type": "m6i.large", "subnet_id": "subnet-0aaa",
+              "security_group_ids": ["sg-0aaa"],
+              "iam_instance_profile_arn": PROFILE_ARN}
+    # Seen running by the launch wait, powered off by the time the runner
+    # wait gives up; and powered off before the launch wait ever saw it run.
+    for states in (["running", "stopped"], ["stopping"]):
+        record = _add_record(capacity)
+        seen = iter(states)
+
+        def _facts(value, **kw):
+            if value == NODE_A:
+                return source
+            return dict(source, instance_id=NEW_NODE, state=next(seen, states[-1]))
+
+        with mock.patch.object(capacity, "_sleep"), \
+                mock.patch.object(capacity, "_write_operation", side_effect=lambda r: r), \
+                mock.patch.object(capacity, "_persist",
+                                  side_effect=lambda record, **kw: record), \
+                mock.patch.object(capacity, "invalidate"), \
+                mock.patch.object(capacity, "_release"), \
+                mock.patch.object(capacity, "_await_runner", return_value=False), \
+                mock.patch.object(ec2_helper, "instance_facts", side_effect=_facts), \
+                mock.patch.object(ec2_helper, "find_reusable_image",
+                                  return_value={"image_id": "ami-0new", "age_days": 2}), \
+                mock.patch.object(ec2_helper, "launch_clone", return_value=NEW_NODE), \
+                mock.patch.object(elbv2_helper, "register_target") as registered:
+            capacity._run_add_node(record)
+
+        assert record["state"] == "failed" and record["error_code"] == "clone_refused", \
+            f"states {states}: a self-quarantined clone was not reported as refused: {record}"
+        assert "var/profile" in record["message"] and "Terminate" in record["message"], \
+            f"states {states}: the failure does not say what to fix: {record['message']}"
+        assert registered.call_count == 0, \
+            f"states {states}: a refused clone was registered behind the balancer"
+
+
 @th.django_unit_test("a proven node is registered, and the topology is EXTENDED")
 def test_proof_registers_and_extends_topology(opts):
     from mojo.apps.account.services import system_settings

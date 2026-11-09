@@ -6,6 +6,11 @@ class AppConfig(BaseAppConfig):
     name = 'mojo.apps.incident'
 
     def ready(self):
+        from django.db.models.signals import post_migrate
+        from mojo.apps.incident.services import mojosec_defaults
+        post_migrate.connect(
+            mojosec_defaults.after_migrate, sender=self,
+            dispatch_uid="incident.mojosec_defaults.v1")
         # Inert everywhere except a runner daemon: registration happens in
         # every Django process, but hooks fire only from JobEngine.start().
         # The handler reconciles this node's kernel firewall on boot, which

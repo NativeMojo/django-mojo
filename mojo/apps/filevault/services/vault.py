@@ -43,6 +43,28 @@ def _unwrap_ekey(wrapped_ekey, file_uuid):
         raise
 
 
+def require_group_writer(request, group):
+    """Refuse a person who may not write vault rows in `group`.
+
+    A person needs active membership of the group (parents walked) or a
+    global `manage_vault`, `files` or `manage_files` grant. An ApiKey or group
+    token is left as before: the dispatcher already confines it to its own
+    groups.
+    """
+    from mojo import errors as me
+    from mojo.helpers.request import is_request_user, restricted_identity
+
+    if restricted_identity(request) is not None:
+        return
+    actor = getattr(request, "user", None)
+    if actor is None or not is_request_user(request):
+        raise me.PermissionDeniedException("Active group membership is required")
+    if actor.has_permission(["manage_vault", "files", "manage_files"]):
+        return
+    if group.get_member_for_user(actor, check_parents=True) is None:
+        raise me.PermissionDeniedException("Active group membership is required")
+
+
 # ---------------------------------------------------------------------------
 # File operations
 # ---------------------------------------------------------------------------

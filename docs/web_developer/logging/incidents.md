@@ -12,6 +12,8 @@
 |---|---|---|
 | GET | `/api/incident/event` | List security events |
 | GET | `/api/incident/event/<id>` | Get event |
+| POST | `/api/incident/event` | Submit a security event (signed in; see [Reporting Events](reporting_events.md)) |
+| POST | `/api/incident/event/client` | Browser crash/debug report (no sign-in; see [Reporting Events](reporting_events.md)) |
 | GET | `/api/incident/incident` | List incidents |
 | GET | `/api/incident/incident/<id>` | Get incident |
 | POST | `/api/incident/incident/<id>` | Update incident |

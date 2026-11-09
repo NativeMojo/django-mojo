@@ -104,8 +104,9 @@ if any process survives. Because the handoff is detached after node evidence is
 recorded, that failure is an operational alarm rather than a rollback of the
 activated release. The installed every-minute cron entry starts both
 replacements in a fresh audit session; starting them from the retiring engine
-would inherit its session and prevent MojoSec from proving JobEngine-originated
-firewall work. `code` nodes receive no generic restart. A custom profile owns
+would inherit its session, so the sensor would raise each of the new engine's
+broker sudos as an ordinary `auth.sudo_command` instead of recording it as
+expected automation. `code` nodes receive no generic restart. A custom profile owns
 its service restart; if that restart kills the caller, the replacement engine
 consumes the transaction's bounded outcome and exact local identity to finalize
 the same deployment UUID.
@@ -216,3 +217,18 @@ canary's box-direct channel because that engine had no free worker — or
 `started`, meaning the node took the job and the update script is what went
 quiet. Recovery for every failed attempt is the Admin **Retry same SHA**
 action once the cause is cleared.
+
+## Shared ACME hub upgrade boundary
+
+Hub installation state stays separate from generic Settings. An interactive
+superuser enables sharing in the existing Portal after the ordinary deployment
+is converged. The action checks the deployment UUID, app SHA, framework and
+complete fresh frozen-roster proofs under exclusive PostgreSQL admission.
+
+Deployment publication, node delivery and final spawn retain their ordinary
+stale-deployment, runner and cohort checks. Framework resolution refuses versions
+below the one recorded at sharing enablement. The normal packaged updater,
+rollback and capacity controls remain in use; no retained root entry, process
+attestation or separate operator service is required. Manual package downgrade
+or an unmanaged older writer bypasses the normal policy and is unsupported.
+See [the rollout guide](../dnsman/HubUpgrade.md).

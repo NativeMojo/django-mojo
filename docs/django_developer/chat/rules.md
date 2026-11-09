@@ -228,13 +228,18 @@ When `disappearing_ttl > 0`:
   the [deletion hook](services.md#deletion-hook) with the ids it removed
 - Flagged messages are exempt (evidence preservation)
 - [`visible_messages`](services.md#read-bounds--join_bounded_messages-vs-visible_messages)
-  filters expired rows out of `GET /api/chat/room/messages` and
-  `GET /api/chat/unread` as a fallback, so a badge and the history agree even
-  before the sweep runs
+  filters expired rows out of `GET /api/chat/room/messages` and legacy
+  `GET /api/chat/unread` as a fallback, so the legacy badge and history agree
+  even before the sweep runs
+
+Opt-in cursor counts track arrival positions: expiry, flagging and ordinary
+deletion retain count slots. A trusted server current-head acknowledgment can
+clear an invisible tail. Rare maintenance may reconcile deleted slots while
+preserving extant hidden unread identities. See [Cursor Read State](read_state.md).
 
 The TTL is **not** applied when resolving a read or react target — see
-[`read_state`](services.md#read_state--resolving-a-read-acknowledgement) for why
-applying it there would discard the read instead of clamping it.
+[`read_state`](services.md#read_state--resolving-a-read-acknowledgement) for the
+legacy clamp and cursor exact-target contracts.
 
 Call `run_cleanup()` from a periodic task (cron job). Nothing in this repo is
 wired to call it, so a deployment that does not schedule it keeps expired rows

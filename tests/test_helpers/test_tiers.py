@@ -467,6 +467,37 @@ def test_budget_per_package(opts):
                for v in result), f"per-package time_budget must flag, got {result}"
 
 
+@th.unit_test("tiers: a time-only core failure reads failed, apart from test failures")
+def test_budget_outcome_in_report(opts):
+    from testit import runner
+    core = objict(selected_preset="core")
+
+    time_only = runner._record_budget_outcome(
+        core, {"status": "passed", "reasons": []}, True)
+    assert time_only["status"] == "failed", \
+        f"a run that exits 1 on time must not read passed, got {time_only}"
+    assert time_only["reasons"] == [], \
+        f"the budget must not become a verdict reason (#4761), got {time_only['reasons']}"
+    budget = time_only["budget"]
+    assert budget["enforced"] and budget["failed"] and budget["time_only"], \
+        f"a time-only core failure must say so, got {budget}"
+    assert isinstance(budget["scale"], float), f"the scale used must be recorded, got {budget}"
+
+    both = runner._record_budget_outcome(
+        core, {"status": "failed", "reasons": [{"code": "tests_failed"}]}, True)
+    assert both["budget"]["failed"] and not both["budget"]["time_only"], \
+        f"a run with failing tests is not time-only, got {both['budget']}"
+
+    clean = runner._record_budget_outcome(core, {"status": "passed", "reasons": []}, False)
+    assert clean["status"] == "passed" and not clean["budget"]["failed"], \
+        f"a run within budget keeps passed, got {clean}"
+
+    framework = runner._record_budget_outcome(
+        objict(selected_preset="framework"), {"status": "passed", "reasons": []}, False)
+    assert framework["status"] == "passed" and not framework["budget"]["enforced"], \
+        f"framework budgets only warn and are not enforced, got {framework}"
+
+
 # ---------------------------------------------------------------------------
 # Consumer production_prefixes extend the shared-surface grammar (maestro #2793)
 # ---------------------------------------------------------------------------

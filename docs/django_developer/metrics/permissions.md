@@ -255,7 +255,7 @@ The contract:
 When the account is `user-<id>`:
 
 1. **System-level**: Does the user have `view_metrics` or `metrics` globally?
-2. **Identity check**: Is the requesting user the same as the user ID in the account?
+2. **Identity check**: Is the requesting user a real person (`is_request_user`) with the user ID in the account? A reference-mode API key is never that person, even when its own id equals the account's; an override key's member and a group token's user are (#9556).
 
 Users can always see their own metrics. Admins with `metrics` can see anyone's.
 

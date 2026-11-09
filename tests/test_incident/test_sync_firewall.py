@@ -7,9 +7,9 @@ from unittest import mock
 from testit import helpers as th
 
 
-TEST_PERM = "198.51.100.50"
-TEST_TTL = "198.51.100.52"
-TEST_ABSENT = "198.51.100.53"
+TEST_PERM = "203.0.116.50"
+TEST_TTL = "203.0.116.52"
+TEST_ABSENT = "203.0.116.53"
 LOCAL_INCARNATION = {"host": "test-host", "started": "test-start"}
 LOCAL_TARGET = {**LOCAL_INCARNATION, "runner_id": "test-runner"}
 

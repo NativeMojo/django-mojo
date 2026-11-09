@@ -22,26 +22,54 @@ MODERATION_CHOICES = [
 ]
 
 
+class MessageQuerySet(models.QuerySet):
+    def create(self, **kwargs):
+        self._for_write = True
+        backend = kwargs.pop("read_backend", None)
+        from ..services.read_state import _UNSET
+        handler = kwargs.pop("read_handler", _UNSET)
+        publisher = kwargs.pop("read_publisher", None)
+        obj = self.model(**kwargs)
+        save_args = {"force_insert": True, "using": self.db, "read_backend": backend}
+        save_args["read_handler"] = handler
+        save_args["read_publisher"] = publisher
+        obj.save(**save_args)
+        return obj
+
+    def bulk_create(self, objs, **kwargs):
+        from ..services.backend import read_backend
+        if read_backend() == "cursor":
+            raise ValueError("Cursor messages require individual save; use chat maintenance for imports")
+        return super().bulk_create(objs, **kwargs)
+
+    def update(self, **kwargs):
+        from ..services.backend import read_backend
+        if read_backend() == "cursor" and {"room", "room_id", "room_seq"}.intersection(kwargs):
+            raise ValueError("Message identity changes require chat maintenance")
+        return super().update(**kwargs)
+
+
 class ChatMessage(models.Model, MojoModel):
+    objects = MessageQuerySet.as_manager()
     class RestMeta:
         VIEW_PERMS = ["comms", "manage_chat"]
         # user pinned so comms admins can't spoof message authorship.
         NO_SAVE_FIELDS = [
             "user", "is_flagged", "flagged_by", "flagged_at",
             "moderation_decision", "moderation_reasons", "moderation_score",
-            "client_key", "metadata",
+            "client_key", "metadata", "room_seq",
         ]
         GRAPHS = {
             "list": {
                 "fields": [
-                    "id", "room", "user", "body", "kind", "metadata",
+                    "id", "room", "room_seq", "user", "body", "kind", "metadata",
                     "moderation_decision", "moderation_reasons", "moderation_score",
                     "edited_at", "created",
                 ],
             },
             "default": {
                 "fields": [
-                    "id", "room", "user", "body", "kind",
+                    "id", "room", "room_seq", "user", "body", "kind",
                     "moderation_decision", "moderation_reasons", "moderation_score",
                     "edited_at",
                     "is_flagged", "flagged_by", "flagged_at",
@@ -80,6 +108,8 @@ class ChatMessage(models.Model, MojoModel):
     # (room, user) by the partial unique constraint below; no separate
     # index -- that constraint leads with room, user and serves the lookup.
     client_key = models.CharField(max_length=64, null=True, blank=True)
+    room_seq = models.PositiveBigIntegerField(
+        null=True, default=None, db_default=None, editable=False)
     created = models.DateTimeField(auto_now_add=True, editable=False, db_index=True)
 
     class Meta:
@@ -90,6 +120,9 @@ class ChatMessage(models.Model, MojoModel):
         ]
         constraints = [
             models.UniqueConstraint(
+                fields=["room", "room_seq"], condition=models.Q(room_seq__isnull=False),
+                name="chat_message_room_seq_uniq"),
+            models.UniqueConstraint(
                 fields=["room", "user", "client_key"],
                 condition=models.Q(client_key__isnull=False),
                 name="chat_message_client_key_uniq"),
@@ -97,3 +130,13 @@ class ChatMessage(models.Model, MojoModel):
 
     def __str__(self):
         return f"Message {self.pk} in {self.room_id}"
+
+    def save(self, *args, read_backend=None, **kwargs):
+        from ..services.backend import read_backend as resolve_backend
+        backend = resolve_backend(read_backend)
+        if backend == "cursor":
+            from ..services.sequences import save_message
+            return save_message(self, args, kwargs)
+        kwargs.pop("read_handler", None)
+        kwargs.pop("read_publisher", None)
+        return super().save(*args, **kwargs)

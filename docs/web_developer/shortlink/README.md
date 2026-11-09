@@ -14,7 +14,7 @@ The shortlink app provides URL shortening with automatic rich previews for messa
 | GET | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Get short link details |
 | POST/PUT | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Update short link |
 | DELETE | `/api/shortlink/link/<id>` | `manage_shortlinks` or owner | Delete short link |
-| POST | `/api/shortlink/link/create` | authenticated | Create a short URL string via helper endpoint |
+| POST | `/api/shortlink/link/create` | authenticated; member of the active `group` (or global `manage_shortlinks`); a `file` also needs the file's share permission; plus one of `SHORTLINK_CREATE_PERMS` when the deployment sets it | Create a short URL string via helper endpoint |
 | GET | `/api/shortlink/history` | `manage_shortlinks` | List click history |
 | GET | `/api/shortlink/history/<id>` | `manage_shortlinks` | Get click history record |
 
@@ -166,6 +166,24 @@ Requires authentication (`@md.requires_auth()`) and reads input from `request.DA
 
 Use this endpoint when you want a ready-to-use short URL string in one call.
 
+The link is stored in the active group (`group` in the request, or an API
+key's own group). You must belong to that group, directly or through a parent
+group, or hold `manage_shortlinks` as a global permission; otherwise the
+request is refused with 403 `"Permission denied"` and no link is created. An
+API key can use its own group or a group below it (a child, at any depth); any
+other group is refused. A request with no group is not affected.
+
+A deployment may also require a permission to use this route, with the
+server setting `SHORTLINK_CREATE_PERMS` (for example `["manage_shortlinks"]`).
+It is opt-in and read from the server's settings file only, never the
+database. Unset (the default), nothing changes: any signed-in caller may
+create a link. When set, the caller needs one of the listed permissions: as a
+global permission, as a member permission in the request's group or a parent
+group, or, for an API key, in the key's own permissions. Otherwise the request
+gets the same 403 `"Permission denied"` and no link is created. `admin` does
+not imply `manage_shortlinks`; the deployment lists every permission it
+accepts.
+
 ```json
 {
   "url": "https://example.com/page",
@@ -192,6 +210,24 @@ You can create file-based shortlinks by passing a `file` id:
   "resolve_file": true
 }
 ```
+
+A file-backed link is a public share of that file, so the caller needs the
+file's share permission, checked in the **file's own group**: the file's owner,
+or `manage_files` or `files` (as a member permission in that group, or as a
+global permission). `view_fileman` alone is not enough. An API key is held to
+its own group (or a group below it) and its own permissions. The link itself is stored in the
+caller's group, not the file's.
+
+A missing, malformed, inactive or not-shareable `file` is refused with one
+answer, so it does not reveal whether the file exists:
+
+```json
+{"status": false, "code": 403, "error": "Permission denied", "error_status": 403}
+```
+
+(HTTP 403. Before this check the route answered HTTP 200 with
+`{"status": false, "error": "Invalid file id"}` for a bad id.) URL-only links
+are unchanged: any signed-in caller can create one.
 
 **Response**
 

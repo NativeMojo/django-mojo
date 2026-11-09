@@ -431,3 +431,17 @@ def test_analysis_flag_survives_retry_and_clears_on_final_outcome(opts):
     incident.refresh_from_db()
     assert terminal.state == "terminal" and incident.metadata.get("analysis_in_progress") is False, \
         f"terminal failure must clear the analysis flag: {terminal.state}/{incident.metadata}"
+
+
+@th.django_unit_test()
+def test_budget_codes_split_permanent_and_retryable(opts):
+    from mojo.apps.incident.services import llm_dispatch
+
+    assert llm_dispatch._is_transient("request_exceeds_budget") is False, \
+        "a call that can never fit the budget must not be retried"
+    assert llm_dispatch._safe_code("request_exceeds_budget") == "request_exceeds_budget", \
+        "the permanent budget code must survive as a safe code, not provider_failed"
+    assert llm_dispatch._is_transient("budget_exhausted") is True, \
+        "a used-up budget must stay retryable"
+    assert llm_dispatch._retry_delay("budget_exhausted", 3600, 1) == 3600, \
+        "a used-up budget must wait for the window the guard named"

@@ -1,5 +1,5 @@
 """System sign-in setup for the Admin: the hosted login page's look and feel
-and the Google / Apple / GitHub sign-in providers, on one page.
+and the Google / Apple / GitHub / Microsoft sign-in providers, on one page.
 
 Admins are trusted here. Anyone holding global ``manage_settings`` or
 ``admin`` (or a superuser) can change the system login page and paste
@@ -13,9 +13,12 @@ never returned; reads report only whether a value is set, where it comes from
 and a short hint.
 """
 
+import datetime
+import uuid
 from urllib.parse import urlsplit
 
 from django.db import transaction
+from django.utils import timezone
 
 from mojo import errors as merrors
 from mojo.helpers import logit
@@ -60,7 +63,33 @@ PROVIDERS = {
             ("GITHUB_CLIENT_SECRET", "Client secret", True, False),
         ),
     },
+    "microsoft": {
+        "label": "Microsoft",
+        "console_url": "https://entra.microsoft.com/",
+        "help": ("In the Microsoft Entra admin center open App registrations and "
+                 "register an app: choose the account types to allow, add a Web "
+                 "platform redirect URI for each callback URL below, add the "
+                 "optional ID-token claims email and xms_edov (Token configuration), "
+                 "then create a client secret (6 months is a good lifetime). Paste "
+                 "the Application (client) ID and the secret's Value, not its ID. "
+                 "Tenant: common for personal and work or school accounts, "
+                 "organizations for work or school only, consumers for personal "
+                 "only, or your tenant ID for one organization."),
+        "fields": (
+            ("MICROSOFT_CLIENT_ID", "Application (client) ID", False, False),
+            ("MICROSOFT_CLIENT_SECRET", "Client secret value", True, False),
+            ("MICROSOFT_TENANT", "Tenant", False, False),
+            ("MICROSOFT_CLIENT_SECRET_EXPIRES", "Secret expires on (YYYY-MM-DD)", False, False),
+        ),
+    },
 }
+
+# Fields a provider is ready without: an empty tenant reads as "common", and
+# the secret's expiry date only feeds the card's notices.
+OPTIONAL_FIELDS = {"MICROSOFT_TENANT", "MICROSOFT_CLIENT_SECRET_EXPIRES"}
+
+# Warn this many days before a recorded client secret expires.
+SECRET_EXPIRY_WARN_DAYS = 30
 
 
 def require_editor(actor):
@@ -152,19 +181,45 @@ def provider_state(name, request=None, resolved=None):
     login_methods = (resolved.get("login") or {}).get("methods") or []
     callbacks = [f"{origin}/api/auth/oauth/{name}/callback"
                  for origin in login_origins(request)]
+    required = [field for field in fields if field["key"] not in OPTIONAL_FIELDS]
     return {
         "name": name,
         "label": spec["label"],
         "enabled": name in login_methods,
-        "ready": all(field["configured"] for field in fields),
-        "missing": [field["label"] for field in fields if not field["configured"]],
+        "ready": all(field["configured"] for field in required),
+        "missing": [field["label"] for field in required if not field["configured"]],
         "callback_url": callbacks[0] if callbacks else None,
         "callback_urls": callbacks,
         "domains": [urlsplit(url).hostname for url in callbacks],
         "console_url": spec["console_url"],
         "help": spec["help"],
         "fields": fields,
+        "notices": _notices(name, fields),
     }
+
+
+def _notices(name, fields):
+    """Card notices: [{tone: warning|danger|info, text}]. Only Microsoft has any."""
+    if name != "microsoft":
+        return []
+    field = next(f for f in fields if f["key"] == "MICROSOFT_CLIENT_SECRET_EXPIRES")
+    if not field["configured"]:
+        return [{"tone": "info",
+                 "text": "Record the secret's expiry date so this page can warn you"}]
+    try:
+        expires = datetime.date.fromisoformat(field["value"].strip())
+    except (ValueError, AttributeError):
+        return [{"tone": "info",
+                 "text": "Record the secret's expiry date so this page can warn you"}]
+    days = (expires - timezone.now().date()).days
+    if days < 0:
+        return [{"tone": "danger",
+                 "text": f"Client secret expired on {expires.isoformat()}; "
+                         "Microsoft sign-in fails until it is replaced"}]
+    if days < SECRET_EXPIRY_WARN_DAYS:
+        return [{"tone": "warning",
+                 "text": f"Client secret expires on {expires.isoformat()}"}]
+    return []
 
 
 def state(request=None):
@@ -198,6 +253,24 @@ def _clean(key, value):
         raise merrors.ValueException(
             "The Apple private key should be the whole .p8 file, "
             "including the BEGIN/END PRIVATE KEY lines")
+    if value and key == "MICROSOFT_CLIENT_ID":
+        try:
+            value = str(uuid.UUID(value))
+        except ValueError:
+            raise merrors.ValueException(
+                "The Application (client) ID should be a GUID, like "
+                "00000000-0000-0000-0000-000000000000")
+    if value and key == "MICROSOFT_TENANT":
+        from mojo.apps.account.services.oauth.microsoft import normalize_tenant
+        try:
+            value = normalize_tenant(value)
+        except ValueError as exc:
+            raise merrors.ValueException(str(exc))
+    if value and key == "MICROSOFT_CLIENT_SECRET_EXPIRES":
+        try:
+            value = datetime.date.fromisoformat(value).isoformat()
+        except ValueError:
+            raise merrors.ValueException("The expiry date should be YYYY-MM-DD")
     return value
 
 

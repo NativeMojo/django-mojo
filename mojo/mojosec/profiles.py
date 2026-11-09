@@ -120,17 +120,43 @@ def _al2023_web_v2():
 AL2023_WEB_V2 = _al2023_web_v2()
 
 
-def _al2023_content_v1():
-    """Return the AL2023 host graph plus one enrollment-substituted content tier.
+def _al2023_web_v3():
+    """Return the AL2023 graph with the system site tree on the six-hour tier.
+
+    ``/usr/local/lib`` holds ~28k root-pip site-packages files on a django-mojo
+    node; walking and hashing-checking them every 60 seconds was most of the
+    fast tier's cost (maestro #9769). It moves to the slow tier beside the
+    system binaries. The ``rpm`` tier then skips any discovered site root a
+    host tier already walks, so the same tree is never walked twice; that flag
+    is profile data on purpose, so an un-migrated v2 node's rpm baseline never
+    shifts underneath it.
+    """
+    profile = json.loads(json.dumps(AL2023_WEB_V2))
+    profile["name"] = "al2023-web-v3"
+    profile["version"] = 3
+    profile["tiers"]["fast"]["targets"] = [
+        target for target in profile["tiers"]["fast"]["targets"]
+        if target["path"] != "/usr/local/lib"
+    ]
+    profile["tiers"]["slow"]["targets"].append(_target("/usr/local/lib", True, True))
+    profile["rpm"]["skip_host_tier_roots"] = True
+    return profile
+
+
+AL2023_WEB_V3 = _al2023_web_v3()
+
+
+def _with_content_tier(source, name, version):
+    """Return a host graph plus one enrollment-substituted content tier.
 
     The content tier's targets are deliberately empty here and stay empty in
     every digest computation: WHICH tenant trees a node publishes is node
     identity, not profile identity, so two content nodes with different roots
     share one profile digest and are one fleet-wide policy.
     """
-    profile = json.loads(json.dumps(AL2023_WEB_V2))
-    profile["name"] = "al2023-content-v1"
-    profile["version"] = 1
+    profile = json.loads(json.dumps(source))
+    profile["name"] = name
+    profile["version"] = version
     profile["content_roots_required"] = True
     profile["tiers"][CONTENT_TIER] = {
         "interval_seconds": 300,
@@ -148,13 +174,16 @@ def _al2023_content_v1():
     return profile
 
 
-AL2023_CONTENT_V1 = _al2023_content_v1()
+AL2023_CONTENT_V1 = _with_content_tier(AL2023_WEB_V2, "al2023-content-v1", 1)
+AL2023_CONTENT_V2 = _with_content_tier(AL2023_WEB_V3, "al2023-content-v2", 2)
 
 
 PROFILES = {
     AL2023_WEB_V1["name"]: AL2023_WEB_V1,
     AL2023_WEB_V2["name"]: AL2023_WEB_V2,
+    AL2023_WEB_V3["name"]: AL2023_WEB_V3,
     AL2023_CONTENT_V1["name"]: AL2023_CONTENT_V1,
+    AL2023_CONTENT_V2["name"]: AL2023_CONTENT_V2,
 }
 
 

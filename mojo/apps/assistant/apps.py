@@ -165,7 +165,10 @@ def register_oauth_resources(mcp_path, api_root, enabled, registry=None):
     """
     from mojo.apps.account.services import oauth_server
 
-    oauth_server.register_resource(mcp_path, ["mcp"], enabled, registry=registry)
+    from mojo.apps.account.services.oauth_server.resources import MCP_EXECUTE_SCOPE
+
+    oauth_server.register_resource(
+        mcp_path, ["mcp", MCP_EXECUTE_SCOPE], enabled, registry=registry)
     if not str(api_root or "").strip("/"):
         logit.error(
             "assistant.mcp",

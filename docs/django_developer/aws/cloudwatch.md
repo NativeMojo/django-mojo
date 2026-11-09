@@ -534,3 +534,74 @@ Run in your Django project environment:
 ```
 python manage.py testit test_aws.cloudwatch
 ```
+
+## Missing-preserving diagnostic evidence
+
+Existing `fetch()`, `get_metric()` and chart zero-fill behavior are unchanged.
+Diagnostic consumers must use the additive
+`CloudWatchHelper.get_metric_evidence(namespace, metric_name, dimensions,
+dt_start, dt_end, period_seconds=3600, stat="Average", client=None)` or
+`get_node_evidence(instance_id, namespace="CWAgent", mounts=None, hours=24,
+deadline=None, client=None, now=None)`.
+
+Evidence preserves missing buckets as null and real zero observations as zero.
+It reports actual timestamps, units, exact namespace/full dimension sets,
+aggregation/window, sample count, last sample and min/max/average calculated
+only from real samples. No datapoints, missing agent series, ambiguous dimension
+sets, stale last samples and provider failures remain explicit outcomes.
+
+Node evidence reads CPU in `AWS/EC2` by exact `InstanceId`. Memory and disk use
+the selected provision environment's resolved `metrics_namespace`, or `CWAgent`
+when no override exists. Bounded `ListMetrics` discovery requires exact instance
+and metric; disk selection additionally requires the exact relevant mount path.
+The full published dimensions (including device/filesystem/image dimensions)
+are retained. Multiple distinct matching sets are `series_ambiguous`.
+
+The node reader allows four discovery pages, twelve provider operations and at
+most eight mount series. Valid windows from one through 168 hours use whole-hour
+periods selected against the actual UTC-aligned bucket count (at most sixty),
+including odd-hour boundaries. CPU/memory/disk trends remain historical evidence,
+not instantaneous utilization. IAM additionally needs `cloudwatch:ListMetrics`.
+No CWAgent installation or configuration change is performed.
+
+Collection shares an absolute deadline and creates private one-attempt clients
+with remaining connect/read limits. Explicit helper credentials/session identity
+are preserved. A supplied refreshable session, or configured credential transport
+that has an independently unbounded process/SSO/STS/container refresh path,
+returns `credential_transport_unsupported` on this bounded path. Normal chart
+credential-chain behavior is unchanged. Callers may inject a bounded client for
+deterministic evidence tests.
+
+The bounded path also controls DNS and transfer lifetime. Private SDK pool
+classes dial numeric addresses from `dns.probe.resolve_addresses(hostname,
+deadline)` while retaining the original TLS SNI and signed Host. The resolver
+shares its A/AAAA budget and returns at most sixteen numeric addresses. A
+`DeadlineSocket` guards every send/receive, including buffered HTTP file reads,
+so a slow response cannot renew the overall deadline one packet at a time.
+The private IMDS credential transport receives the same wrapper before SDK
+construction. Existing SDK/global socket pools are unchanged. Proxy transports
+and extra OCSP network validation are explicitly unsupported on this path;
+resolver failures return stable safe reason codes, without raw DNS exceptions.
+
+TLS itself receives the remaining budget immediately before its explicit native
+handshake, after DNS/TCP and local certificate-context setup. HTTP body makefiles
+retain their socket reference after `Connection: close` releases its owner, then
+close the underlying transport on the final file release. This preserves ordinary
+response-body semantics while keeping every read under the original deadline.
+
+## Recent snapshot and coverage evidence
+
+The additive `get_recent_evidence` batch uses a fixed previous30-minute window
+with CPU300/memory60/disk300-second periods and real sample timestamps. It shares
+exact full-dimension discovery, preserves nulls/zeros and marks PartialData or
+non-exhausted results incomplete. Only eight mount series are collected; known
+capped paths remain named `not_collected_budget` obligations. Coverage allows
+twelve CloudWatch operations; the scheduled producer shares32 total provider
+operations and256 metric series with inventory and managed-resource binding.
+
+Managed RDS/cache dimensions require selected declarations and exact actual
+connection endpoint binding. A stable Aurora endpoint additionally resolves the
+current `IsClusterWriter` member. No API-host sample substitutes for managed
+pressure. A recipe proves declaration, never agent installation. Fresh runtime
+evidence cannot fill a missing continuous slot. See [health snapshots](../account/health_snapshot.md)
+for source grants, three-period/420-second expiry, causal proof and caps.

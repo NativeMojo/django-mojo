@@ -190,27 +190,70 @@ def test_unit_is_privileged_isolated_and_never_bans(opts):
                    "AL2023 root-pip packages disappear under -I/-s")
     th.assert_true("CAP_SYS_PTRACE" not in unit,
                    "the network-capable root sensor must never gain process tracing")
-    helper = deploy.PROC_IDENTITY_SERVICE_TEXT
-    for expected in (
-            "User=ec2-user", "PrivateNetwork=true", "ProtectProc=invisible",
-            "ProcSubset=all",
-            "PartOf=mojosec.service", "kernel/yama/ptrace_scope",
-            "RestrictAddressFamilies=AF_UNIX", "CapabilityBoundingSet=\n",
-            "ExecStart=/usr/bin/python3 -E -P -m mojo.mojosec.proc_identity"):
-        th.assert_in(expected, helper,
-                     f"the process resolver lost its unprivileged sandbox: {expected}")
-    th.assert_true("ProcSubset=pid" not in helper,
-                   "the live Yama startup condition requires read-only /proc/sys visibility")
-    th.assert_in("SocketMode=0600", deploy.PROC_IDENTITY_SOCKET_TEXT,
-                 "only the root sensor may query the process identity helper")
+    th.assert_true("proc-identity" not in unit,
+                   "the retired resolver socket must not be wanted by the sensor unit")
+    for name in ("mojosec-proc-identity.socket", "mojosec-proc-identity.service",
+                 "mojosec-audit-health.timer", "mojosec-audit-health.service"):
+        th.assert_in(name, deploy.RETIRED_UNITS,
+                     f"a converge must retire the lineage-proof unit {name}")
+    th.assert_true(not any("ptrace" in path for path in deploy.RETIRED_FILES),
+                   "the ptrace sysctl stays in place: removing it lowers Yama at reboot")
     rotation = deploy.LOGROTATE_TEXT
     for expected in ("daily", "maxsize 50M", "rotate 14", "copytruncate",
                      "su root root", "create 0600 root root"):
         th.assert_in(expected, rotation,
                      f"nginx security-log rotation is missing {expected!r}")
+    # maestro #8881: a second size-triggered rotation on the same day must get
+    # its own name, so the archive suffix carries the hour.
+    lines = [line.strip() for line in rotation.splitlines()]
+    th.assert_in("dateext", lines,
+                 f"rotation must name archives by date, not the distro default: {rotation!r}")
+    th.assert_in("dateformat -%Y%m%d%H%M%S", lines,
+                 f"same-day rotations collide without the time in the name: {rotation!r}")
     for forbidden in ("postrotate", "USR1"):
         th.assert_true(forbidden not in rotation,
                        f"rotation must preserve the root-owned active inode: {forbidden}")
+
+
+@th.django_unit_test()
+def test_clear_retired_failed_marks_resets_only_failed_units_and_never_raises(opts):
+    """maestro #9813: a retired unit that failed before removal stays listed
+    as failed until reset-failed. Only units is-failed reports are reset; a
+    reset that fails is reported, not raised, and not listed as cleared."""
+    import contextlib
+    import io
+    from mojo.deploy import mojosec as deploy
+
+    failed = {"mojosec-audit-health.service", "mojosec-audit-health.timer"}
+    calls = []
+
+    def systemctl_is(verb, name):
+        calls.append((verb, name))
+        if verb == "is-failed":
+            return name in failed
+        if verb == "reset-failed":
+            return name != "mojosec-audit-health.timer"
+        raise AssertionError(f"unexpected systemctl verb {verb}")
+
+    err = io.StringIO()
+    with contextlib.redirect_stderr(err):
+        cleared = deploy._clear_retired_failed_marks(systemctl_is=systemctl_is)
+    th.assert_eq(cleared, ["mojosec-audit-health.service"],
+                 "only a failed unit whose reset succeeded is reported as cleared")
+    resets = [name for verb, name in calls if verb == "reset-failed"]
+    th.assert_eq(sorted(resets), sorted(failed),
+                 f"reset-failed runs only for units is-failed reports: {calls}")
+    th.assert_eq([name for verb, name in calls if verb == "is-failed"], list(deploy.RETIRED_UNITS),
+                 "every retired unit name is checked, and nothing else")
+    th.assert_in("systemctl reset-failed mojosec-audit-health.timer", err.getvalue(),
+                 "a failed reset names the manual command")
+
+    calls.clear()
+    th.assert_eq(deploy._clear_retired_failed_marks(
+        systemctl_is=lambda verb, name: calls.append((verb, name)) or False), [],
+        "nothing failed means nothing cleared")
+    th.assert_true(all(verb == "is-failed" for verb, _ in calls),
+                   f"nothing failed means no reset-failed call: {calls}")
 
 
 @th.django_unit_test()
@@ -377,3 +420,52 @@ def test_content_rebaseline_runs_once_per_graph_and_never_gates_a_deploy(opts):
 
     th.assert_eq(deploy._rebaseline_content_tier(digest, runner=failing), False,
                  "a refused seeding must report failure so the digest is withheld")
+
+
+@th.django_unit_test()
+def test_rotation_twice_in_one_hour_keeps_both_archives(opts):
+    """maestro #8881: run the shipped rotation text through the real logrotate
+    twice within one hour, each time past maxsize. An hour-only suffix makes
+    the second run fail with "destination ... already exists"; both runs must
+    succeed and leave two distinct archives.
+
+    The uniqueness contract (Rick, review 176914) is one name per second:
+    two logrotate runs in the same second still collide, because dateext has
+    no collision fallback. The framework never invokes logrotate, and the
+    distro's default daily oneshot logrotate.timer never does that; a custom
+    schedule, other automation or hand-run commands could. The runs here are
+    a second apart, inside that contract."""
+    import shutil
+    import time
+    from testit.helpers import TestitSkip
+    from mojo.deploy import mojosec
+    binary = shutil.which("logrotate") or ("/usr/sbin/logrotate"
+                                           if os.path.exists("/usr/sbin/logrotate") else None)
+    if not binary:
+        raise TestitSkip("logrotate is not installed on this host")
+    import grp
+    import pwd
+    user = pwd.getpwuid(os.getuid()).pw_name
+    group = grp.getgrgid(os.getgid()).gr_name
+    with tempfile.TemporaryDirectory() as scratch:
+        log = os.path.join(scratch, "mojosec.json.log")
+        text = (mojosec.LOGROTATE_TEXT
+                .replace("/var/log/nginx/mojosec.json.log", log)
+                .replace("su root root", f"su {user} {group}")
+                .replace("create 0600 root root", f"create 0600 {user} {group}"))
+        config = os.path.join(scratch, "rotate.conf")
+        with open(config, "w") as handle:
+            handle.write(text)
+        state = os.path.join(scratch, "state")
+        for attempt in (1, 2):
+            with open(log, "wb") as handle:
+                handle.write(b"x" * (50 * 1024 * 1024 + 1))
+            done = subprocess.run([binary, "-s", state, config], capture_output=True, text=True)
+            th.assert_eq(done.returncode, 0,
+                         f"rotation {attempt} in the same hour must succeed: {done.stderr}")
+            time.sleep(1.1)  # the contract: distinct runs are at least a second apart
+        archives = sorted(name for name in os.listdir(scratch)
+                          if name.startswith("mojosec.json.log-"))
+        th.assert_eq(len(archives), 2,
+                     f"two same-hour rotations must leave two archives: {archives}")
+

@@ -40,9 +40,13 @@ class AcmeDelegation(models.Model, MojoModel):
     domain_name = models.CharField(max_length=253, db_index=True)
 
     client_ref = models.UUIDField(default=uuid.uuid4, unique=True, editable=False)
+    connection_mode = models.CharField(max_length=16, default="allocated", db_index=True)
+    hub_allocation_ref = models.CharField(max_length=253, null=True, blank=True, default=None)
+    hub_consumer_project_uuid = models.CharField(max_length=36, null=True, blank=True, default=None)
+    hub_participant_ref = models.CharField(max_length=36, null=True, blank=True, default=None)
     source_name = models.CharField(max_length=253, null=True, blank=True, default=None)
     target_name = models.CharField(
-        max_length=253, null=True, blank=True, default=None, unique=True)
+        max_length=253, null=True, blank=True, default=None)
 
     state = models.CharField(max_length=24, default=STATE_PENDING, db_index=True)
     verified_at = models.DateTimeField(null=True, blank=True, default=None)
@@ -80,11 +84,13 @@ class AcmeDelegation(models.Model, MojoModel):
         SENSITIVE_FIELDS = [
             "client_ref", "tenant_uuid", "tenant_name", "user_email",
             "cleanup_challenge_ref", "cleanup_requested_at",
+            "hub_consumer_project_uuid", "hub_participant_ref", "hub_allocation_ref",
         ]
 
     _IMMUTABLE_AFTER_ALLOCATION = (
         "client_ref", "tenant_uuid", "tenant_name", "user_email",
         "domain_name", "domain_id", "group_id", "user_id", "source_name", "target_name",
+        "connection_mode", "hub_allocation_ref", "hub_consumer_project_uuid", "hub_participant_ref",
     )
 
     def save(self, *args, **kwargs):
@@ -97,6 +103,8 @@ class AcmeDelegation(models.Model, MojoModel):
                     # source/target are written once, after client_ref was
                     # already committed and the hub allocation returns.
                     if field in ("source_name", "target_name") and not allocated:
+                        continue
+                    if field == "hub_participant_ref" and stored[field] is None:
                         continue
                     # An external name has no globally unique Domain until
                     # authoritative proof succeeds.  Bind that relation once.

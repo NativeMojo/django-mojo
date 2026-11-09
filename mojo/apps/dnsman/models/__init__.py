@@ -8,6 +8,8 @@ from .domain_purchase import DomainPurchase
 from .acme_account import AcmeAccount
 from .certificate import Certificate
 from .acme_hub_delegation import AcmeHubDelegation
+from .acme_hub_participant import AcmeHubParticipant
+from .acme_hub_installation import AcmeHubInstallation
 from .acme_hub_challenge_lease import AcmeHubChallengeLease
 from .acme_delegation import AcmeDelegation
 from .dns_record_reservation import DnsRecordReservation
@@ -19,6 +21,8 @@ __all__ = [
     "AcmeAccount",
     "Certificate",
     "AcmeHubDelegation",
+    "AcmeHubParticipant",
+    "AcmeHubInstallation",
     "AcmeHubChallengeLease",
     "AcmeDelegation",
     "DnsRecordReservation",

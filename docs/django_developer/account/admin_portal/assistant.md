@@ -283,11 +283,15 @@ issued for some other registered resource is neither shown here nor swept by
 "Disconnect all".
 
 Each row carries an **`access`** field derived from the grant's scopes —
-`tools` (`mcp`), `api`, or `both` — computed by `assistant_setup._access_kind`
-rather than by `list_grants`. "Tools" / "Full API" is this page's vocabulary;
+`tools` (`mcp`), `execute` (`mcp mcp:execute`), `api`, or `both` (`mcp api`) —
+computed by `assistant_setup._access_kind` rather than by `list_grants`.
+"Tools" / "Delegated tools" / "Full API" is this page's vocabulary;
 the generic Admin API keeps returning raw `scopes`. The table renders it as an
-**Access** column, with a note under the section: a Full API row can call every
-API as that person, and the approval step does not apply to those calls.
+**Access** column. Delegated tools run ordinary changes within the live person's
+permissions; protected tools retain their confirmation checks. A Full API row
+can call every API as that person, and the approval step does not apply to those
+calls. The execution scope is available only through explicit consent at the
+exact MCP resource; existing connections are not upgraded.
 
 Scoping is by **path**, never by the full resource URL: the URL embeds
 `BASE_URL`, so matching on it would make a public-address change silently hide

@@ -1,0 +1,1 @@
+function e(n){const o=n.indexOf("/dns/");return o<0?"":n.slice(0,o)}function r(n,o){return`${e(n)}/dns/records?domain=${encodeURIComponent(o)}`}function d(n){return n==null?"Platform":typeof n=="number"?`Group #${n}`:n.name}function s(n){return n==="route53"||n==="godaddy"}export{d as a,r as b,e as d,s};

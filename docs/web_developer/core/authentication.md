@@ -75,6 +75,24 @@ GET /api/myapp/resource?group=7
 
 When `group` is provided, permission checks are evaluated against the user's membership and permissions within that group. Only **active** groups resolve — a deactivated group's id is treated exactly like an unknown one: the request behaves as if no group was passed (typically a `403` on member-scoped resources).
 
+**Some lists require a group.** A model can be configured so that listing it
+without a group is refused for ordinary members, rather than returning rows
+from every group you belong to. Such a list — including `_mode=count`,
+`_stats` and `download_format` — answers:
+
+```json
+{
+  "status": false,
+  "code": 400,
+  "error": "group required"
+}
+```
+
+Pass `group=<id>` (or `group_uuid`) and repeat the request. An inactive or
+unknown group id gets the same 400. Members of a parent group list each child
+group by its own id. Platform users (superusers or holders of the global view
+permission) and API keys are not affected: a key always carries its group.
+
 ## Public Endpoints
 
 Some endpoints require no authentication (e.g., registration, health checks). These are documented per-app. Unauthenticated requests to protected endpoints return:

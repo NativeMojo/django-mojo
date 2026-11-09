@@ -103,6 +103,13 @@ def evidence_digest(value):
     return kind, hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
+# One parse per manifest generation. The sensor's FIM tiers and its annotation
+# pass all read the same root-owned file every poll; the stat tuple below is
+# what a rewrite changes, so a hit skips the read and the regex validation of
+# up to 65,536 entries. Entries are shared read-only (maestro #9769).
+_MANIFEST_CACHE = {}
+
+
 def load_manifest(path, require_root=None):
     """Read one no-follow descriptor; an absent manifest means no annotations."""
     if not path:
@@ -113,20 +120,38 @@ def load_manifest(path, require_root=None):
     try:
         descriptor = os.open(path, flags)
     except FileNotFoundError:
+        _MANIFEST_CACHE.pop(path, None)
         return []
     except OSError as err:
         raise ExpectedChangeError(f"cannot open expected-change manifest: {err}") from err
     try:
         info = os.fstat(descriptor)
-        if not stat.S_ISREG(info.st_mode):
-            raise ExpectedChangeError("expected-change manifest must be a regular file")
-        if info.st_mode & 0o077:
-            raise ExpectedChangeError("expected-change manifest must be mode 0600 or stricter")
-        if require_root and info.st_uid != 0:
-            raise ExpectedChangeError("expected-change manifest must be owned by root")
-        payload = os.read(descriptor, MAX_BYTES + 1)
+        key = (info.st_dev, info.st_ino, info.st_size, info.st_mtime_ns,
+               info.st_ctime_ns, info.st_uid, info.st_mode, bool(require_root))
+        cached = _MANIFEST_CACHE.get(path)
+        if cached is not None and cached[0] == key:
+            if isinstance(cached[1], str):
+                raise ExpectedChangeError(cached[1])
+            return cached[1]
+        try:
+            entries = _read_manifest(descriptor, info, require_root)
+        except ExpectedChangeError as err:
+            _MANIFEST_CACHE[path] = (key, str(err))
+            raise
     finally:
         os.close(descriptor)
+    _MANIFEST_CACHE[path] = (key, entries)
+    return entries
+
+
+def _read_manifest(descriptor, info, require_root):
+    if not stat.S_ISREG(info.st_mode):
+        raise ExpectedChangeError("expected-change manifest must be a regular file")
+    if info.st_mode & 0o077:
+        raise ExpectedChangeError("expected-change manifest must be mode 0600 or stricter")
+    if require_root and info.st_uid != 0:
+        raise ExpectedChangeError("expected-change manifest must be owned by root")
+    payload = os.read(descriptor, MAX_BYTES + 1)
     if len(payload) > MAX_BYTES:
         raise ExpectedChangeError("expected-change manifest is too large")
     try:

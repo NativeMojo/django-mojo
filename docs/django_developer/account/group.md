@@ -87,8 +87,12 @@ time.
 
 ### Challenge page branding (opt-in)
 
-By default, the bouncer challenge page always uses the default branding. To
-override it for a specific group:
+The bouncer challenge page follows the group's hosted sign-in theme
+(`theme.logo_url`, `theme.app_title`, accent, appearance and custom CSS). Where
+the theme has no logo (`logo_url` empty) or no configured title (`app_title`
+still equal to the "DJANGO MOJO" code default), explicitly set challenge
+settings fill the gap. A configured tenant title always wins over
+`BOUNCER_CHALLENGE_BRAND`:
 
 ```python
 from mojo.helpers import settings
@@ -97,8 +101,8 @@ settings.set('BOUNCER_CHALLENGE_LOGO_URL', 'https://cdn.client.com/logo.svg', gr
 settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
 ```
 
-These settings are intentionally not global — they only take effect when a
-group is detected. This preserves the default branding for the default flow.
+With neither the theme nor these settings, the challenge falls back exactly as
+the sign-in page does: no logo, and the name "DJANGO MOJO".
 
 ## RestMeta
 
@@ -109,7 +113,8 @@ class RestMeta:
     VIEW_PERMS = ["view_groups", "manage_groups", "manage_group", "groups"]
     SAVE_PERMS = ["manage_groups", "manage_group", "groups"]
     PROTECTED_JSON_PERMS = ["admin_compliance", "admin_verify"]  # required to write metadata["protected"]
-    POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate']
+    POST_SAVE_ACTIONS = ['realtime_message', 'disable', 'reactivate',
+                         'revoke_group_tokens', 'allow_member_subgroups']
     SEARCH_FIELDS = ["name"]
 ```
 
@@ -120,6 +125,7 @@ class RestMeta:
 | `realtime_message` | `{"realtime_message": {"topic": "group:<id>:...", "message": ...}}` | Publishes to a group-scoped realtime topic |
 | `disable` | `{"disable": {"reason": "admin\|abuse\|archived", "note": "..."}}` | Flips `is_active=False`, writes `metadata.protected.disable.*` |
 | `reactivate` | `{"reactivate": {"note": "..."}}` | Flips `is_active=True`, appends to `disable.history` (FIFO cap 20) |
+| `allow_member_subgroups` | `{"allow_member_subgroups": true}` | Switches the sub-group policy on (`true`) or off (`false`); same global gate as `disable`. See [Letting a parent's administrators create sub-groups](#letting-a-parents-administrators-create-sub-groups) |
 
 `disable`/`reactivate` require a global `manage_groups` grant held by a signed-in person — the combined `groups` term satisfies it too, since it includes `manage_groups` by definition (stricter than the broader Group `SAVE_PERMS` since these are destructive; a member-level `manage_group` grant is not sufficient, and a group API key or group token never passes, whatever it carries). See [disable_lifecycle.md](disable_lifecycle.md).
 
@@ -168,13 +174,32 @@ holds the global permission. `geofence_strict` has its own global gate
 **A save does not write back a link setting it did not change.** A `Group`
 instance remembers the two keys and the parent it was loaded with. `save()`
 locks the row, and for each of the three that this instance left as loaded it
-takes the stored value instead of the loaded one. So a request, a `touch()` or
+takes the stored value instead of the loaded one. So a request or
 a job holding a row loaded before an operator's change cannot put the old
 address or the old parent back; its other edits are still stored. A value the
 instance did change is written as before, and for a REST save the permission
 is judged again on the locked row. This covers a full `save()` and any
 `save(update_fields=...)` that names `metadata` or `parent`. Other metadata
-keys are not merged: the last full save still wins for those.
+keys are not merged: the last full save still wins for those. `touch()` is
+not a save: it writes only `last_activity` with a one-column update, so it
+never puts back any other field (#10297).
+
+The lock `save()` takes is `FOR NO KEY UPDATE` on PostgreSQL
+(`select_for_update(no_key=True)`), and so is the lock on the parent chain
+during a move or a create under a parent. It excludes every other writer of
+the row — another save, a delete, any `select_for_update` — but not the
+`FOR KEY SHARE` that every insert of a row referencing the group (any model
+with a `group` FK) takes on the group row and holds until its transaction
+ends: at the insert where the constraint is immediate, at commit for the
+deferred foreign keys Django creates on PostgreSQL. Code that locks a
+`Group` row itself should take the same mode, through
+`mojo.apps.account.services.group_hierarchy.lock_rows(queryset)`: a plain
+`select_for_update()` (`FOR UPDATE`) waits behind every in-flight child insert,
+is passed by newer inserts while it waits, and holds up every child insert
+for that group while it is held. A save that leaves the unique column
+(`auth_domain`) as it is never needs the key lock, and one that changes it
+is escalated to it by PostgreSQL itself, so `FOR UPDATE` buys nothing there. The helper passes `no_key` from the write
+connection's features, so a backend without the mode keeps its ordinary lock.
 
 What the instance remembers follows what it really read and wrote, the two
 keys and the parent separately:
@@ -199,7 +224,9 @@ call `refresh_from_db()` and assign again. A write that skips `save()`
 
 ### Protected Metadata
 
-The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (for Group: `"admin_compliance"` or `"admin_verify"`) can set or update it via the REST API. A key or group token that acts as a member is always refused, even when that member is a superuser or holds the permission. A group API key in reference mode passes when its own list carries one of them; both are on the API-key protection floor, so only staff can put them on a key (see [API keys](api_keys.md)). Any attempt by an unprivileged user raises a `403 PermissionDeniedException`. The gate cannot be bypassed with `"__replace": true` or a non-dict overwrite — a wholesale replace that would rewrite **or drop** the existing `protected` subtree is denied the same as a merge that touches it.
+The reserved root key `"protected"` in `metadata` is write-protected at the framework level. Only a superuser or a user with a permission listed in `PROTECTED_JSON_PERMS` (for Group: `"admin_compliance"` or `"admin_verify"`) can set or update it via the REST API. A key or group token that acts as a member is always refused, even when that member is a superuser or holds the permission. A group API key in reference mode passes when its own list carries one of them; both are on the API-key protection floor, so only staff can put them on a key (see [API keys](api_keys.md)). Any attempt by an unprivileged user raises a `403 PermissionDeniedException`. The gate cannot be bypassed with `"__replace": true` or a non-dict overwrite — a wholesale replace that would rewrite **or drop** the existing `protected` subtree is denied the same as a merge that touches it — or with a dotted `"protected.<key>"` key inside the metadata.
+
+`metadata.protected.allow_member_subgroups` opts a parent into sub-groups created by its own administrators; see [Letting a parent's administrators create sub-groups](#letting-a-parents-administrators-create-sub-groups).
 
 Use it to store config that group editors should be able to read but never overwrite:
 
@@ -218,7 +245,7 @@ group.metadata = {
 }
 ```
 
-**Audit trail:** Every successful write to `metadata["protected"]` is unconditionally logged with `kind="meta:protected_changed"`, recording the username, changed keys, and instance pk — regardless of the `LOG_CHANGES` or `LOG_META_CHANGES` settings.
+**Audit trail:** Every successful REST field write to `metadata["protected"]` is unconditionally logged with `kind="meta:protected_changed"`, recording the username, changed keys, and instance pk — regardless of the `LOG_CHANGES` or `LOG_META_CHANGES` settings. Actions that write a protected key log their own kind instead (`disable`/`reactivate` through the disable service, `revoke_group_tokens` as `group:tokens_revoked`, `allow_member_subgroups` as `group:subgroup_policy_changed`).
 
 When `LOG_META_CHANGES = True`, all root-level key changes across the entire `metadata` field are also logged with `kind="meta:changed"`.
 
@@ -362,10 +389,41 @@ Receivers must propagate cleanup failures and use the signal's `using` alias.
 Schedule external notifications with `transaction.on_commit(..., using=using)`.
 
 The boundary covers each save, including `add_permission` and
-`remove_permission`; a multi-permission REST payload can perform several saves
-and is not made request-atomic. Bulk updates bypass saves and signals. Use
-ordinary `save()` inside application-owned transactions; the legacy
+`remove_permission`. `set_permissions` (the REST and invite path) applies every
+toggle in memory and saves once, so a multi-permission payload is all or
+nothing: a refused toggle leaves the row unchanged. Server code can do the same
+with `add_permission(perm, commit=False)` / `remove_permission(perm,
+commit=False)` followed by one `save()`. Bulk updates bypass saves and signals.
+Use ordinary `save()` inside application-owned transactions; the legacy
 `atomic_save()` helper still explicitly commits after `save()` returns.
+
+### Permission change audit
+
+Every `GroupMember.save()` that changes which permissions are granted writes
+one `Log` record, kind `member:permissions_changed`, inside the save's
+transaction. The before value is read from the locked row, not the loaded
+instance, so in-place edits and every write path (REST, invite,
+`add_permission`/`remove_permission`, a direct assign plus `save()`, the Django
+admin form) are covered. A save that changes no grant writes nothing;
+`touch()` (`update_fields=['last_activity']`) skips the check, as does any
+`update_fields` without `"permissions"`.
+
+| Log field | Value |
+|---|---|
+| `uid` | the actor (the member an API key acts as, else the request user); `0` with no request |
+| `gid` | the member's group |
+| `model_name`, `model_id` | `account.GroupMember`, the member id |
+| `created` | the time |
+| `log` | JSON: `member_id`, `user_id`, `username`, `group_id`, `added`, `removed`, `before`, `after`, plus `"actor": "system"` with no request |
+
+`before`/`after` map each granted permission name to `true`; stored values are
+never recorded. Readers are the `Log` model's: global `manage_logs`,
+`view_logs`, `security` or `admin`. `Log` has no group scoping, so group
+managers cannot read these records.
+
+Queryset `.update()`, `bulk_update` and raw SQL bypass `save()` and write no
+record; write member permissions through `save()`. If a host routes `Log` to
+another database, the record and the member save are not in one transaction.
 
 ### Membership Tiers: `member` vs `full_member`
 
@@ -440,7 +498,7 @@ Rules that follow from the design:
 
 ## request.group
 
-When a request includes `?group=<id>`, `MojoMiddleware` and auth decorators auto-populate `request.group` with the `Group` instance if the user is a member. Only **effectively active** groups resolve (`Group.get_active` — see [Effective activeness](#membership) above) — an inactive group's id, including an active child under a deactivated ancestor, behaves exactly like a nonexistent one (`request.group` stays `None`, no touch side effect), for both the `group=` and `group_uuid=` params. `GET /api/group/<pk>/member` follows the same contract: it resolves via `Group.get_active` and returns one indistinguishable `403` for every non-member outcome (nonexistent, inactive, or not a member), only `touch()`ing the group/member after membership in an effectively active group is confirmed. All permission checks and list queries are then scoped to that group — **except** endpoints gated with `@md.requires_global_perms`, which never consult `request.group` at all (global `User.permissions` or superuser only). See [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).
+When a request includes `?group=<id>`, `MojoMiddleware` and auth decorators auto-populate `request.group` with the `Group` instance if the user is a member. Only **effectively active** groups resolve (`Group.get_active` — see [Effective activeness](#membership) above) — an inactive group's id, including an active child under a deactivated ancestor, behaves exactly like a nonexistent one (`request.group` stays `None`, no touch side effect), for both the `group=` and `group_uuid=` params. `GET /api/group/<pk>/member` follows the same contract: it resolves via `Group.get_active` and returns one indistinguishable `403` for every non-member outcome (nonexistent, inactive, or not a member), only `touch()`ing the group/member (a one-column `last_activity` update) after membership in an effectively active group is confirmed. All permission checks and list queries are then scoped to that group — **except** endpoints gated with `@md.requires_global_perms`, which never consult `request.group` at all (global `User.permissions` or superuser only). See [Global vs Group-Scoped Permission Checks](../core/permissions.md#global-vs-group-scoped-permission-checks).
 
 ```python
 # In a REST handler
@@ -476,6 +534,11 @@ Each Group's active webhook delivery targets are managed through the `WebhookSub
 ```python
 group.touch()   # updates last_activity (rate-limited by GROUP_LAST_ACTIVITY_FREQ)
 ```
+
+`touch()` writes only the `last_activity` column, like `User.touch()`. It does
+not call `save()`: `modified` does not move, `post_save` receivers do not
+fire, and a disable, token-epoch bump or metadata change committed after the
+group was loaded is never written back.
 
 ## Moving a group between trees
 
@@ -535,6 +598,88 @@ Django admin set a parent with no permission question, here and for a move
 between trees. `update_from_dict` runs the REST hooks, so outside a request it
 is refused like any caller with no rights. Code that moves groups on a user's
 behalf must check that user itself.
+
+## Letting a parent's administrators create sub-groups
+
+`Group` has no tenant field, so `POST /api/group` normally needs a **global**
+group permission (`manage_groups`, `manage_group` or `groups` on the user
+row). A tenant administrator who manages their organization only as a member
+cannot create groups under it.
+
+A parent can be opted in so that they can. Set the protected key
+`allow_member_subgroups` to `true` on that parent:
+
+```python
+from mojo.apps.account.models.group import SUBGROUP_POLICY_KEY  # "allow_member_subgroups"
+
+org.set_protected_metadata(SUBGROUP_POLICY_KEY, True)   # server code
+org.allows_member_subgroups()                           # True only for exactly True
+```
+
+Over REST, a system admin switches it with the Group action
+`allow_member_subgroups` (#9126):
+
+```
+POST /api/group/<id>
+{"allow_member_subgroups": true}      # or false
+→ {"status": true, "allow_member_subgroups": true}
+```
+
+The action takes a signed-in person whose **own** global permissions hold
+`manage_groups` or `groups` (or a superuser), the same bar as `disable` /
+`reactivate`. A member-level grant, a group API key and a group token are
+refused, and so is a value that is not a boolean (400). Off removes the key.
+The action re-reads the row under its lock before it writes, so it never puts
+back protected metadata that was loaded earlier in the request. A no-op writes
+nothing, and every change is logged as `group:subgroup_policy_changed`.
+Because an action runs after the fields are saved, `Group.on_rest_save`
+judges the switch first: a body that carries it alongside field edits, a
+create, or a nested save of the group (`{"parent": {...}}`) is refused before
+anything is written when the caller may not switch or the value is not a
+boolean.
+
+It is also an ordinary protected key, so a superuser or a holder of
+`admin_compliance` / `admin_verify` can still write it through
+`metadata.protected` (see [Protected Metadata](#protected-metadata)). A
+tenant's own administrators cannot turn it on or off by any route.
+
+Once it is set, `Group.on_rest_handle_create` admits a create whose `parent`
+(or `parent_id`) is that group when the caller:
+
+- **is a person.** A signed-in user, including their own per-user API key and
+  OAuth session, as for every other member-grant check. A group API key or
+  group token never takes this path, whatever it holds.
+- **manages the parent as a member.** A member row on the parent or one of its
+  ancestors that holds a `SAVE_PERMS` grant (`Group._may_manage_tree_position`
+  rules: the nearest row decides, and a `manage_group` on the user row does
+  not count).
+- **names one parent.** `parent` and `parent_id` must agree and convert to an
+  id the way the save converts them. `request.group` (`?group=`) is never
+  read.
+
+The parent must also be effectively active (it and every ancestor). The policy
+is read from the parent's **own** row only. It does not pass to descendants, so
+the administrators of a child created this way cannot create under that child
+unless the platform opts the child in too. A new child cannot carry the policy
+itself: its `metadata.protected` write is refused like any other.
+
+A caller who is not admitted gets the base create's refusal, unchanged: 401
+when signed out (whatever the parent, so the answer does not reveal which
+groups are opted in), 403 otherwise. Global holders take the base path exactly
+as before, so nothing changes for them.
+
+`save()` judges an admitted create again, inside its transaction, after it has
+locked the parent and every ancestor (`Group._guard_policy_create`). It re-reads
+the parent and requires that it is still the admitted one, still carries the
+policy, is still effectively active, and is still managed by the caller. A
+policy switched off, a deactivation or a move that landed first refuses the
+create. One that comes later waits for this write. Member rows are not
+locked: a grant removed while the create is in flight may still carry it, as
+for any move or create under a parent.
+
+Every admitted create logs `model:created` and a `group:subgroup_created`
+entry naming the parent. The assistant's create-record tool gates on the
+caller's global permission directly and does not apply this policy.
 
 ## Hierarchy integrity
 

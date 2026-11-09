@@ -8,3 +8,4 @@ from .whois import *
 from .certificate import *
 from .acme_hub import *
 from .delegation import *
+from .delegation_setup import *

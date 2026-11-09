@@ -64,8 +64,7 @@ def _tool_query_groups(params, user):
     },
 )
 def _tool_get_group_detail(params, user):
-    from mojo.apps.account.models import Group
-    from mojo.apps.account.models.group import GroupMember
+    from mojo.apps.account.models import Group, GroupMember
 
     group_id = params["group_id"]
     group = Group.objects.get(pk=group_id)
@@ -107,7 +106,7 @@ def _tool_get_group_detail(params, user):
     },
 )
 def _tool_get_group_members(params, user):
-    from mojo.apps.account.models.group import GroupMember
+    from mojo.apps.account.models import GroupMember
 
     group_id = params["group_id"]
     limit = min(params.get("limit", MAX_RESULTS), MAX_RESULTS)

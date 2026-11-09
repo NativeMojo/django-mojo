@@ -18,6 +18,13 @@ class SystemPythonError(RuntimeError):
     """A fixed readiness or collection failure for the compatibility tier."""
 
 
+def _contained(path, root):
+    try:
+        return os.path.commonpath((path, root)) == root
+    except ValueError:
+        return False
+
+
 def _running_python_roots(config):
     configured = os.path.realpath(config["interpreter"])
     running = os.path.realpath(sys.executable)
@@ -71,14 +78,24 @@ class SystemPythonCollector:
     name = "rpm"
 
     def __init__(self, config, identity, expected_changes_path=None,
-                 roots_provider=None, fim_factory=None):
+                 roots_provider=None, fim_factory=None, covered_roots=()):
         self.config = config
         self.identity = dict(identity)
         self.expected_changes_path = expected_changes_path
         self.roots_provider = roots_provider
         self.fim_factory = fim_factory or FimCollector
+        # Host-tier targets of the active profile. A profile that sets
+        # rpm.skip_host_tier_roots leaves any discovered site root inside one
+        # of these to that tier, so one tree is never walked twice.
+        self.covered_roots = tuple(covered_roots or ())
         self.site_roots = []
         self.baseline_key = ":".join((identity["name"], identity["digest"], "rpm"))
+
+    def walked_roots(self, roots):
+        if not self.config.get("skip_host_tier_roots"):
+            return list(roots)
+        return [root for root in roots
+                if not any(_contained(root, covered) for covered in self.covered_roots)]
 
     def discover_site_roots(self):
         self.site_roots = discover_system_python_roots(
@@ -86,7 +103,7 @@ class SystemPythonCollector:
         return list(self.site_roots)
 
     def scan(self, previous=None):
-        roots = self.discover_site_roots()
+        roots = self.walked_roots(self.discover_site_roots())
         walker = self.fim_factory(
             {
                 "targets": [

@@ -36,6 +36,11 @@ JOBS_IDLE_TIMEOUT_MS = 60000          # Consider job stuck after 1 minute idle
 JOBS_XPENDING_IDLE_MS = 60000         # Reclaim jobs idle for 1 minute
 JOBS_RUNNER_HEARTBEAT_SEC = 5         # Heartbeat interval
 JOBS_SCHEDULER_LOCK_TTL_MS = 5000     # Scheduler leadership lock TTL
+# Every scheduler process also ticks cron.run_now() once a minute from a
+# daemon thread (every node, fleet-once claims unchanged). Set False only for
+# a deployment that runs its own external tick — the framework no longer ships
+# a per-minute cron.d entry, so False with nothing else means no cron at all.
+JOBS_SCHEDULER_CRON_TICK = True
 
 # Webhook-specific Configuration
 JOBS_WEBHOOK_MAX_RETRIES = 5          # More retries for webhooks (network issues)
@@ -213,6 +218,17 @@ JOBS_SCHEDULER_LOCK_TTL_MS
     TTL in milliseconds for the scheduler leadership lock.
     Only one scheduler should be active cluster-wide.
     Default: 5000 (5 seconds)
+
+JOBS_SCHEDULER_CRON_TICK
+    When True, every `jobs.py scheduler` process runs cron.load_app_cron()
+    once at start and cron.run_now() once immediately and then at every
+    wall-clock minute boundary, from a daemon thread, on every node — not
+    only the leadership-lock holder, so fleet-once claims and per_node keep
+    the meaning they had under crond. Replaces the retired per-minute
+    `2_mojo_cron` entry that booted a Django process per node per minute.
+    False opts a deployment out: pair it with an external tick, or no
+    @schedule function runs anywhere.
+    Default: True
 
 JOBS_WEBHOOK_USER_AGENT
     Outbound User-Agent header for jobs.publish_webhook(). Override to avoid

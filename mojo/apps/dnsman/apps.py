@@ -7,6 +7,7 @@ class DnsmanConfig(AppConfig):
     verbose_name = 'DNS Manager'
 
     def ready(self):
+        from mojo.apps.dnsman import fleet_settings  # trusted import-light schema
         from mojo.apps.account.services.admin_settings import Descriptor, register_descriptor
         register_descriptor(Descriptor(
             "DNSMAN_ACME_CONTACT_EMAIL", "ACME contact", "Domains & DNS",

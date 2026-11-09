@@ -37,9 +37,9 @@ from objict import objict
 import mojo
 from mojo.helpers import infrastructure, logit
 from mojo.helpers.settings import settings
-from mojo.apps.assistant.services import agent, approvals
+from mojo.apps.assistant.services import agent, approvals, mcp_execution
 
-from . import protocol
+from . import auth, protocol
 
 logger = logit.get_logger(__name__, "assistant.log")
 
@@ -58,9 +58,10 @@ SUPPRESSION_BUDGET = 50
 
 # Category prefixes that are NEVER suppressed on this transport. Matched with
 # `str.startswith`, so a tuple. `assistant:tool:<name>` is filed only when a
-# mutating tool actually ran — the record that an owner-state write happened —
-# and one row per hour is not an audit trail. See `suppressed_reporter`.
-UNSUPPRESSED_CATEGORIES = ("assistant:tool:",)
+# mutating tool succeeded. Delegated attempts and failed outcomes also retain
+# one event per invocation. See `suppressed_reporter`.
+UNSUPPRESSED_CATEGORIES = (
+    "assistant:tool:", "assistant:execution:", "assistant:execution_failed:")
 
 
 # --- what this transport does not offer ------------------------------------
@@ -106,6 +107,17 @@ INSTRUCTIONS = (
 )
 
 READ_ONLY_ANNOTATIONS = {"readOnlyHint": True, "destructiveHint": False}
+EXECUTION_INSTRUCTIONS = (
+    "This connection has explicit delegated MCP execution consent. Ordinary "
+    "mutating tools execute as the connected operator, within their live "
+    "permissions, and return their actual result. Tools with fresh-sign-in, "
+    "revision/preview, approval-bound handlers or explicit operator-confirmation "
+    "requirements still propose an approval. Generic model mutations and shared "
+    "memory/skill writes also retain approval. An approval_required response means "
+    "NOT EXECUTED: explain its installation and approval_url, then stop. "
+    "Do not blindly retry an uncertain mutation; direct calls have normal API "
+    "retry semantics, not a per-approval single-use guarantee."
+)
 
 # The two tools that exist only on this transport. Both are reads, both are
 # scoped to the calling grant's own conversation.
@@ -181,7 +193,7 @@ def projected_registry(hide_infrastructure=None):
     return projected
 
 
-def _mcp_tool(entry):
+def _mcp_tool(entry, execution=False):
     """One registry entry in MCP `Tool` shape.
 
     ``annotations`` are hints, not a security boundary — the boundary is the
@@ -190,9 +202,16 @@ def _mcp_tool(entry):
     """
     definition = entry["definition"]
     mutates = bool(entry.get("mutates"))
+    description = definition.get("description", "")
+    if execution and mutates and not mcp_execution.requires_approval(entry):
+        description = re.sub(
+            r"Requires operator approval: calling this tool creates an approval "
+            r"card and does not execute\.", "", description).strip()
+        description = ("Executes immediately under this connection's delegated "
+                       "operator authority; no separate approval request. " + description)
     return {
         "name": definition["name"],
-        "description": definition.get("description", ""),
+        "description": description,
         "inputSchema": definition.get("input_schema"),
         "annotations": {
             "readOnlyHint": not mutates,
@@ -201,15 +220,25 @@ def _mcp_tool(entry):
     }
 
 
-def list_tools(user, hide_infrastructure=None):
+def operator_registry(user, hide_infrastructure=None):
+    registry = projected_registry(hide_infrastructure)
+    if auth.has_assistant_access(user):
+        return registry
+    names = auth.member_tool_names()
+    return {name: entry for name, entry in registry.items()
+            if name in names and not entry["mutates"]}
+
+
+def list_tools(user, hide_infrastructure=None, grant=None):
     """Everything this user may call over MCP, in registry order."""
     from mojo.apps.assistant import user_can_use_tool
 
     tools = []
-    for entry in projected_registry(hide_infrastructure).values():
+    for entry in operator_registry(user, hide_infrastructure).values():
         if user_can_use_tool(user, entry):
-            tools.append(_mcp_tool(entry))
-    tools.extend(dict(tool) for tool in MCP_ONLY_TOOLS)
+            tools.append(_mcp_tool(entry, execution=mcp_execution.has_execution_scope(grant)))
+    if auth.has_assistant_access(user):
+        tools.extend(dict(tool) for tool in MCP_ONLY_TOOLS)
     return tools
 
 
@@ -268,6 +297,22 @@ def _call_result(text):
         parsed = ujson.loads(text)
     except Exception:
         parsed = None
+    if isinstance(parsed, dict) and parsed.get("status") == "approval_required":
+        from mojo.apps.account.services.oauth_server.resources import public_origin
+        from mojo.apps.account.services.admin_portal import ADMIN_PATH
+
+        origin = public_origin()
+        if origin:
+            parsed["installation"] = origin
+            parsed["approval_url"] = f"{origin}/{ADMIN_PATH}/"
+        parsed["approval_location"] = (
+            "This installation's built-in Admin: open Assistant, then its "
+            "conversation history and the MCP connection's conversation.")
+        parsed["message"] = (
+            "NOT EXECUTED. This tool requires a separate operator confirmation. "
+            "Explain the installation, approval_url and approval_location to "
+            "the operator, then stop. Do not retry this request or claim it ran.")
+        text = ujson.dumps(parsed)
     result = {
         "content": [{"type": "text", "text": text}],
         "isError": isinstance(parsed, dict) and "error" in parsed,
@@ -321,11 +366,11 @@ def suppressed_reporter(user, _reporter=None):
     fail-CLOSED: a Redis outage must drop these, not open the floodgate.
 
     ``UNSUPPRESSED_CATEGORIES`` is the one exception, and it is an AUDIT
-    decision. An ``assistant:tool:<name>`` event is filed only when a mutating
-    tool actually RAN, which over this transport means an owner-state write to
-    the operator's own memory or skills. Suppressing it would record the first
-    such write of the hour and silently drop every one after it — the audit trail
-    for exactly the calls that changed something. The flood argument does not
+    decision. Successful writes emit ``assistant:tool:<name>``; delegated calls
+    first emit ``assistant:execution:<name>`` and failures emit
+    ``assistant:execution_failed:<name>``. These preserve grant/client and
+    invocation correlation even when a handler partially mutates then fails.
+    Suppressing them would silently lose the audit trail. The flood argument does not
     apply: the category is a bounded set the client cannot invent (a name outside
     the registry never reaches a handler), and the handlers carry their own entry
     and size caps.
@@ -375,7 +420,7 @@ def call_tool(name, arguments, user, grant, request_meta,
 
     reporter = suppressed_reporter(user, _reporter)
 
-    if name in MCP_ONLY_NAMES:
+    if name in MCP_ONLY_NAMES and auth.has_assistant_access(user):
         return _call_result(
             _pending_action_result(name, arguments, user, grant, _reporter=reporter))
 
@@ -386,9 +431,10 @@ def call_tool(name, arguments, user, grant, request_meta,
         "input": arguments,
     }
     outcome = agent._execute_tool(
-        block, projected_registry(hide_infrastructure), user,
+        block, operator_registry(user, hide_infrastructure), user,
         conversation_for_grant(user, grant), [], None, [],
-        request_meta=request_meta, _reporter=reporter, pending_actions=[])
+        request_meta=request_meta, _reporter=reporter, pending_actions=[],
+        execution_grant=grant if mcp_execution.has_execution_scope(grant) else None)
     return _call_result(outcome["content"])
 
 
@@ -401,16 +447,21 @@ def _dispatch(msg, ctx):
         requested = params.get("protocolVersion")
         version = (requested if requested in protocol.SUPPORTED_PROTOCOL_VERSIONS
                    else protocol.PROTOCOL_VERSION)
+        instructions = "Tools read data within the connected operator's existing permissions."
+        if auth.has_assistant_access(ctx.user):
+            instructions = (EXECUTION_INSTRUCTIONS
+                            if mcp_execution.has_execution_scope(ctx.grant)
+                            else INSTRUCTIONS)
         return {
             "protocolVersion": version,
             "capabilities": {"tools": {"listChanged": False}},
             "serverInfo": {"name": ctx.server_name, "version": mojo.__version__},
-            "instructions": INSTRUCTIONS,
+            "instructions": instructions,
         }
     if method == "ping":
         return {}
     if method == "tools/list":
-        return {"tools": list_tools(ctx.user, ctx.hide_infrastructure)}
+        return {"tools": list_tools(ctx.user, ctx.hide_infrastructure, grant=ctx.grant)}
     if method == "tools/call":
         name = params.get("name")
         # Refused BEFORE dispatch, so an unbounded or newline-bearing name never
