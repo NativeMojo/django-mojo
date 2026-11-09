@@ -586,7 +586,12 @@ def test_unusable_tool_answers_are_rejected_with_their_usage(opts):
         response["output"]["message"]["content"] = content
         client = _Client(response)
         _call_rejected(client, expected_usage=USAGE, tools=TOOLS)
-    for pieces in (['{"id": 1'], ['[1, 2]'], ['"text"']):
+    response = _response()
+    response["stopReason"] = "tool_use"
+    response["output"]["message"]["content"] = [
+        {"toolUse": {"toolUseId": "t1", "name": "lookup_item", "input": {"id": float("nan")}}}]
+    _call_rejected(_Client(response), expected_usage=USAGE, tools=TOOLS)
+    for pieces in (['{"id": 1'], ['[1, 2]'], ['"text"'], ['{"id": NaN}'], ['{"id": Infinity}']):
         stream = _stream(_StreamClient(_stream_events(stop="tool_use", tool_input=pieces)),
                          tools=TOOLS)
         _drain_rejected(stream)
@@ -643,8 +648,22 @@ def test_stream_deadline_and_interrupt_end_a_blocked_read(opts):
         assert False, "a read blocked past the deadline must fail"
     except ProviderError as err:
         assert err.code == "provider_timeout", f"the deadline must be provider_timeout, got {err.code}"
+        assert err.caller_stalled is False, \
+            "a deadline hit inside a blocked read is the provider's slowness"
     assert client.stream._raw_stream.shutdowns >= 1 and client.stream.closed, \
         "the deadline must shut the socket down and release the connection"
+
+    import time
+    client = _StreamClient([{"messageStart": {"role": "assistant"}}, delta, delta])
+    stream = _stream(client, timeout=0.2)
+    next(stream)
+    time.sleep(0.35)
+    try:
+        next(stream)
+        assert False, "a stream held past its deadline by the caller must fail"
+    except ProviderError as err:
+        assert err.code == "provider_timeout" and err.caller_stalled is True, \
+            "a deadline passed between reads must be marked as the caller's stall"
 
     client = _StreamClient([{"messageStart": {"role": "assistant"}}, delta, "block"])
     stream = _stream(client, timeout=30)
@@ -674,3 +693,26 @@ def test_stream_dispatch_errors_raise_before_any_event(opts):
         assert getattr(err, "code", None) == "provider_rate_limited" \
             and "secret" not in str(err), f"dispatch error lost its safe code: {err!r}"
     assert len(client.calls) == 1, "a dispatch failure must not retry"
+
+
+@th.django_unit_test()
+def test_check_request_validates_without_any_sdk_work(opts):
+    from mojo.helpers.llm_providers.base import ProviderError
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    made = []
+    adapter = BedrockProvider(region="us-east-1",
+                              client_factory=lambda *args, **kwargs: made.append(args))
+    adapter.check_request(MESSAGES, MODEL, 32, tools=TOOLS, timeout=10)
+    asked = [{"role": "user", "content": "Hi"}, {"role": "assistant", "content": [
+        {"type": "tool_use", "id": "t1", "name": "lookup_item", "input": {}}]}]
+    for kwargs in ({"messages": asked, "tools": TOOLS}, {"tools": [{"name": "x"}]},
+                   {"max_tokens": 0}, {"timeout": 0}):
+        values = {"messages": MESSAGES, "model": MODEL, "max_tokens": 32, "timeout": 10}
+        values.update(kwargs)
+        try:
+            adapter.check_request(**values)
+            assert False, f"check_request accepted an invalid request: {kwargs}"
+        except ProviderError as err:
+            assert err.code == "provider_rejected", f"invalid request used {err.code}"
+    assert made == [], "check_request must never construct an AWS client"

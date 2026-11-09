@@ -206,6 +206,10 @@ def test_refusals_raise_from_stream_before_anything_streams(opts):
             case, client, tools=TOOLS, messages=_transcript(9)))
         _assert_denied("loop_limit", lambda: _guarded(
             case, client, tools=TOOLS, messages=_transcript(3), max_tool_rounds=2))
+        _assert_denied("provider_rejected", lambda: _guarded(
+            case, client, tools=TOOLS, messages=_transcript(1)[:-1]))
+        _assert_denied("provider_rejected", lambda: _guarded(
+            case, client, stream=False, tools=[dict(TOOLS[0], cache_control={})]))
         assert client.calls == [] and not LLMRequest.objects.filter(
             operation=case["marker"]).exists(), \
             "tool-loop refusals must happen before dispatch or ledger"
@@ -402,3 +406,97 @@ def test_facade_stream_raises_stable_execution_errors(opts):
                 except llm.LLMExecutionError as err:
                     assert err.code == "emergency_stopped", \
                         f"a refusal must surface as its stable code, got {err.code}"
+
+
+def _short_policy(seconds=1):
+    raw = _guard_policy()
+    raw["shared"]["timeout_seconds"] = seconds
+    raw["features"]["assistant"]["timeout_seconds"] = seconds
+    return raw
+
+
+@th.django_unit_test()
+def test_a_caller_stall_is_not_a_provider_timeout_for_the_circuit(opts):
+    from mojo.apps.account.models import LLMCircuitBreaker, LLMRequest
+    from mojo.apps.account.services import llm_safety
+
+    delta = {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "Partial"}}}
+    for blocked in (False, True):
+        with _guard_case(_short_policy()) as case:
+            tail = ["block"] if blocked else [delta]
+            client = _Client(streams=[[{"messageStart": {"role": "assistant"}}, delta] + tail])
+            answer = _guarded(case, client)
+            next(answer)
+            if not blocked:
+                time.sleep(1.3)
+            try:
+                next(answer)
+                assert False, "a stream past its deadline must fail"
+            except llm_safety.LLMSafetyError as err:
+                assert err.code == "provider_timeout", \
+                    f"the deadline must surface as provider_timeout, got {err.code}"
+            row = LLMRequest.objects.get(operation=case["marker"])
+            assert row.status == "failed" and row.error_code == "provider_timeout", \
+                f"a timed-out stream must finish its ledger, got {row.status}/{row.error_code}"
+            assert _leases_released(case), "a timed-out stream must release both leases"
+            breaker = LLMCircuitBreaker.objects.get(
+                provider="bedrock", credential_fingerprint=case["fingerprint"])
+            assert breaker.failure_count == (1 if blocked else 0), \
+                f"only a read AWS left blocked may count against the circuit (blocked={blocked})"
+
+
+@th.django_unit_test()
+def test_a_cancel_before_any_provider_event_leaves_a_half_open_circuit(opts):
+    from django.utils import timezone
+    from mojo.apps.account.models import LLMCircuitBreaker, LLMRequest
+
+    with _guard_case() as case:
+        LLMCircuitBreaker.objects.create(
+            provider="bedrock", credential_fingerprint=case["fingerprint"], state="open",
+            opened_until=timezone.now() - timezone.timedelta(seconds=1))
+        client = _Client(streams=[["block"]])
+        answer = _guarded(case, client)
+        breaker = LLMCircuitBreaker.objects.get(
+            provider="bedrock", credential_fingerprint=case["fingerprint"])
+        assert breaker.state == "half_open" and breaker.half_open_owner, \
+            "the stream must hold the half-open probe lease"
+        threading.Timer(0.2, answer.close).start()
+        try:
+            next(answer)
+            assert False, "the blocked first read must end on cancel"
+        except StopIteration:
+            pass
+        breaker.refresh_from_db()
+        assert breaker.state == "half_open", \
+            "a cancel with no provider event must not close a half-open circuit"
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.error_code == "cancelled" and _leases_released(case), \
+            "the cancel must still settle its ledger and leases"
+
+
+@th.django_unit_test()
+def test_close_from_an_event_loop_defers_settlement_to_the_reader(opts):
+    import asyncio
+    from mojo.apps.account.models import LLMRequest
+
+    with _guard_case() as case:
+        client = _Client(streams=[_events(("one", " two"))])
+        answer = _guarded(case, client)
+        next(answer)
+
+        async def cancel():
+            answer.close()
+
+        asyncio.run(cancel())
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.status == "started", \
+            "close() on an event loop must not write the ledger from async code"
+        try:
+            next(answer)
+            assert False, "the reader's next step must see the cancel"
+        except StopIteration:
+            pass
+        row.refresh_from_db()
+        assert row.status == "failed" and row.error_code == "cancelled", \
+            f"the reading thread must settle the deferred cancel, got {row.status}"
+        assert _leases_released(case), "the deferred cancel must release both leases"

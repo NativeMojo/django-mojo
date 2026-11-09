@@ -257,18 +257,26 @@ lease. These concurrency caps bound admission leases, not every still-running
 AWS request.
 
 `llm.stream()` passes exactly the same steps before it dispatches
-`converse_stream`, so a refused stream raises before any event. Its two
-extra pre-dispatch checks are the route's adapter supporting streaming
-(only Bedrock does) and, for every Bedrock call, the tool-loop rules: tool
-turns without declared tools are `capability_unsupported`, declared tools
-without an `operation_id` are `operation_invalid`, and a transcript holding
-more answered tool rounds than `max_tool_rounds` (Bedrock default 8) is
-`loop_limit`. All three refuse before the operation counter, permit, or
-ledger. A stream settles exactly once: on its final record (actual usage,
+`converse_stream`, so a refused stream raises before any event. Its extra
+pre-dispatch checks are the route's adapter supporting streaming (only
+Bedrock does) and, for every Bedrock call, the tool-loop rules: tool turns
+without declared tools are `capability_unsupported`, declared tools without
+an `operation_id` are `operation_invalid`, and a transcript holding more
+answered tool rounds than `max_tool_rounds` (Bedrock default 8) is
+`loop_limit`. The Bedrock adapter then checks the whole request shape
+(messages, tool declarations and tool turns) without any SDK work; a
+malformed request is `provider_rejected`. All of these refuse before the
+operation counter, circuit, permit, or ledger, for plain and streamed calls.
+
+A stream settles exactly once: on its final record (actual usage,
 `succeeded`), on a provider failure (as below), or on a cancel
-(`failed`/`cancelled`, full reservation kept, circuit released as healthy
-because the stream was accepted). A timer ends a stream at the policy
-timeout, so a trickling stream cannot outlive its admission lease.
+(`failed`/`cancelled`, full reservation kept unless the final usage report
+had arrived). A cancel releases the circuit as healthy only after the stream
+delivered provider events, so cancels cannot hide a provider that accepts
+and then hangs. A timer ends a stream at the policy timeout, so a trickling
+stream cannot outlive its admission lease. A deadline that passes while the
+caller holds the stream between reads still fails as `provider_timeout`, but
+does not count against the circuit; only a read left blocked by AWS does.
 
 Bedrock success and failed answers with validated token evidence reconcile
 the reservation using all four usage classes, including billed reasoning and

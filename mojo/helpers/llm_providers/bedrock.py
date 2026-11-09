@@ -70,9 +70,14 @@ def _json_object(value):
         raise ProviderError("provider_rejected")
     try:
         json.dumps(value, allow_nan=False)
-    except (TypeError, ValueError):
+    except (TypeError, ValueError, RecursionError):
         raise ProviderError("provider_rejected") from None
     return value
+
+
+def _no_constant(name):
+    # json.loads accepts NaN and Infinity; the echoed input would not.
+    raise ValueError(name)
 
 
 def _tool_config(tools):
@@ -213,6 +218,9 @@ class BedrockStream:
         self._done = False
         self._interrupted = False
         self._timed_out = False
+        self._reading = False
+        self._caller_stalled = False
+        self.events_seen = 0
         # Socket read timeouts bound each read, not the whole answer. The
         # timer ends a stream that keeps trickling past the guard's timeout.
         self._timer = threading.Timer(timeout, self._expire)
@@ -224,6 +232,8 @@ class BedrockStream:
         return self
 
     def _expire(self):
+        # A deadline passed between reads is the caller's stall, not AWS's.
+        self._caller_stalled = not self._reading
         self._timed_out = True
         self.interrupt()
 
@@ -258,15 +268,21 @@ class BedrockStream:
         self.close()
         raise ProviderError("provider_rejected", self.request_id, usage=self.usage)
 
+    def _timeout(self, caller_stalled):
+        self.close()
+        error = ProviderError("provider_timeout", self.request_id, usage=self.usage)
+        error.caller_stalled = caller_stalled
+        raise error
+
     def _read_failed(self, err):
         """A failure while reading the stream, reduced to one safe code."""
         import socket
         from botocore import exceptions as be
         from urllib3 import exceptions as ue
 
-        self.close()
         if self._timed_out:
-            raise ProviderError("provider_timeout", self.request_id, usage=self.usage)
+            self._timeout(self._caller_stalled)
+        self.close()
         if isinstance(err, (be.BotoCoreError, be.ClientError)):
             self._raise_safe(err, self.request_id)
         # A running stream reads urllib3 directly; botocore wraps none of it.
@@ -281,8 +297,8 @@ class BedrockStream:
             if self._done:
                 raise StopIteration
             if self._timed_out or time.monotonic() > self._deadline:
-                self.close()
-                raise ProviderError("provider_timeout", self.request_id, usage=self.usage)
+                self._timeout(self._caller_stalled if self._timed_out else True)
+            self._reading = True
             try:
                 event = next(self._events)
             except StopIteration:
@@ -297,6 +313,9 @@ class BedrockStream:
                     self.close()
                     raise StopIteration from None
                 self._read_failed(err)
+            finally:
+                self._reading = False
+            self.events_seen += 1
             result = self._handle(event)
             if result is not None:
                 return result
@@ -356,8 +375,9 @@ class BedrockStream:
             if block["type"] == "tool_use":
                 raw = "".join(block["parts"])
                 try:
-                    value = json.loads(raw) if raw.strip() else {}
-                except ValueError:
+                    value = json.loads(raw, parse_constant=_no_constant) \
+                        if raw.strip() else {}
+                except (ValueError, RecursionError):
                     self._reject()
                 if not isinstance(value, dict):
                     self._reject()
@@ -545,6 +565,13 @@ class BedrockProvider(ProviderAdapter):
             raise ProviderError("provider_rejected")
         return request, tool_names, timeout
 
+    def check_request(self, messages, model, max_tokens, system=None, tools=None,
+                      timeout=None, reasoning_effort="off"):
+        """Validate a request without any SDK work, so the guard can refuse it
+        before reserving budget. Raises ProviderError("provider_rejected")."""
+        self._request(messages, model, max_tokens, system, tools, reasoning_effort,
+                      timeout)
+
     def call(self, messages, model, max_tokens, system=None, tools=None,
              cache_enabled=False, timeout=None, reasoning_effort="off"):
         request, tool_names, timeout = self._request(
@@ -630,8 +657,11 @@ class BedrockProvider(ProviderAdapter):
                 if not isinstance(tool, dict) or set(tool) != {"toolUseId", "name", "input"} \
                         or not isinstance(tool["toolUseId"], str) \
                         or not TOOL_USE_ID_PATTERN.fullmatch(tool["toolUseId"]) \
-                        or tool["name"] not in tool_names \
-                        or not isinstance(tool["input"], dict):
+                        or tool["name"] not in tool_names:
+                    reject()
+                try:
+                    _json_object(tool["input"])
+                except ProviderError:
                     reject()
                 content.append({"type": "tool_use", "id": tool["toolUseId"],
                                 "name": tool["name"], "input": tool["input"]})

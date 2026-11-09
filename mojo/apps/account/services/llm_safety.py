@@ -761,6 +761,7 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
     """
     from mojo.apps.account.models import LLMRequest
     from mojo.helpers.llm_providers import get_provider
+    from mojo.helpers.llm_providers.base import ProviderError
 
     policy = parse_policy(policy_raw)
     route = policy["routes"].get(feature)
@@ -826,6 +827,18 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
         # tool loop must share one operation id so max_loop_calls binds it.
         if provider_name == "bedrock" and tools and not context.get("operation_id"):
             _deny("operation_invalid")
+        # Refuse a malformed request before it reserves anything or touches
+        # the circuit; only the Bedrock adapter offers this check.
+        check_request = getattr(adapter, "check_request", None)
+        if provider_name == "bedrock" and check_request is not None:
+            try:
+                check_request(
+                    messages=messages, model=route["model"], max_tokens=max_tokens,
+                    system=system, tools=tools, reasoning_effort=reasoning_effort,
+                    timeout=min(policy["shared"]["timeout_seconds"],
+                                limits["timeout_seconds"]))
+            except ProviderError:
+                _deny("provider_rejected")
         redis = redis or get_connection()
         resolved_model = route["model"]
         if delegates_model(route):
@@ -896,11 +909,13 @@ def _elapsed_ms(admission):
     return int((time.monotonic() - admission["started"]) * 1000)
 
 
-def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None):
+def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None,
+                    breaker="health"):
     """Settle a dispatched Bedrock failure, then raise its safe code.
 
     Validated usage reconciles the reservation; unknown spend keeps all of it.
-    Only provider health failures count toward the circuit.
+    Only provider health failures count toward the circuit. ``breaker`` is
+    "success" or "skip" when the failure says nothing about AWS's health.
     """
     from mojo.apps.account.models import LLMRequest
     from mojo.helpers.llm_providers.base import validated_usage
@@ -919,11 +934,11 @@ def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None
     if failed_usage is not None:
         fields.update(failed_usage)
     try:
-        if code in BEDROCK_HEALTH_FAILURES:
+        if breaker == "health" and code in BEDROCK_HEALTH_FAILURES:
             _breaker_failure(
                 provider_name, admission["fingerprint"], admission["generation"],
                 admission["breaker_owner"], code, admission["policy"])
-        else:
+        elif breaker != "skip":
             _breaker_success(provider_name, admission["fingerprint"],
                              admission["generation"], admission["breaker_owner"])
         LLMRequest.objects.filter(pk=admission["ledger"].pk).update(**fields)
@@ -954,11 +969,13 @@ def _bedrock_unexpected(admission):
     _deny("provider_failed")
 
 
-def _bedrock_cancelled(admission, usage=None, request_id=""):
+def _bedrock_cancelled(admission, usage=None, request_id="", healthy=False):
     """The caller stopped a dispatched stream. Never raises.
 
-    The stream was accepted, so the circuit sees a healthy provider. Spend
-    seen in the final metadata reconciles; otherwise the reservation stays.
+    Only a stream that already delivered provider events releases the
+    circuit as healthy; a cancel cannot hide a provider that accepts and then
+    hangs. Spend seen in the final metadata reconciles; otherwise the
+    reservation stays.
     """
     from mojo.apps.account.models import LLMRequest
     from mojo.helpers.llm_providers.base import validated_usage
@@ -972,8 +989,9 @@ def _bedrock_cancelled(admission, usage=None, request_id=""):
     if seen is not None:
         fields.update(seen)
     try:
-        _breaker_success(admission["provider"], admission["fingerprint"],
-                         admission["generation"], admission["breaker_owner"])
+        if healthy:
+            _breaker_success(admission["provider"], admission["fingerprint"],
+                             admission["generation"], admission["breaker_owner"])
         LLMRequest.objects.filter(pk=admission["ledger"].pk, status="started").update(
             **fields)
     except Exception:
@@ -1071,6 +1089,15 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
     return _settle_success(admission, response)
 
 
+def _in_event_loop():
+    import asyncio
+    try:
+        asyncio.get_running_loop()
+    except RuntimeError:
+        return False
+    return True
+
+
 class GuardedStream:
     """A dispatched provider stream that settles its admission exactly once.
 
@@ -1108,7 +1135,8 @@ class GuardedStream:
         except Exception:
             pass
         _bedrock_cancelled(self._admission, getattr(self._stream, "usage", None),
-                           getattr(self._stream, "request_id", ""))
+                           getattr(self._stream, "request_id", ""),
+                           healthy=bool(getattr(self._stream, "events_seen", 0)))
 
     def __next__(self):
         from mojo.helpers.llm_providers.base import ProviderError, validated_usage
@@ -1140,9 +1168,14 @@ class GuardedStream:
             _bedrock_failed(self._admission, "provider_rejected", request_id,
                             getattr(self._stream, "usage", None))
         if isinstance(error, ProviderError):
+            breaker = "health"
+            if getattr(error, "caller_stalled", False):
+                # The deadline passed while the caller held the stream, not
+                # while AWS was answering a read.
+                breaker = "success" if getattr(self._stream, "events_seen", 0) else "skip"
             _bedrock_failed(self._admission, error.code, error.request_id or request_id,
                             getattr(error, "usage", None),
-                            getattr(error, "retry_after", None))
+                            getattr(error, "retry_after", None), breaker=breaker)
         if error is not None:
             try:
                 self._stream.close()
@@ -1159,16 +1192,17 @@ class GuardedStream:
     def close(self):
         """Cancel. Idempotent and never raises.
 
-        With a read in progress on another thread this only interrupts it,
-        and that thread settles. Otherwise it settles here, so call it from
-        synchronous code (it writes the ledger).
+        With a read in progress on another thread, or when called from an
+        event loop, this only interrupts the read and the iterating thread
+        settles on its next step. Otherwise it settles here (it writes the
+        ledger, so that path is synchronous code).
         """
         with self._lock:
             if self._settled or self._cancelled:
                 return
             self._cancelled = True
             reading = self._reading
-        if reading:
+        if reading or _in_event_loop():
             interrupt = getattr(self._stream, "interrupt", None)
             if interrupt is not None:
                 try:

@@ -263,23 +263,28 @@ A failure after streaming started raises `LLMExecutionError` from iteration
 with a `provider_*` code; text already delivered may be partial and must not
 be replayed automatically. The whole stream is bounded by the policy's
 `timeout_seconds`: a timer shuts the connection down at the deadline and
-iteration raises `provider_timeout`.
+iteration raises `provider_timeout`. That deadline counts your time between
+reads too, so keep the loop moving; a deadline passed while your code held
+the stream does not count against the provider's circuit.
 
 **Cancel** with `answer.close()` (the `with` block calls it). It is
 idempotent and never raises. Iterate the stream from synchronous code:
 
-- If another thread is blocked reading the stream (a worker thread feeding a
-  websocket, say), `close()` only shuts the socket down and returns at once.
-  It does no database work, so an event-loop coroutine may call it directly.
-  The reading thread wakes, settles the cancel and stops iterating.
-- With no read in progress, `close()` settles the cancel itself, so call it
-  from synchronous code (or `sync_to_async`).
+- Called from an event-loop coroutine, or while another thread is blocked
+  reading the stream (a worker thread feeding a websocket, say), `close()`
+  only shuts the socket down and returns at once, with no database work.
+  The iterating thread settles the cancel on its next step and stops, so
+  keep iterating until the loop ends.
+- Called from synchronous code with no read in progress, `close()` settles
+  the cancel itself.
 
 A cancelled stream's ledger row finishes `status="failed"`,
-`error_code="cancelled"`. Its spend is unknown, so its full reservation stays
-charged; the circuit treats it as healthy. A stream abandoned without
-`close()` is ended by the deadline timer; its lease expires and the ledger
-repair marks it `unknown`.
+`error_code="cancelled"`. Its spend is unknown unless the final usage report
+had already arrived, so the full reservation normally stays charged. A
+cancel releases the provider's circuit as healthy only if the stream had
+already delivered provider events. A stream abandoned without `close()` is
+ended by the deadline timer; its lease expires and the ledger repair marks it
+`unknown`.
 
 ### Tool use on Bedrock
 
@@ -329,7 +334,7 @@ while True:
 - **Echo the assistant content verbatim.** The adapter checks that each
   result answers the preceding request and that tool turns come with the
   same declared tools; a mismatch is refused with `provider_rejected`
-  before any dispatch.
+  before any reservation, ledger row or AWS call.
 - **Round limits.** Every tool call needs `context["operation_id"]`
   (otherwise `operation_invalid`), reused for each call of one loop, so the
   route's `max_loop_calls` bounds the loop across calls: a loop of N tool
