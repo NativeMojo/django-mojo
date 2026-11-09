@@ -205,10 +205,16 @@ class WebSocketHandler:
     def _note_close(self, reason, initiator=None):
         """Record why this socket is closing, unless a cause is already
         recorded. `reason` is always one of this module's own fixed words,
-        never client input, so the close line stays bounded (#10231)."""
-        if getattr(self, "close_reason", None) is None:
-            self.close_reason = reason
-            self.close_initiator = initiator
+        never client input, so the close line stays bounded (#10231).
+        The socket may have ended first, by a disconnect event or a failed
+        send, while receive was still pending: that earlier cause wins."""
+        if getattr(self, "close_reason", None) is not None:
+            return
+        ended_by = getattr(getattr(self, "websocket", None), "ended_by", None)
+        if ended_by in ("event", "send_error"):
+            reason, initiator = self._stream_end_cause()
+        self.close_reason = reason
+        self.close_initiator = initiator
 
     def _stream_end_cause(self):
         """(reason, initiator) for a receive stream that ended, from what the

@@ -279,7 +279,9 @@ Every socket writes one line to `realtime.log` when it is cleaned up:
 [<connection id> -> user:42 -> 203.0.113.7]: disconnected reason=idle_timeout code=1000 initiator=server connected=61.3s idle=60.1s auth=yes
 ```
 
-- `reason` is the first cause recorded:
+- `reason` is the first cause recorded. A disconnect or a failed send that
+  the socket saw while the handler was still waiting to receive counts from
+  when it happened, so a later timeout does not replace it:
 
   | reason | initiator | meaning |
   |---|---|---|

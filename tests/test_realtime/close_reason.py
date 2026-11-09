@@ -42,6 +42,8 @@ class _Peer:
         self.events = asyncio.Queue()
         self.sent = []
         self.fail_sends_after_auth = fail_sends_after_auth
+        self.fail_sends = False
+        self.handler = None
 
     def client_text(self, frame):
         self.events.put_nowait({"type": "websocket.receive", "text": json.dumps(frame)})
@@ -54,7 +56,7 @@ class _Peer:
         return await self.events.get()
 
     async def send(self, message):
-        if self.fail_sends_after_auth and self.frames("auth_success"):
+        if self.fail_sends or (self.fail_sends_after_auth and self.frames("auth_success")):
             raise OSError("broken pipe")
         self.sent.append(message)
 
@@ -86,6 +88,7 @@ def _session(token, finish, fail_sends_after_auth=False, **seams):
                  "client": ("127.0.0.1", 50000)}
         socket = ASGIWebSocketWrapper(scope, peer.receive, peer.send)
         handler = WebSocketHandler(socket, "/ws/realtime/", **seams)
+        peer.handler = handler
         peer.client_text({"type": "authenticate", "token": token, "prefix": "bearer"})
         task = asyncio.create_task(handler.handle_connection())
         await peer.wait_for("auth_success")
@@ -202,6 +205,25 @@ def test_send_failure_line(opts):
     assert (fields["reason"], fields["initiator"], fields["code"]) == \
         ("send_failed", "unknown", "none"), \
         f"no client close happened, only a failed send: {fields}"
+
+
+@th.django_unit_test("a send that fails while receive waits is send_failed, not the later timeout")
+def test_send_failure_while_receive_pending(opts):
+    async def fail_then_idle(peer):
+        # Let the marker frame be handled, so receive is waiting for the next.
+        await asyncio.sleep(0.3)
+        peer.fail_sends = True
+        # A send from outside the receive loop, as a ping or a pub/sub
+        # delivery does; it fails, and the idle timeout closes the socket later.
+        await peer.handler.send_message({"type": "rt10231"})
+        assert peer.handler.websocket.ended_by == "send_error", \
+            f"the wrapper must record the failed send: {peer.handler.websocket.ended_by}"
+
+    handler = _session(opts.cr_token, fail_then_idle, idle_timeout=1.0, ping_seconds=0)
+    fields = _close_fields(handler, opts.cr_token)
+    assert (fields["reason"], fields["initiator"], fields["code"]) == \
+        ("send_failed", "unknown", "none"), \
+        f"the failed send came first; the idle timeout must not replace it: {fields}"
 
 
 @th.django_unit_test("the ASGI wrapper keeps an integer close code and nothing else")
