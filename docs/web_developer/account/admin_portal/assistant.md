@@ -22,7 +22,9 @@ Anthropic-only. Optional Bedrock Nova 2 Lite text reasoning is configured by
 the deployment's static safety policy and uses the server's AWS role/profile
 chain. There are no AWS-key fields, provider-options input, or Bedrock
 credential probe in these endpoints, and no default Bedrock enablement. A
-Bedrock route cannot supply the tool-enabled Admin Assistant's capabilities.
+Bedrock route may allow server-side tool calls and streamed answers for the
+host app's own features, but the Admin Assistant still needs an Anthropic
+route: its loop relies on prompt caching and images.
 
 ---
 
@@ -319,6 +321,11 @@ tests the AWS chain. Model catalogue refresh likewise remains Anthropic-only.
 authorized security readers. `hours` is clamped to 1–168. It returns schema version 2 and
 bounded provider/feature/status aggregates and breaker counts, never per-row
 ledger/circuit/attempt records or credential fingerprints.
+
+Streamed answers and tool calls are counted like any other call: one ledger
+row per call or stream, grouped by provider, feature and status. A stream the
+caller cancelled counts as `failed`. The aggregate does not split out the
+cancelled ones.
 
 ### `action: "set_model_selection"`
 

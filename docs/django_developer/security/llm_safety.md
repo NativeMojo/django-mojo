@@ -157,7 +157,11 @@ LLM_SAFETY_POLICY["features"]["my_maestro_reasoning"] = {
 ```
 
 Bedrock requires exactly these six route keys, `credential="aws"`, and
-`capabilities=["text"]`. Allowed models are exactly
+`capabilities` of `["text"]` or `["text", "tools"]`. Adding `"tools"` lets
+callers declare tools (see [Tool use on Bedrock](../helpers/llm.md#tool-use-on-bedrock));
+it changes the policy hash, so activate the deployed policy again. A tool
+loop of N rounds makes N + 1 calls under one operation id, so give the
+feature envelope a `max_loop_calls` of at least that. Allowed models are exactly
 `us.amazon.nova-2-lite-v1:0`, `eu.amazon.nova-2-lite-v1:0`,
 `jp.amazon.nova-2-lite-v1:0`, and `global.amazon.nova-2-lite-v1:0`.
 `reasoning_efforts` must be a nonempty, unique list drawn from `off`, `low`,
@@ -191,11 +195,15 @@ role credentials does not reset budgets or the circuit. The two Anthropic key
 settings are never read to resolve a Bedrock credential.
 
 See [the call and response contract](../helpers/llm.md#bedrock-reasoning).
-The adapter supports text only, suppresses reasoning content from the final
-answer, and retains billed reasoning within `usage.output_tokens`. It sends
-no explicit cache controls, guardrail configuration, or application content
-filter. Anthropic tool routes, key probes, and model discovery retain their
-existing contracts.
+The adapter supports text, caller-declared tools, and streamed answers. It
+suppresses reasoning content from the final answer and from the stream, and
+retains billed reasoning within `usage.output_tokens`. It sends no explicit
+cache controls, guardrail configuration, or application content filter.
+Streaming needs no extra policy capability, but `ConverseStream` needs the
+IAM action `bedrock:InvokeModelWithResponseStream` on the same inference
+profile and destination model resources that `bedrock:InvokeModel` covers.
+Anthropic tool routes, key probes, and model discovery retain their existing
+contracts; streaming is Bedrock-only.
 
 ## Policy agreement and rollout
 
@@ -248,13 +256,28 @@ remote cancellation: credential refresh and I/O may outlive the admission
 lease. These concurrency caps bound admission leases, not every still-running
 AWS request.
 
+`llm.stream()` passes exactly the same steps before it dispatches
+`converse_stream`, so a refused stream raises before any event. Its two
+extra pre-dispatch checks are the route's adapter supporting streaming
+(only Bedrock does) and, for every Bedrock call, the tool-loop rules: tool
+turns without declared tools are `capability_unsupported`, declared tools
+without an `operation_id` are `operation_invalid`, and a transcript holding
+more answered tool rounds than `max_tool_rounds` (Bedrock default 8) is
+`loop_limit`. All three refuse before the operation counter, permit, or
+ledger. A stream settles exactly once: on its final record (actual usage,
+`succeeded`), on a provider failure (as below), or on a cancel
+(`failed`/`cancelled`, full reservation kept, circuit released as healthy
+because the stream was accepted). A timer ends a stream at the policy
+timeout, so a trickling stream cannot outlive its admission lease.
+
 Bedrock success and failed answers with validated token evidence reconcile
 the reservation using all four usage classes, including billed reasoning and
 implicit cache usage. If spend is unknown, the failure releases concurrency
 but retains the full token reservation for its budget windows; missing usage
 is never treated as zero. Existing Anthropic failure accounting is unchanged.
 Bedrock authentication, throttling, timeout, unavailable, and server failures
-count toward the circuit. Unusable output (`provider_rejected`, including an
+count toward the circuit, including connection resets and read timeouts in
+the middle of a stream. Unusable output (`provider_rejected`, including an
 AWS `content_filtered` result) does not open it and releases a half-open probe
 as healthy. This does not add content filtering to the application.
 
@@ -360,7 +383,9 @@ requeues an unexpired worker.
 
 States are:
 
-- Ledger: `started`, `succeeded`, `failed`, `blocked`, `unknown`.
+- Ledger: `started`, `succeeded`, `failed`, `blocked`, `unknown`. A cancelled
+  stream is `failed` with the ledger-only code `cancelled`; it is never
+  raised to a caller.
 - Circuit: `closed`, `open`, `half_open`.
 - Incident attempt: `claimed`, `queued`, `running`, `retryable`, `succeeded`,
   `terminal` (a retryable attempt normally transitions immediately back to
@@ -442,7 +467,8 @@ and the [additive schema-2 owner API](../../web_developer/account/admin_portal/a
 
 ## Stable failures and retry semantics
 
-`llm.call()` and `ask()` raise `LLMExecutionError(code, retry_after=None)`.
+`llm.call()`, `ask()` and `stream()` (from the call or from iteration) raise
+`LLMExecutionError(code, retry_after=None)`.
 Provider text is discarded. `retry_after` may be populated for a bounded
 provider rate-limit response, and for `budget_exhausted` (the seconds until the
 first refusing budget window rolls over). Stable codes are:

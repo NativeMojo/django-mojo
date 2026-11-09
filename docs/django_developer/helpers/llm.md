@@ -1,8 +1,8 @@
 # LLM Helper — Django Developer Reference
 
-Provider-neutral LLM facade with Anthropic and a text-only AWS Bedrock Nova 2
-Lite adapter. Production requests use the mandatory
-[LLM safety boundary](../security/llm_safety.md).
+Provider-neutral LLM facade with Anthropic and an AWS Bedrock Nova 2 Lite
+adapter (text, caller-declared tools, and streamed answers). Production
+requests use the mandatory [LLM safety boundary](../security/llm_safety.md).
 
 ```python
 from mojo.helpers import llm
@@ -143,6 +143,7 @@ response = llm.call(
     reasoning_effort="off",  # default; Anthropic accepts only off
     feature="assistant",  # required for framework callers
     context={"conversation_id": 42, "operation_id": "stable-loop-uuid"},
+    max_tool_rounds=None,  # optional 1-32; Bedrock defaults to 8
 )
 # Returns a normalized response dict, including content and usage
 ```
@@ -193,12 +194,15 @@ reasoning.
 Messages have exactly `role` (`user` or `assistant`) and `content`; content is
 a nonblank string or a nonempty list of `{"type": "text", "text": "..."}`
 blocks with nonblank text.
-System content accepts the same text forms. Tools, images, streaming,
-arbitrary model fields, and explicit cache controls are unsupported. The
-adapter sends no Bedrock guardrail configuration or application content filter.
+System content accepts the same text forms. Tool turns are covered in
+[Tool use on Bedrock](#tool-use-on-bedrock) and streaming in
+[Streaming](#streaming). Images, arbitrary model fields, and explicit cache
+controls are unsupported. The adapter sends no Bedrock guardrail
+configuration or application content filter.
 
 The response has `provider="bedrock"`, the pinned `model`, AWS request `id`,
-`stop_reason`, final `content` text blocks, and these usage classes:
+`stop_reason`, final `content` blocks (text, plus `tool_use` blocks on a tool
+request), and these usage classes:
 
 | Field | Meaning |
 |---|---|
@@ -210,9 +214,10 @@ The response has `provider="bedrock"`, the pinned `model`, AWS request `id`,
 Total input is the sum of the three input classes. Reasoning/redacted blocks
 never become answer text; there is no separate exact reasoning-token count
 to add to output. `end_turn` is complete; a text-bearing `max_tokens` result
-is partial. Empty, reasoning-only, filtered, malformed, over-cap, or over-1-MiB
-final output raises a safe provider error, retaining any validated billed
-usage in the ledger. No explicit cache checkpoints are sent, but implicit
+is partial; `tool_use` asks the caller to run tools. Whitespace-only text
+blocks are dropped from `content`. Empty, reasoning-only, filtered,
+malformed, over-cap, or over-1-MiB final output raises a safe provider error,
+retaining any validated billed usage in the ledger. No explicit cache checkpoints are sent, but implicit
 cache usage is still accounted for.
 
 An application-owned handler published with the existing `jobs.publish` can
@@ -222,6 +227,121 @@ different jobs from the same spoken turn need different ids. The operation
 counter expires, so durable attempts need their own bounds. Socket timeouts
 do not guarantee cancellation, and ambiguous `provider_*` failures must not
 be automatically replayed; see [retry semantics](../security/llm_safety.md#stable-failures-and-retry-semantics).
+
+### Streaming
+
+`llm.stream()` takes the same arguments as `call()` (its `operation`
+defaults to `"stream"`) and works on Bedrock routes only; an Anthropic route
+refuses it with `capability_unsupported`. It runs every guard step and
+dispatches `converse_stream` before it returns, so a refusal, or a provider
+error before the first event, raises `LLMExecutionError` from `stream()`
+itself — nothing has streamed and you can still answer with an error.
+
+```python
+with llm.stream(messages, system="Answer briefly.", feature="my_maestro_chat",
+                operation="chat", context={"operation_id": turn_id},
+                max_tokens=1024) as answer:
+    for event in answer:
+        if event["type"] == "text_delta":
+            send_to_client(event["text"])
+        else:  # "final", always the last event
+            response = event["response"]   # exactly what llm.call() returns
+            usage = response["usage"]
+            stop_reason = response["stop_reason"]
+```
+
+| Event | Shape | When |
+|---|---|---|
+| Text | `{"type": "text_delta", "text": "..."}` | Each non-empty piece of visible answer text, in order. Reasoning is never yielded. |
+| Final | `{"type": "final", "response": {...}}` | Once, last, after the whole answer validated and usage settled. `response` has the `call()` shape: `id`, `type="message"`, `role`, `provider`, `model`, `content`, `stop_reason`, `usage`. |
+
+`answer.response` holds the final response after the last event (`None`
+before). Tool requests arrive only in that final response, never earlier,
+so a tool is never started for an answer that then fails validation.
+
+A failure after streaming started raises `LLMExecutionError` from iteration
+with a `provider_*` code; text already delivered may be partial and must not
+be replayed automatically. The whole stream is bounded by the policy's
+`timeout_seconds`: a timer shuts the connection down at the deadline and
+iteration raises `provider_timeout`.
+
+**Cancel** with `answer.close()` (the `with` block calls it). It is
+idempotent and never raises. Iterate the stream from synchronous code:
+
+- If another thread is blocked reading the stream (a worker thread feeding a
+  websocket, say), `close()` only shuts the socket down and returns at once.
+  It does no database work, so an event-loop coroutine may call it directly.
+  The reading thread wakes, settles the cancel and stops iterating.
+- With no read in progress, `close()` settles the cancel itself, so call it
+  from synchronous code (or `sync_to_async`).
+
+A cancelled stream's ledger row finishes `status="failed"`,
+`error_code="cancelled"`. Its spend is unknown, so its full reservation stays
+charged; the circuit treats it as healthy. A stream abandoned without
+`close()` is ended by the deadline timer; its lease expires and the ledger
+repair marks it `unknown`.
+
+### Tool use on Bedrock
+
+A Bedrock route whose policy lists `"tools"` (see
+[Bedrock routes](../security/llm_safety.md#bedrock-routes)) accepts declared
+tools in `call()` and `stream()`. The facade never runs a tool: it returns
+the model's requests, the caller runs them, and the caller sends the results
+back in the next call.
+
+```python
+TOOLS = [{
+    "name": "lookup_item",
+    "description": "Look up a board item by id.",
+    "input_schema": {"type": "object",
+                     "properties": {"id": {"type": "integer"}},
+                     "required": ["id"]},
+}]
+context = {"operation_id": turn_id}  # required with tools; same id every round
+messages = [{"role": "user", "content": "What is item 7 about?"}]
+
+while True:
+    response = llm.call(messages, tools=TOOLS, feature="my_maestro_chat",
+                        operation="chat", context=context, max_tool_rounds=4)
+    if response["stop_reason"] != "tool_use":
+        break  # final text answer in response["content"]
+    messages.append({"role": "assistant", "content": response["content"]})
+    results = []
+    for block in response["content"]:
+        if block["type"] == "tool_use":
+            text, failed = run_my_tool(block["name"], block["input"])
+            results.append({"type": "tool_result", "tool_use_id": block["id"],
+                            "content": text, "is_error": failed})
+    messages.append({"role": "user", "content": results})
+```
+
+- **Declaration:** exactly `name` (1–64 of `a-z A-Z 0-9 _ -`, unique),
+  nonblank `description`, and `input_schema` (a JSON-schema object whose
+  `type` is `"object"`); at most 64 tools. Any other key, such as
+  `cache_control`, is refused.
+- **Request:** a `tool_use` block `{"type": "tool_use", "id", "name",
+  "input"}` with `stop_reason == "tool_use"`. `input` is always a JSON
+  object; a tool with no input gets `{}`. Only declared names are accepted.
+- **Result:** the next user message answers every `tool_use` id of the
+  assistant message before it, with `{"type": "tool_result", "tool_use_id",
+  "content", "is_error"}`. `content` is a nonblank string or a list of text
+  blocks; `is_error` is optional and tells the model the tool failed.
+- **Echo the assistant content verbatim.** The adapter checks that each
+  result answers the preceding request and that tool turns come with the
+  same declared tools; a mismatch is refused with `provider_rejected`
+  before any dispatch.
+- **Round limits.** Every tool call needs `context["operation_id"]`
+  (otherwise `operation_invalid`), reused for each call of one loop, so the
+  route's `max_loop_calls` bounds the loop across calls: a loop of N tool
+  rounds makes N + 1 calls. `max_tool_rounds` (1–32) also refuses, with
+  `loop_limit`, a transcript holding more answered rounds than the limit,
+  before any reservation or ledger row. Bedrock defaults to 8; Anthropic
+  callers keep their existing loops unless they pass a value.
+- Streaming works the same way: read the tool requests from the final
+  event's `response["content"]`.
+
+Nova 2 reports reasoning only as `[REDACTED]`, and the facade never returns
+reasoning blocks, so they are not echoed into tool turns.
 
 ## `model_choices()` — picker suggestions
 
