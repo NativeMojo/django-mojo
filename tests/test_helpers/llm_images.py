@@ -187,3 +187,44 @@ def test_decompression_bomb_header_is_input_too_large(opts):
         + chunk(b"IDAT", b"") + chunk(b"IEND", b"")
     assert len(raw) < 100, "the bomb fixture must stay a tiny header-only file"
     _refused("input_too_large", lambda: image_block(raw, "image/png"))
+
+
+@th.django_unit_test()
+def test_png_compressed_header_chunks_are_bounded_before_pillow(opts):
+    import struct
+    import zlib
+    from mojo.helpers import llm_images
+
+    def chunk(kind, data):
+        return struct.pack(">I", len(data)) + kind + data + struct.pack(
+            ">I", zlib.crc32(kind + data) & 0xFFFFFFFF)
+
+    raw = _image("PNG")
+    head, rest = raw[:33], raw[33:]
+    assert head[12:16] == b"IHDR", "the fixture must start with a 13-byte IHDR chunk"
+    text = chunk(b"zTXt", b"Comment\x00\x00" + zlib.compress(b"x" * 4096))
+    # A macOS screenshot carries a colour profile and XMP metadata.
+    profile = chunk(b"iCCP", b"Display\x00\x00" + zlib.compress(b"p" * 512))
+    allowed = head + profile + text * (llm_images.MAX_PNG_COMPRESSED_CHUNKS - 1) + rest
+    assert llm_images.image_block(allowed, "image/png")["source"]["media_type"] == "image/png", \
+        "a PNG with a few compressed metadata chunks must still be accepted"
+    flooded = head + text * (llm_images.MAX_PNG_COMPRESSED_CHUNKS + 1) + rest
+    _refused("image_invalid", lambda: llm_images.image_block(flooded, "image/png"))
+    padded = head + chunk(b"tEXt", b"k\x00v") * llm_images.MAX_PNG_HEADER_CHUNKS + rest
+    _refused("image_invalid", lambda: llm_images.image_block(padded, "image/png"))
+    _refused("image_invalid", lambda: llm_images.image_block(raw[:8] + rest, "image/png"))
+
+
+@th.django_unit_test()
+def test_tool_arguments_shaped_like_images_are_not_images(opts):
+    from mojo.helpers import llm_images
+
+    use = {"type": "tool_use", "id": "t1", "name": "attach",
+           "input": {"type": "image", "file_id": 12}}
+    messages = [{"role": "user", "content": "attach the screenshot"},
+                {"role": "assistant", "content": [use]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1",
+                                              "content": "attached"}]}]
+    count, sizing = llm_images.collect_images(messages)
+    assert count == 0 and sizing == messages, \
+        "a model's tool arguments must never be read as image content"

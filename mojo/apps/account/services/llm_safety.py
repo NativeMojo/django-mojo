@@ -675,6 +675,9 @@ def _contains_image(value):
     if isinstance(value, dict):
         if value.get("type") == "image":
             return True
+        if value.get("type") == "tool_use":
+            # A model's tool arguments are JSON data, never content.
+            return False
         return any(_contains_image(item) for item in value.values())
     if isinstance(value, (list, tuple)):
         return any(_contains_image(item) for item in value)

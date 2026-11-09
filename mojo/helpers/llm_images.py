@@ -7,7 +7,6 @@ Errors carry a safe code and never any image data.
 import base64
 import binascii
 import io
-import warnings
 
 
 IMAGE_MEDIA_TYPES = {"image/png": "png", "image/jpeg": "jpeg",
@@ -17,8 +16,13 @@ MAX_IMAGE_BYTES = 5 * 1024 * 1024
 MAX_TOTAL_IMAGE_BYTES = 20 * 1024 * 1024
 MAX_IMAGE_SIDE = 8000
 IMAGE_RESERVED_TOKENS = 1600
+# Pillow inflates compressed text and colour-profile chunks (up to 1 MiB
+# each) while it reads a PNG header; bound how many it is handed.
+MAX_PNG_HEADER_CHUNKS = 64
+MAX_PNG_COMPRESSED_CHUNKS = 4
 
 _PILLOW_FORMATS = {"png": "PNG", "jpeg": "JPEG", "gif": "GIF", "webp": "WEBP"}
+_PNG_COMPRESSED = frozenset({b"zTXt", b"iTXt", b"iCCP"})
 
 
 class ImageInputError(Exception):
@@ -38,6 +42,27 @@ def _magic_matches(fmt, raw):
     return raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
 
 
+def _png_header_bounded(raw):
+    """IHDR first, then at most a few compressed chunks before the image data."""
+    offset = 8
+    compressed = 0
+    for index in range(MAX_PNG_HEADER_CHUNKS):
+        if offset + 8 > len(raw):
+            return False
+        length = int.from_bytes(raw[offset:offset + 4], "big")
+        kind = raw[offset + 4:offset + 8]
+        if (kind == b"IHDR") != (index == 0):
+            return False
+        if kind == b"IDAT":
+            return True
+        if kind in _PNG_COMPRESSED:
+            compressed += 1
+            if compressed > MAX_PNG_COMPRESSED_CHUNKS:
+                return False
+        offset += 12 + length
+    return False
+
+
 def _check_image(fmt, raw):
     if not raw:
         raise ImageInputError("image_invalid")
@@ -45,16 +70,17 @@ def _check_image(fmt, raw):
         raise ImageInputError("input_too_large")
     if not _magic_matches(fmt, raw):
         raise ImageInputError("image_invalid")
+    if fmt == "png" and not _png_header_bounded(raw):
+        raise ImageInputError("image_invalid")
     from PIL import Image
     expected = _PILLOW_FORMATS[fmt]
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            # Header parse only; pixel data is never decoded here.
-            with Image.open(io.BytesIO(raw), formats=[expected]) as image:
-                actual = image.format
-                width, height = image.size
-    except Image.DecompressionBombError:
+        # Header parse only; pixel data is never decoded here. Accepted
+        # sizes stay under Pillow's bomb warning, so no filter is needed.
+        with Image.open(io.BytesIO(raw), formats=[expected]) as image:
+            actual = image.format
+            width, height = image.size
+    except (Image.DecompressionBombError, Image.DecompressionBombWarning):
         raise ImageInputError("input_too_large") from None
     except Exception:
         raise ImageInputError("image_invalid") from None
@@ -108,6 +134,9 @@ def _contains_image(value):
     if isinstance(value, dict):
         if value.get("type") == "image":
             return True
+        if value.get("type") == "tool_use":
+            # A model's tool arguments are JSON data, never content.
+            return False
         return any(_contains_image(item) for item in value.values())
     if isinstance(value, (list, tuple)):
         return any(_contains_image(item) for item in value)

@@ -612,3 +612,22 @@ def test_image_turn_survives_a_guarded_tool_loop_plain_and_streamed(opts):
         assert client.calls == [] and not LLMRequest.objects.filter(
             operation=case["marker"]).exists(), \
             "an image inside a tool result must be refused before dispatch or ledger"
+
+
+@th.django_unit_test()
+def test_image_shaped_tool_arguments_do_not_stall_a_tool_loop(opts):
+    from mojo.apps.account.models import LLMRequest
+
+    with _guard_case(_tool_policy()) as case:
+        client = _Client(replies=[_bedrock_reply()])
+        transcript = HELLO + [
+            {"role": "assistant", "content": [
+                {"type": "tool_use", "id": "t1", "name": "lookup_item",
+                 "input": {"type": "image", "id": 7}}]},
+            {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "t1",
+                                          "content": "ok"}]}]
+        response = _guarded(case, client, stream=False, tools=TOOLS, messages=transcript)
+        assert response["stop_reason"] == "end_turn" and len(client.calls) == 1, \
+            "tool arguments shaped like an image must not need the images capability"
+        assert LLMRequest.objects.get(operation=case["marker"]).status == "succeeded", \
+            "the round must settle like any other tool round"
