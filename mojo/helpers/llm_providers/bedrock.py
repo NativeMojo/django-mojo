@@ -357,7 +357,11 @@ class BedrockStream:
             self._reject()
         if kind in STREAM_ERRORS:
             self.close()
-            raise ProviderError(STREAM_ERRORS[kind], self.request_id, usage=self.usage)
+            message = body.get("message")
+            message = message if isinstance(message, str) else ""
+            name = kind[:1].upper() + kind[1:]
+            raise ProviderError(STREAM_ERRORS[kind], self.request_id, usage=self.usage,
+                                detail=f"{name}: {message}" if message else name)
         if kind == "messageStart":
             if body.get("role") != "assistant":
                 self._reject()

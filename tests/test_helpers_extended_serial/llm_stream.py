@@ -631,3 +631,52 @@ def test_image_shaped_tool_arguments_do_not_stall_a_tool_loop(opts):
             "tool arguments shaped like an image must not need the images capability"
         assert LLMRequest.objects.get(operation=case["marker"]).status == "succeeded", \
             "the round must settle like any other tool round"
+
+
+@th.django_unit_test()
+def test_stream_rejections_store_the_bounded_reason_and_log_once(opts):
+    """#10589: pre-stream, mid-stream and event-shaped refusals keep the reason."""
+    from botocore.exceptions import ClientError, EventStreamError
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+
+    long_reason = "r" * 900
+    delta = {"contentBlockDelta": {"contentBlockIndex": 0, "delta": {"text": "Partial"}}}
+    mid = EventStreamError({"Error": {"Code": "validationException",
+                                      "Message": long_reason}}, "ConverseStream")
+    cases = (
+        ("mid-stream", [{"messageStart": {"role": "assistant"}}, delta, mid],
+         ("ValidationException: " + long_reason)[:512]),
+        ("event", [{"messageStart": {"role": "assistant"}}, delta,
+                   {"validationException": {"message": "synthetic stream reason"}}],
+         "ValidationException: synthetic stream reason"),
+    )
+    for label, events, expected in cases:
+        with _guard_case() as case:
+            client = _Client(streams=[events])
+            with mock.patch.object(llm_safety, "logger") as logger:
+                answer = _guarded(case, client)
+                assert next(answer)["text"] == "Partial", f"{label}: text before the failure must stream"
+                _assert_denied("provider_rejected", lambda: next(answer))
+            row = LLMRequest.objects.get(operation=case["marker"])
+            assert row.error_code == "provider_rejected" and row.error_detail == expected, \
+                f"{label}: the bounded reason must be stored, got {row.error_detail[:60]!r} ({len(row.error_detail)})"
+            assert logger.warning.call_count == 1 \
+                and expected in str(logger.warning.call_args.args), \
+                f"{label}: exactly one warning must carry the reason, got {logger.warning.call_args_list}"
+
+    class _Refusing(_Client):
+        def converse_stream(self, **kwargs):
+            raise ClientError({"Error": {"Code": "ValidationException",
+                                         "Message": long_reason},
+                               "ResponseMetadata": {"RequestId": "bedrock-pre-10589",
+                                                    "HTTPStatusCode": 400}},
+                              "ConverseStream")
+
+    with _guard_case() as case:
+        with mock.patch.object(llm_safety, "logger") as logger:
+            _assert_denied("provider_rejected", lambda: _guarded(case, _Refusing()))
+        row = LLMRequest.objects.get(operation=case["marker"])
+        expected = ("ValidationException: " + long_reason)[:512]
+        assert row.error_detail == expected and logger.warning.call_count == 1, \
+            f"pre-stream: the bounded reason must be stored and logged once, got {len(row.error_detail)}/{logger.warning.call_count}"
