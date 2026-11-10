@@ -41,7 +41,7 @@ class AnthropicProvider(ProviderAdapter):
         else:
             code = "provider_failed"
         detail = ""
-        if code == "provider_rejected":
+        if isinstance(err, anthropic.APIStatusError):
             detail = self._error_detail(err)
         retry_after = None
         if code == "provider_rate_limited":
@@ -54,20 +54,22 @@ class AnthropicProvider(ProviderAdapter):
 
     @staticmethod
     def _error_detail(err):
-        """"<type>: <message>" from the API's error body, or "".
+        """"<type>: <message>" from the API's error body, else the SDK message.
 
-        Only the error object Anthropic returns is read; the request body is
-        never copied.
+        Only the error Anthropic returns is read; the request body is never
+        copied.
         """
         body = getattr(err, "body", None)
         error = body.get("error") if isinstance(body, dict) else None
-        if not isinstance(error, dict):
-            return ""
-        kind = error.get("type")
-        message = error.get("message")
-        kind = kind if isinstance(kind, str) else ""
-        message = message if isinstance(message, str) else ""
-        return f"{kind}: {message}" if kind and message else (kind or message)
+        if isinstance(error, dict):
+            kind = error.get("type")
+            message = error.get("message")
+            kind = kind if isinstance(kind, str) else ""
+            message = message if isinstance(message, str) else ""
+            if kind or message:
+                return f"{kind}: {message}" if kind and message else (kind or message)
+        message = getattr(err, "message", "")
+        return message if isinstance(message, str) else ""
 
     def call(self, messages, model, max_tokens, system=None, tools=None,
              cache_enabled=True, timeout=None):

@@ -1280,13 +1280,22 @@ def test_anthropic_rejection_detail_reaches_ledger_and_log(opts):
     from mojo.apps.account.services import llm_safety
     from mojo.helpers.llm_providers.base import ProviderError
 
-    detail = "invalid_request_error: tools.3.input_schema: Field required"
+    import anthropic
+    import httpx
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
+
+    message = "tools.3.input_schema: Field required"
+    detail = f"invalid_request_error: {message}"
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    rejected = anthropic.BadRequestError("Error code: 400", response=httpx.Response(
+        400, request=request, headers={"request-id": "req_ledger_detail"}),
+        body={"type": "error", "error": {"type": "invalid_request_error",
+                                         "message": message}})
+    client = mock.Mock()
+    client.messages.count_tokens.side_effect = RuntimeError("no count")
+    client.messages.create.side_effect = rejected
     with _guard_case(_guard_policy("anthropic")) as case:
-        adapter = mock.Mock()
-        adapter.supports.return_value = True
-        adapter.call.side_effect = ProviderError(
-            "provider_rejected", "req_ledger_detail", detail=detail)
-        factory = mock.Mock(return_value=adapter)
+        factory = lambda name=None, **kwargs: AnthropicProvider(client=client, **kwargs)
         with mock.patch.object(llm_safety, "logger") as logger:
             _assert_denied("provider_rejected", lambda: _run_guard(case, factory))
         row = LLMRequest.objects.get(operation=case["marker"])
@@ -1312,3 +1321,30 @@ def test_anthropic_rejection_detail_reaches_ledger_and_log(opts):
         row = LLMRequest.objects.get(operation=case["marker"])
         assert row.error_detail == "" and not logger.warning.called, \
             f"a failure with no provider reason must store and log nothing extra, got {row.error_detail!r}"
+
+
+@th.django_unit_test()
+def test_bedrock_rejection_detail_reaches_ledger_and_log(opts):
+    """#10589: a Bedrock ValidationException's reason is stored and logged."""
+    from botocore import exceptions as be
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    response = {"Error": {"Code": "ValidationException", "Message": "z" * 900},
+                "ResponseMetadata": {"RequestId": "bedrock-ledger-10589",
+                                     "HTTPStatusCode": 400}}
+    client = mock.Mock()
+    client.converse.side_effect = be.ClientError(response, "Converse")
+    with _guard_case() as case:
+        factory = lambda name, **kwargs: BedrockProvider(client=client, **kwargs)
+        with mock.patch.object(llm_safety, "logger") as logger:
+            _assert_denied("provider_rejected", lambda: _run_guard(case, factory))
+        row = LLMRequest.objects.get(operation=case["marker"])
+        expected = ("ValidationException: " + "z" * 900)[:512]
+        assert row.status == "failed" and row.error_detail == expected, \
+            f"the Bedrock reason must be stored cut to 512, got {row.status}/{len(row.error_detail)}"
+        logged = " ".join(str(arg) for call in logger.warning.call_args_list
+                          for arg in call.args)
+        assert expected in logged and "bedrock-ledger-10589" in logged, \
+            f"the Bedrock refusal must be logged with its request id, got {logged[:120]!r}"

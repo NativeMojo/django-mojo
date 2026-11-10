@@ -862,3 +862,29 @@ def test_images_inside_tool_results_never_reach_bedrock(opts):
     client = _Client()
     _call_rejected(client, messages=transcript, tools=TOOLS)
     assert client.calls == [], "an image inside a tool result must not reach Converse"
+
+
+@th.django_unit_test()
+def test_validation_exception_keeps_aws_code_and_message(opts):
+    """#10589: a Bedrock refusal carries AWS's own reason, bounded, never the request."""
+    from botocore import exceptions as be
+    from mojo.helpers.llm_providers.base import ProviderError
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    message = "The model returned the following errors: toolConfig.tools.0: invalid"
+    for text, expected in ((message, f"ValidationException: {message}"),
+                           ("y" * 2000, ("ValidationException: " + "y" * 2000)[:512])):
+        response = {"Error": {"Code": "ValidationException", "Message": text},
+                    "ResponseMetadata": {"RequestId": "bedrock-10589",
+                                         "HTTPStatusCode": 400}}
+        client = _Client(error=be.ClientError(response, "Converse"))
+        try:
+            BedrockProvider(client=client).call(MESSAGES, MODEL, 32)
+            assert False, "a ValidationException must raise ProviderError"
+        except ProviderError as err:
+            assert err.code == "provider_rejected" and err.request_id == "bedrock-10589", \
+                f"a ValidationException must stay provider_rejected with its id, got {err.code}"
+            assert err.detail == expected, \
+                f"the AWS code and message must be kept, cut to 512, got {err.detail[:80]!r} ({len(err.detail)})"
+            assert str(err) == "provider_rejected" and "Hello" not in err.detail, \
+                "str(err) must stay the code and the request must never reach the detail"

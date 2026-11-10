@@ -490,6 +490,7 @@ class BedrockProvider(ProviderAdapter):
         from botocore import exceptions as be
 
         retry_after = None
+        detail = ""
         if isinstance(err, (be.NoCredentialsError, be.PartialCredentialsError,
                             be.CredentialRetrievalError, be.TokenRetrievalError,
                             be.ProfileNotFound)):
@@ -531,6 +532,10 @@ class BedrockProvider(ProviderAdapter):
                 code = "provider_unavailable"
             else:
                 code = "provider_rejected"
+            message = error.get("Message")
+            message = message if isinstance(message, str) else ""
+            detail = f"{aws_code}: {message}" if aws_code and message \
+                else (aws_code or message)
             if code == "provider_rate_limited":
                 headers = metadata.get("HTTPHeaders")
                 headers = headers if isinstance(headers, dict) else {}
@@ -540,7 +545,8 @@ class BedrockProvider(ProviderAdapter):
                     retry_after = min(3600, max(1, int(value)))
         else:
             code = "provider_failed"
-        raise ProviderError(code, request_id, retry_after=retry_after) from None
+        raise ProviderError(code, request_id, retry_after=retry_after,
+                            detail=detail) from None
 
     def _request(self, messages, model, max_tokens, system, tools, reasoning_effort,
                  timeout):

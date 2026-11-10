@@ -671,5 +671,5 @@ def test_anthropic_rejection_keeps_provider_error_type_and_message(opts):
                 [{"role": "user", "content": "hi"}], "claude-test", 32)
             assert False, "a 400 must raise ProviderError"
         except ProviderError as err:
-            assert err.code == "provider_rejected" and err.detail == "", \
-                f"an unusable error body {body!r} must give an empty detail, got {err.detail!r}"
+            assert err.code == "provider_rejected" and err.detail == "Error code: 400", \
+                f"an unusable error body {body!r} must fall back to the SDK message, got {err.detail!r}"
