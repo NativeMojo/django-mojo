@@ -250,6 +250,30 @@ def _accumulate_usage(totals, response_usage):
         totals[key] = totals.get(key, 0) + (response_usage.get(key, 0) or 0)
 
 
+def _reply_content_for_request(content):
+    """Return a model reply's content blocks in a form Anthropic accepts back.
+
+    The reply is sent back on the next turn of the tool loop, and stored
+    tool calls are replayed from history. Anthropic refuses a request whose
+    text block is empty or whitespace-only (``text content blocks must
+    contain non-whitespace text``), and the SDK's ``model_dump`` adds
+    ``None`` fields such as ``citations`` and ``caller`` that are not part
+    of the request format. Drop both; every other block passes unchanged.
+    """
+    cleaned = []
+    for block in content or []:
+        if not isinstance(block, dict):
+            cleaned.append(block)
+            continue
+        kind = block.get("type")
+        if kind == "text" and not (block.get("text") or "").strip():
+            continue
+        if kind in ("text", "tool_use"):
+            block = {k: v for k, v in block.items() if v is not None}
+        cleaned.append(block)
+    return cleaned
+
+
 def _dumps_tool_result(
         obj, user=None, conversation=None, tool_name=None, _reporter=None):
     """Safely serialize a tool result to a JSON string.
@@ -1377,8 +1401,7 @@ def _build_conversation_messages(conversation, max_history):
             if msg.content:
                 content.append({"type": "text", "text": msg.content})
             if msg.tool_calls:
-                for tc in msg.tool_calls:
-                    content.append(tc)
+                content.extend(_reply_content_for_request(msg.tool_calls))
             if content:
                 messages.append({"role": "assistant", "content": content})
         elif msg.role == "tool_result":
@@ -1515,7 +1538,10 @@ def run_assistant(
             )
 
             # Add assistant response to messages
-            messages.append({"role": "assistant", "content": result["content"]})
+            messages.append({
+                "role": "assistant",
+                "content": _reply_content_for_request(result["content"]),
+            })
 
             if stop_reason != "tool_use":
                 # Agent is done — extract text response
@@ -1750,7 +1776,10 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
                 f"output={turn_usage.get('output_tokens', 0) or 0}"
             )
 
-            messages.append({"role": "assistant", "content": result["content"]})
+            messages.append({
+                "role": "assistant",
+                "content": _reply_content_for_request(result["content"]),
+            })
 
             if stop_reason != "tool_use":
                 text_parts = [b["text"] for b in result["content"] if b.get("type") == "text"]
