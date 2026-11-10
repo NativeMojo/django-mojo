@@ -569,12 +569,22 @@ characters. For Anthropic that is the error type and message from the API's
 error body, such as `invalid_request_error: messages.1.content.0: ...`, else
 the SDK's message. For Bedrock it is the AWS error code and message, such as
 `ValidationException: ...`. The same text goes to `llm.log` as one warning
-with the ledger id, provider, code and provider request id. It is read only
-from the error the provider returns; messages, system text and tool input are
-never copied. Callers still see only the safe code, and `str()` of the
-provider error is still the code. Failures with no provider answer (timeouts,
-connection and credential errors, local refusals) leave `error_detail` blank.
-`LLMRequest` has no REST surface, so the field is read from the database.
+with the ledger id, provider, code and provider request id. Callers still see
+only the safe code, and `str()` of the provider error is still the code.
+Failures with no provider answer (timeouts, connection and credential errors,
+local refusals) leave `error_detail` blank.
+
+The rule for this text:
+
+- The framework never adds request content (messages, system text, tool input
+  or tool definitions) to `error_detail` or the log line. It reads only the
+  error the provider returns.
+- It stores the provider's own error text, or the SDK's fallback message,
+  verbatim and cut to 512 characters. Nothing is redacted.
+- That text may quote a fragment of the request when the provider echoes one
+  in its error.
+- Only people with database or server-log access can read it: `LLMRequest`
+  has no REST surface.
 
 For Bedrock, every failure after dispatch uses a `provider_*` code, including
 unusable final output or uncertain persistence. An ambiguous provider result

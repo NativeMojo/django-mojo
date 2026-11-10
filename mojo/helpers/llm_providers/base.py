@@ -23,7 +23,8 @@ class ProviderError(Exception):
         self.request_id = request_id or ""
         self.retry_after = retry_after
         self.usage = validated_usage(usage)
-        # The provider's own error type and message, never the request body.
+        # The provider's own error text, verbatim; the framework adds no
+        # request content.
         # Kept off str(err), which stays the safe code.
         self.detail = detail[:MAX_ERROR_DETAIL] if isinstance(detail, str) else ""
         super().__init__(code)

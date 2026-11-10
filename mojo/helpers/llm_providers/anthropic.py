@@ -56,8 +56,8 @@ class AnthropicProvider(ProviderAdapter):
     def _error_detail(err):
         """"<type>: <message>" from the API's error body, else the SDK message.
 
-        Only the error Anthropic returns is read; the request body is never
-        copied.
+        Only the error Anthropic returns is read; the framework adds no
+        request content.
         """
         body = getattr(err, "body", None)
         error = body.get("error") if isinstance(body, dict) else None

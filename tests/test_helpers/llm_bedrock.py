@@ -866,7 +866,7 @@ def test_images_inside_tool_results_never_reach_bedrock(opts):
 
 @th.django_unit_test()
 def test_validation_exception_keeps_aws_code_and_message(opts):
-    """#10589: a Bedrock refusal carries AWS's own reason, bounded, never the request."""
+    """#10589: a Bedrock refusal carries AWS's own reason, bounded; the framework adds no request content."""
     from botocore import exceptions as be
     from mojo.helpers.llm_providers.base import ProviderError
     from mojo.helpers.llm_providers.bedrock import BedrockProvider
@@ -887,4 +887,4 @@ def test_validation_exception_keeps_aws_code_and_message(opts):
             assert err.detail == expected, \
                 f"the AWS code and message must be kept, cut to 512, got {err.detail[:80]!r} ({len(err.detail)})"
             assert str(err) == "provider_rejected" and "Hello" not in err.detail, \
-                "str(err) must stay the code and the request must never reach the detail"
+                "str(err) must stay the code and the framework must add no request content"

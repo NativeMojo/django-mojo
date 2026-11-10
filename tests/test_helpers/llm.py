@@ -633,14 +633,14 @@ def _bad_request(body):
 
 @th.django_unit_test()
 def test_anthropic_rejection_keeps_provider_error_type_and_message(opts):
-    """#10589: a 400 carries Anthropic's own reason, bounded, never the request."""
+    """#10589: a 400 carries Anthropic's own reason, bounded; the framework adds no request content."""
     from mojo.helpers.llm_providers.anthropic import AnthropicProvider
     from mojo.helpers.llm_providers.base import ProviderError
 
     message = "messages.1.content.0.tool_use.caller: Extra inputs are not permitted"
     error = _bad_request({"type": "error", "error": {
         "type": "invalid_request_error", "message": message}})
-    secret = "prompt text that must never be copied"
+    secret = "request text the framework must not add"
     try:
         AnthropicProvider(client=_RejectingClient(error)).call(
             [{"role": "user", "content": secret}], "claude-test", 32)
@@ -653,7 +653,7 @@ def test_anthropic_rejection_keeps_provider_error_type_and_message(opts):
             f"the provider's error type and message must be kept, got {err.detail!r}"
         assert str(err) == "provider_rejected", \
             f"str(err) must stay the safe code, got {str(err)!r}"
-        assert secret not in err.detail, "the request body must never reach the detail"
+        assert secret not in err.detail, "the framework must add no request content to the detail"
 
     long_error = _bad_request({"type": "error", "error": {
         "type": "invalid_request_error", "message": "x" * 2000}})
@@ -673,3 +673,27 @@ def test_anthropic_rejection_keeps_provider_error_type_and_message(opts):
         except ProviderError as err:
             assert err.code == "provider_rejected" and err.detail == "Error code: 400", \
                 f"an unusable error body {body!r} must fall back to the SDK message, got {err.detail!r}"
+
+
+@th.django_unit_test()
+def test_anthropic_echoed_request_text_is_stored_as_is_and_cut(opts):
+    """#10589: the provider's own text is kept verbatim, cut at 512; nothing is redacted."""
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    marker = "SYNTHETIC_PROMPT_10589"
+    echoed = f"messages.0.content: invalid value {marker!r}"
+    for message, expected in (
+            (echoed, f"invalid_request_error: {echoed}"),
+            (echoed + " " + "e" * 1000, (f"invalid_request_error: {echoed} " + "e" * 1000)[:512])):
+        error = _bad_request({"type": "error", "error": {
+            "type": "invalid_request_error", "message": message}})
+        try:
+            AnthropicProvider(client=_RejectingClient(error)).call(
+                [{"role": "user", "content": marker}], "claude-test", 32)
+            assert False, "a 400 must raise ProviderError"
+        except ProviderError as err:
+            assert err.detail == expected, \
+                f"the provider's text must be stored as-is and cut at 512, got {err.detail[:80]!r} ({len(err.detail)})"
+            assert marker in err.detail, \
+                "text the provider echoes stays in the detail; the framework does not redact it"
