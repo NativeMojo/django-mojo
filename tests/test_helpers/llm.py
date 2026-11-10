@@ -665,14 +665,15 @@ def test_anthropic_rejection_keeps_provider_error_type_and_message(opts):
         assert len(err.detail) == 512, \
             f"the detail must be cut to 512 characters, got {len(err.detail)}"
 
-    for body in (None, "not json", {"error": "flat"}, {"error": {"type": 7}}):
+    for body in (None, "not json", {"error": "flat"}, {"error": {"type": 7}},
+                 {"messages": [{"role": "user", "content": "SYNTHETIC_PROMPT_10589"}]}):
         try:
             AnthropicProvider(client=_RejectingClient(_bad_request(body))).call(
                 [{"role": "user", "content": "hi"}], "claude-test", 32)
             assert False, "a 400 must raise ProviderError"
         except ProviderError as err:
-            assert err.code == "provider_rejected" and err.detail == "Error code: 400", \
-                f"an unusable error body {body!r} must fall back to the SDK message, got {err.detail!r}"
+            assert err.code == "provider_rejected" and err.detail == "HTTP 400", \
+                f"an unusable error body {body!r} must fall back to the status only, got {err.detail!r}"
 
 
 @th.django_unit_test()

@@ -54,7 +54,7 @@ class AnthropicProvider(ProviderAdapter):
 
     @staticmethod
     def _error_detail(err):
-        """"<type>: <message>" from the API's error body, else the SDK message.
+        """"<type>: <message>" from the API's error body, else "HTTP <status>".
 
         Only the error Anthropic returns is read; the framework adds no
         request content.
@@ -68,8 +68,10 @@ class AnthropicProvider(ProviderAdapter):
             message = message if isinstance(message, str) else ""
             if kind or message:
                 return f"{kind}: {message}" if kind and message else (kind or message)
-        message = getattr(err, "message", "")
-        return message if isinstance(message, str) else ""
+        # The SDK's own message renders the whole response body; keep only
+        # the status when the body has no usable error object.
+        status = getattr(err, "status_code", None)
+        return f"HTTP {status}" if isinstance(status, int) else ""
 
     def call(self, messages, model, max_tokens, system=None, tools=None,
              cache_enabled=True, timeout=None):
