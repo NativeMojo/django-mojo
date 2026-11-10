@@ -69,7 +69,8 @@ def test_wellformed_reply_unchanged(opts):
     assert_eq(_reply_content_for_request(None), [], "None content gives an empty list")
 
 
-@th.django_unit_test()
+@th.tier("bug")
+@th.django_unit_test("regression #10589: replayed tool calls carry whitespace text")
 @th.requires_app("mojo.apps.assistant")
 def test_history_replays_clean_tool_calls(opts):
     from mojo.apps.assistant.models import Conversation, Message
