@@ -40,13 +40,34 @@ class AnthropicProvider(ProviderAdapter):
                 code = "provider_rejected"
         else:
             code = "provider_failed"
+        detail = ""
+        if code == "provider_rejected":
+            detail = self._error_detail(err)
         retry_after = None
         if code == "provider_rate_limited":
             try:
                 retry_after = int(err.response.headers.get("retry-after", ""))
             except (AttributeError, TypeError, ValueError):
                 pass
-        raise ProviderError(code, request_id, retry_after=retry_after) from None
+        raise ProviderError(code, request_id, retry_after=retry_after,
+                            detail=detail) from None
+
+    @staticmethod
+    def _error_detail(err):
+        """"<type>: <message>" from the API's error body, or "".
+
+        Only the error object Anthropic returns is read; the request body is
+        never copied.
+        """
+        body = getattr(err, "body", None)
+        error = body.get("error") if isinstance(body, dict) else None
+        if not isinstance(error, dict):
+            return ""
+        kind = error.get("type")
+        message = error.get("message")
+        kind = kind if isinstance(kind, str) else ""
+        message = message if isinstance(message, str) else ""
+        return f"{kind}: {message}" if kind and message else (kind or message)
 
     def call(self, messages, model, max_tokens, system=None, tools=None,
              cache_enabled=True, timeout=None):

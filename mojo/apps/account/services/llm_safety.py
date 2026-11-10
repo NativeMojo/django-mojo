@@ -11,9 +11,11 @@ from django.db import models, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from mojo.helpers import logit
 from mojo.helpers.redis import get_connection
 from mojo.helpers.settings import settings
 
+logger = logit.get_logger("mojo.helpers.llm", "llm.log")
 
 POLICY_KEYS = frozenset({"version", "routes", "shared", "features", "breaker"})
 ROUTE_KEYS = frozenset({"provider", "model", "credential", "capabilities"})
@@ -1089,10 +1091,15 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         _breaker_failure(
             provider_name, admission["fingerprint"], admission["generation"],
             admission["breaker_owner"], err.code, admission["policy"])
+        detail = getattr(err, "detail", "")
         LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
             status="failed", error_code=err.code,
-            provider_request_id=err.request_id[:128],
+            provider_request_id=err.request_id[:128], error_detail=detail,
             duration_ms=_elapsed_ms(admission), finished_at=timezone.now())
+        if detail:
+            logger.warning(
+                f"LLM request {admission['ledger'].pk} {provider_name} {err.code} "
+                f"{err.request_id}: {detail}")
         release_permit(admission["redis"], admission["permit"])
         _record_metrics(provider_name, feature, "failed")
         _deny(err.code, retry_after=getattr(err, "retry_after", None))

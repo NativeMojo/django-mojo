@@ -563,6 +563,16 @@ budget, and emergency-stop signals never trigger provider or credential
 failover. Assistant messages, scheduled task results, incidents, ledgers, and
 attempts persist only these safe codes or fixed messages.
 
+One exception, for diagnosis: when Anthropic refuses a plain call
+(`provider_rejected`), the ledger row's `error_detail` keeps Anthropic's own
+error type and message, such as
+`invalid_request_error: messages.1.content.0: ...`, cut to 512 characters.
+The same text goes to `llm.log` as a warning with the ledger id and the
+provider request id. It is read only from the error object Anthropic returns;
+the request body is never copied. Callers still see only `provider_rejected`,
+and `str()` of the provider error is still the code. Other codes, Bedrock and
+streamed calls leave `error_detail` blank.
+
 For Bedrock, every failure after dispatch uses a `provider_*` code, including
 unusable final output or uncertain persistence. An ambiguous provider result
 may still be billed and must not trigger an automatic retry, even when a

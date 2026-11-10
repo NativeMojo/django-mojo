@@ -1271,3 +1271,44 @@ def test_anthropic_image_route_validates_before_adapter_and_passes_base64(opts):
         row = LLMRequest.objects.get(operation=case["marker"])
         assert row.status == "succeeded", \
             f"a valid Anthropic image call must record a succeeded ledger, got {row.status}"
+
+
+@th.django_unit_test()
+def test_anthropic_rejection_detail_reaches_ledger_and_log(opts):
+    """#10589: the provider's reason is stored and logged; other failures stay blank."""
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    detail = "invalid_request_error: tools.3.input_schema: Field required"
+    with _guard_case(_guard_policy("anthropic")) as case:
+        adapter = mock.Mock()
+        adapter.supports.return_value = True
+        adapter.call.side_effect = ProviderError(
+            "provider_rejected", "req_ledger_detail", detail=detail)
+        factory = mock.Mock(return_value=adapter)
+        with mock.patch.object(llm_safety, "logger") as logger:
+            _assert_denied("provider_rejected", lambda: _run_guard(case, factory))
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.status == "failed" and row.error_code == "provider_rejected", \
+            f"the refusal must stay a failed provider_rejected row, got {row.status}/{row.error_code}"
+        assert row.error_detail == detail, \
+            f"the provider's reason must be stored on the ledger, got {row.error_detail!r}"
+        assert row.provider_request_id == "req_ledger_detail", \
+            f"the provider request id must be kept, got {row.provider_request_id!r}"
+        logged = " ".join(str(arg) for call in logger.warning.call_args_list
+                          for arg in call.args)
+        assert detail in logged and "req_ledger_detail" in logged \
+            and str(row.pk) in logged, \
+            f"the refusal must be logged with its ledger id, request id and reason, got {logged!r}"
+
+    with _guard_case(_guard_policy("anthropic")) as case:
+        adapter = mock.Mock()
+        adapter.supports.return_value = True
+        adapter.call.side_effect = ProviderError("provider_timeout", "req_timeout")
+        factory = mock.Mock(return_value=adapter)
+        with mock.patch.object(llm_safety, "logger") as logger:
+            _assert_denied("provider_timeout", lambda: _run_guard(case, factory))
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.error_detail == "" and not logger.warning.called, \
+            f"a failure with no provider reason must store and log nothing extra, got {row.error_detail!r}"

@@ -3,6 +3,8 @@ USAGE_KEYS = frozenset({
     "cache_creation_input_tokens",
 })
 MAX_USAGE_TOKENS = 2147483647
+# LLMRequest.error_detail's max_length.
+MAX_ERROR_DETAIL = 512
 
 
 def validated_usage(usage):
@@ -16,11 +18,14 @@ def validated_usage(usage):
 
 
 class ProviderError(Exception):
-    def __init__(self, code, request_id="", retry_after=None, usage=None):
+    def __init__(self, code, request_id="", retry_after=None, usage=None, detail=""):
         self.code = code
         self.request_id = request_id or ""
         self.retry_after = retry_after
         self.usage = validated_usage(usage)
+        # The provider's own error type and message, never the request body.
+        # Kept off str(err), which stays the safe code.
+        self.detail = detail[:MAX_ERROR_DETAIL] if isinstance(detail, str) else ""
         super().__init__(code)
 
 
