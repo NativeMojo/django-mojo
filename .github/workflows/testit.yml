@@ -15,11 +15,16 @@ on:
         required: false
         default: false
         type: boolean
+      runner:
+        description: "Runner image label (#10634)."
+        required: false
+        default: ubuntu-latest
+        type: string
 
 jobs:
   run:
     name: ${{ inputs.tier }} preset
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner }}
     services:
       postgres:
         # pgvector image: create_testproject runs CREATE EXTENSION vector.
@@ -62,7 +67,19 @@ jobs:
       - name: Sync dependencies
         run: uv sync --frozen
       - name: Generate the test project
-        run: ./bin/create_testproject
+        # #10634: job logs need a signed-in account, annotations do not, so a
+        # failure's last lines and the host versions are posted as annotations.
+        run: |
+          echo "::notice title=host::$(. /etc/os-release && echo "$PRETTY_NAME"); $(psql --version); $(uv --version)"
+          set +e
+          ./bin/create_testproject > create_testproject.log 2>&1
+          rc=$?
+          cat create_testproject.log
+          if [ $rc -ne 0 ]; then
+            msg=$(tail -n 40 create_testproject.log | sed 's/%/%25/g' | awk '{printf "%s%%0A", $0}')
+            echo "::error title=create_testproject exit $rc::$msg"
+          fi
+          exit $rc
       - name: Run the ${{ inputs.tier }} preset
         # Advisory callers (framework-on-PR until #2813) do not fail the job on
         # a red test; non-advisory callers (core-on-push) leave advisory=false.
