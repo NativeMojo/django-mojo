@@ -1,10 +1,17 @@
 import importlib
-import pkgutil
+import importlib.util
 import sys
 
 
 def module_exists(module_name):
-    return pkgutil.find_loader(module_name)
+    # pkgutil.find_loader was removed in Python 3.14 (#10634); this is its body.
+    if module_name.startswith("."):
+        raise ImportError(f"Relative module names not supported: {module_name!r}")
+    try:
+        spec = importlib.util.find_spec(module_name)
+    except (ImportError, AttributeError, TypeError, ValueError) as ex:
+        raise ImportError(f"Error while finding loader for {module_name!r} ({type(ex)}: {ex})") from ex
+    return spec.loader if spec is not None else None
 
 
 def load_module_to_globals(module, memory=None):
