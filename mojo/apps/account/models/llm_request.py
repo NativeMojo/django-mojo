@@ -20,6 +20,9 @@ class LLMRequest(models.Model, MojoModel):
     status = models.CharField(
         max_length=16, choices=STATUS_CHOICES, default="started", db_index=True)
     error_code = models.CharField(max_length=64, blank=True, default="")
+    # The provider's own error text, verbatim and cut to 512 characters. The
+    # framework adds no request content, but the provider may echo some.
+    error_detail = models.CharField(max_length=512, blank=True, default="")
     input_tokens = models.PositiveIntegerField(default=0)
     output_tokens = models.PositiveIntegerField(default=0)
     cache_read_input_tokens = models.PositiveIntegerField(default=0)

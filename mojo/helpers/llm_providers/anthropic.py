@@ -40,13 +40,38 @@ class AnthropicProvider(ProviderAdapter):
                 code = "provider_rejected"
         else:
             code = "provider_failed"
+        detail = ""
+        if isinstance(err, anthropic.APIStatusError):
+            detail = self._error_detail(err)
         retry_after = None
         if code == "provider_rate_limited":
             try:
                 retry_after = int(err.response.headers.get("retry-after", ""))
             except (AttributeError, TypeError, ValueError):
                 pass
-        raise ProviderError(code, request_id, retry_after=retry_after) from None
+        raise ProviderError(code, request_id, retry_after=retry_after,
+                            detail=detail) from None
+
+    @staticmethod
+    def _error_detail(err):
+        """"<type>: <message>" from the API's error body, else "HTTP <status>".
+
+        Only the error Anthropic returns is read; the framework adds no
+        request content.
+        """
+        body = getattr(err, "body", None)
+        error = body.get("error") if isinstance(body, dict) else None
+        if isinstance(error, dict):
+            kind = error.get("type")
+            message = error.get("message")
+            kind = kind if isinstance(kind, str) else ""
+            message = message if isinstance(message, str) else ""
+            if kind or message:
+                return f"{kind}: {message}" if kind and message else (kind or message)
+        # The SDK's own message renders the whole response body; keep only
+        # the status when the body has no usable error object.
+        status = getattr(err, "status_code", None)
+        return f"HTTP {status}" if isinstance(status, int) else ""
 
     def call(self, messages, model, max_tokens, system=None, tools=None,
              cache_enabled=True, timeout=None):

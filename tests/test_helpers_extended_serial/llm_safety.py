@@ -1271,3 +1271,162 @@ def test_anthropic_image_route_validates_before_adapter_and_passes_base64(opts):
         row = LLMRequest.objects.get(operation=case["marker"])
         assert row.status == "succeeded", \
             f"a valid Anthropic image call must record a succeeded ledger, got {row.status}"
+
+
+@th.django_unit_test()
+def test_anthropic_rejection_detail_reaches_ledger_and_log(opts):
+    """#10589: the provider's reason is stored and logged; other failures stay blank."""
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    import anthropic
+    import httpx
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
+
+    message = "tools.3.input_schema: Field required"
+    detail = f"invalid_request_error: {message}"
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    rejected = anthropic.BadRequestError("Error code: 400", response=httpx.Response(
+        400, request=request, headers={"request-id": "req_ledger_detail"}),
+        body={"type": "error", "error": {"type": "invalid_request_error",
+                                         "message": message}})
+    client = mock.Mock()
+    client.messages.count_tokens.side_effect = RuntimeError("no count")
+    client.messages.create.side_effect = rejected
+    with _guard_case(_guard_policy("anthropic")) as case:
+        factory = lambda name=None, **kwargs: AnthropicProvider(client=client, **kwargs)
+        with mock.patch.object(llm_safety, "logger") as logger:
+            _assert_denied("provider_rejected", lambda: _run_guard(case, factory))
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.status == "failed" and row.error_code == "provider_rejected", \
+            f"the refusal must stay a failed provider_rejected row, got {row.status}/{row.error_code}"
+        assert row.error_detail == detail, \
+            f"the provider's reason must be stored on the ledger, got {row.error_detail!r}"
+        assert row.provider_request_id == "req_ledger_detail", \
+            f"the provider request id must be kept, got {row.provider_request_id!r}"
+        logged = " ".join(str(arg) for call in logger.warning.call_args_list
+                          for arg in call.args)
+        assert detail in logged and "req_ledger_detail" in logged \
+            and str(row.pk) in logged, \
+            f"the refusal must be logged with its ledger id, request id and reason, got {logged!r}"
+
+    with _guard_case(_guard_policy("anthropic")) as case:
+        adapter = mock.Mock()
+        adapter.supports.return_value = True
+        adapter.call.side_effect = ProviderError("provider_timeout", "req_timeout")
+        factory = mock.Mock(return_value=adapter)
+        with mock.patch.object(llm_safety, "logger") as logger:
+            _assert_denied("provider_timeout", lambda: _run_guard(case, factory))
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.error_detail == "" and not logger.warning.called, \
+            f"a failure with no provider reason must store and log nothing extra, got {row.error_detail!r}"
+
+
+@th.django_unit_test()
+def test_bedrock_rejection_detail_reaches_ledger_and_log(opts):
+    """#10589: a Bedrock ValidationException's reason is stored and logged."""
+    from botocore import exceptions as be
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    response = {"Error": {"Code": "ValidationException", "Message": "z" * 900},
+                "ResponseMetadata": {"RequestId": "bedrock-ledger-10589",
+                                     "HTTPStatusCode": 400}}
+    client = mock.Mock()
+    client.converse.side_effect = be.ClientError(response, "Converse")
+    with _guard_case() as case:
+        factory = lambda name, **kwargs: BedrockProvider(client=client, **kwargs)
+        with mock.patch.object(llm_safety, "logger") as logger:
+            _assert_denied("provider_rejected", lambda: _run_guard(case, factory))
+        row = LLMRequest.objects.get(operation=case["marker"])
+        expected = ("ValidationException: " + "z" * 900)[:512]
+        assert row.status == "failed" and row.error_detail == expected, \
+            f"the Bedrock reason must be stored cut to 512, got {row.status}/{len(row.error_detail)}"
+        logged = " ".join(str(arg) for call in logger.warning.call_args_list
+                          for arg in call.args)
+        assert expected in logged and "bedrock-ledger-10589" in logged, \
+            f"the Bedrock refusal must be logged with its request id, got {logged[:120]!r}"
+
+
+@th.django_unit_test()
+def test_probe_and_discovery_rejections_store_the_bounded_reason(opts):
+    """#10589: the fixed probe and model discovery keep the provider's reason."""
+    from mojo.apps.account.models import LLMRequest, User
+    from mojo.apps.account.services import llm_safety
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    reason = "invalid_request_error: " + "p" * 900
+    expected = reason[:512]
+
+    with _guard_case(_auto_policy()) as case:
+        adapter = _AutoAdapter([ProviderError(
+            "provider_rejected", "req_discovery_10589", detail=reason)])
+        try:
+            with mock.patch.object(llm_safety, "logger") as logger:
+                _assert_denied("provider_rejected", lambda: llm_safety.discover_models(
+                    policy_raw=case["raw"], redis=case["redis"],
+                    provider_factory=lambda name, **kwargs: adapter))
+            row = LLMRequest.objects.filter(
+                feature="model_discovery",
+                credential_fingerprint=case["fingerprint"]).latest("id")
+            assert row.error_code == "provider_rejected" and row.error_detail == expected, \
+                f"discovery must store the bounded reason, got {len(row.error_detail)}"
+            assert logger.warning.call_count == 1 \
+                and expected in str(logger.warning.call_args.args), \
+                f"discovery must log the reason once, got {logger.warning.call_args_list}"
+        finally:
+            _clear_auto_catalogue(case)
+
+    class Adapter:
+        def supports(self, capability):
+            return capability == "text"
+
+        def call(self, **kwargs):
+            raise ProviderError("provider_rejected", "req_probe_10589", detail=reason)
+
+    policy = {
+        "version": 1,
+        "routes": {"configuration": {
+            "provider": "anthropic", "model": "claude-config-exact",
+            "credential": "admin", "capabilities": ["text"],
+        }},
+        "shared": {
+            "requests_minute": 2, "requests_hour": 10, "requests_day": 20,
+            "tokens_minute": 1000, "tokens_hour": 5000, "tokens_day": 10000,
+            "concurrency": 4, "max_input_bytes": 4096, "max_output_tokens": 128,
+            "timeout_seconds": 10, "max_loop_calls": 2,
+        },
+        "features": {},
+        "breaker": {"auth_failures": 2, "rate_failures": 2,
+                    "server_failures": 2, "open_seconds": 60},
+    }
+    policy["features"]["configuration"] = dict(policy["shared"])
+    policy = llm_safety.parse_policy(policy)
+    owner = User.objects.create_user(
+        username=f"probe-owner-{uuid.uuid4().hex}",
+        email=f"probe-owner-{uuid.uuid4().hex}@test.com",
+        password="Probe_owner_test_99")
+    owner.is_active = True
+    owner.is_superuser = True
+    owner.save()
+    LLMRequest.objects.filter(provider_request_id="req_probe_10589").delete()
+    try:
+        with mock.patch.object(llm_safety, "parse_policy", return_value=policy), \
+                mock.patch.object(llm_safety, "_policy_agreement", lambda value: None), \
+                mock.patch.object(llm_safety, "emergency_stopped", return_value=True), \
+                mock.patch.object(llm_safety, "logger") as logger, \
+                mock.patch("mojo.helpers.llm_providers.get_provider",
+                           side_effect=lambda name, api_key: Adapter()):
+            _assert_denied("provider_rejected", lambda: llm_safety.verify_candidate(
+                owner, f"candidate-{uuid.uuid4().hex}"))
+        row = LLMRequest.objects.get(provider_request_id="req_probe_10589")
+        assert row.error_code == "provider_rejected" and row.error_detail == expected, \
+            f"the fixed probe must store the bounded reason, got {len(row.error_detail)}"
+        assert logger.warning.call_count == 1 \
+            and expected in str(logger.warning.call_args.args), \
+            f"the fixed probe must log the reason once, got {logger.warning.call_args_list}"
+    finally:
+        LLMRequest.objects.filter(provider_request_id="req_probe_10589").delete()
+        owner.delete()

@@ -563,6 +563,30 @@ budget, and emergency-stop signals never trigger provider or credential
 failover. Assistant messages, scheduled task results, incidents, ledgers, and
 attempts persist only these safe codes or fixed messages.
 
+One exception, for diagnosis: when a provider answers with an error, the
+ledger row's `error_detail` keeps the provider's own reason, cut to 512
+characters. For Anthropic that is the error type and message from the API's
+error body, such as `invalid_request_error: messages.1.content.0: ...`, else
+`HTTP <status>` when the body has no usable error object (the SDK's own
+message would render the whole response body). For Bedrock it is the AWS error code and message, such as
+`ValidationException: ...`. The same text goes to `llm.log` as one warning
+with the ledger id, provider, code and provider request id. Callers still see
+only the safe code, and `str()` of the provider error is still the code.
+Failures with no provider answer (timeouts, connection and credential errors,
+local refusals) leave `error_detail` blank.
+
+The rule for this text:
+
+- The framework never adds request content (messages, system text, tool input
+  or tool definitions) to `error_detail` or the log line. It reads only the
+  error the provider returns.
+- It stores the provider's own error text verbatim, cut to 512 characters.
+  Nothing is redacted.
+- That text may quote a fragment of the request when the provider echoes one
+  in its error.
+- Only people with database or server-log access can read it: `LLMRequest`
+  has no REST surface.
+
 For Bedrock, every failure after dispatch uses a `provider_*` code, including
 unusable final output or uncertain persistence. An ambiguous provider result
 may still be billed and must not trigger an automatic retry, even when a

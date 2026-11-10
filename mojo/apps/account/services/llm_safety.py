@@ -11,9 +11,11 @@ from django.db import models, transaction
 from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
+from mojo.helpers import logit
 from mojo.helpers.redis import get_connection
 from mojo.helpers.settings import settings
 
+logger = logit.get_logger("mojo.helpers.llm", "llm.log")
 
 POLICY_KEYS = frozenset({"version", "routes", "shared", "features", "breaker"})
 ROUTE_KEYS = frozenset({"provider", "model", "credential", "capabilities"})
@@ -930,8 +932,15 @@ def _elapsed_ms(admission):
     return int((time.monotonic() - admission["started"]) * 1000)
 
 
+def _log_rejection(ledger_id, provider, code, request_id, detail):
+    """One warning carrying the provider's own reason; nothing without one."""
+    if detail:
+        logger.warning(
+            f"LLM request {ledger_id} {provider} {code} {request_id}: {detail}")
+
+
 def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None,
-                    breaker="health"):
+                    breaker="health", detail=""):
     """Settle a dispatched Bedrock failure, then raise its safe code.
 
     Validated usage reconciles the reservation; unknown spend keeps all of it.
@@ -948,9 +957,10 @@ def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None
     failed_usage = validated_usage(usage)
     actual_tokens = sum(failed_usage.values()) if failed_usage is not None \
         else admission["reserved_tokens"]
+    detail = detail if isinstance(detail, str) else ""
     fields = dict(
         status="failed", error_code=code,
-        provider_request_id=str(request_id or "")[:128],
+        provider_request_id=str(request_id or "")[:128], error_detail=detail[:512],
         duration_ms=_elapsed_ms(admission), finished_at=timezone.now())
     if failed_usage is not None:
         fields.update(failed_usage)
@@ -967,6 +977,8 @@ def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None
         _deny("provider_failed")
     finally:
         release_permit(admission["redis"], admission["permit"], actual_tokens=actual_tokens)
+    _log_rejection(admission["ledger"].pk, provider_name, code, request_id,
+                   fields["error_detail"])
     _record_metrics(provider_name, admission["feature"], "failed",
                     sum(failed_usage.values()) if failed_usage is not None else 0)
     _deny(code, retry_after=retry_after)
@@ -1085,14 +1097,18 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         if provider_name == "bedrock":
             _bedrock_failed(admission, err.code, err.request_id,
                             getattr(err, "usage", None),
-                            getattr(err, "retry_after", None))
+                            getattr(err, "retry_after", None),
+                            detail=getattr(err, "detail", ""))
         _breaker_failure(
             provider_name, admission["fingerprint"], admission["generation"],
             admission["breaker_owner"], err.code, admission["policy"])
+        detail = getattr(err, "detail", "")
         LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
             status="failed", error_code=err.code,
-            provider_request_id=err.request_id[:128],
+            provider_request_id=err.request_id[:128], error_detail=detail,
             duration_ms=_elapsed_ms(admission), finished_at=timezone.now())
+        _log_rejection(admission["ledger"].pk, provider_name, err.code,
+                       err.request_id, detail)
         release_permit(admission["redis"], admission["permit"])
         _record_metrics(provider_name, feature, "failed")
         _deny(err.code, retry_after=getattr(err, "retry_after", None))
@@ -1196,7 +1212,8 @@ class GuardedStream:
                 breaker = "success" if getattr(self._stream, "events_seen", 0) else "skip"
             _bedrock_failed(self._admission, error.code, error.request_id or request_id,
                             getattr(error, "usage", None),
-                            getattr(error, "retry_after", None), breaker=breaker)
+                            getattr(error, "retry_after", None), breaker=breaker,
+                            detail=getattr(error, "detail", ""))
         if error is not None:
             try:
                 self._stream.close()
@@ -1252,7 +1269,8 @@ def _execute_stream(messages, system, tools, model, max_tokens, feature, operati
         provider_stream = admission["adapter"].stream(**admission["call_kwargs"])
     except ProviderError as err:
         _bedrock_failed(admission, err.code, err.request_id,
-                        getattr(err, "usage", None), getattr(err, "retry_after", None))
+                        getattr(err, "usage", None), getattr(err, "retry_after", None),
+                        detail=getattr(err, "detail", ""))
     except Exception:
         _bedrock_unexpected(admission)
     return GuardedStream(admission, provider_stream)
@@ -1384,7 +1402,10 @@ def _fixed_configuration_probe_core(actor, credential, identity, operation):
             provider, fingerprint, generation, breaker_owner, err.code, policy)
         LLMRequest.objects.filter(pk=ledger.pk).update(
             status="failed", error_code=err.code,
-            provider_request_id=err.request_id[:128], finished_at=timezone.now())
+            provider_request_id=err.request_id[:128],
+            error_detail=getattr(err, "detail", ""), finished_at=timezone.now())
+        _log_rejection(ledger.pk, provider, err.code, err.request_id,
+                       getattr(err, "detail", ""))
         release_permit(redis, permit)
         _deny(err.code, retry_after=getattr(err, "retry_after", None))
     except Exception:
@@ -1533,7 +1554,10 @@ def _discover_models_page(*, after_id, operation_id, deadline,
     except ProviderError as err:
         _breaker_failure(provider, fingerprint, generation, owner, err.code, policy)
         LLMRequest.objects.filter(pk=ledger.pk).update(
-            status="failed", error_code=err.code, finished_at=timezone.now())
+            status="failed", error_code=err.code,
+            error_detail=getattr(err, "detail", ""), finished_at=timezone.now())
+        _log_rejection(ledger.pk, provider, err.code, err.request_id,
+                       getattr(err, "detail", ""))
         release_permit(redis, permit)
         _deny(err.code, retry_after=getattr(err, "retry_after", None))
     except Exception:

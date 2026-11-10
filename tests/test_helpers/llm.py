@@ -605,3 +605,96 @@ def test_catalogue_lock_cooldown_corruption_namespaces_and_redis_outage(opts):
         'unknown coordination must be reported explicitly'
     now[0] += 8 * 86400
     assert catalogue.state(redis, 'one')['models'] == [], 'local fallback must obey the same age bound'
+
+
+class _RejectingMessages:
+    def __init__(self, error):
+        self.error = error
+
+    def create(self, **kwargs):
+        raise self.error
+
+
+class _RejectingClient:
+    def __init__(self, error):
+        self.messages = _RejectingMessages(error)
+
+
+def _bad_request(body):
+    import anthropic
+    import httpx
+
+    request = httpx.Request("POST", "https://api.anthropic.com/v1/messages")
+    response = httpx.Response(
+        400, request=request, headers={"request-id": "req_test_rejected"})
+    return anthropic.BadRequestError(
+        "Error code: 400", response=response, body=body)
+
+
+@th.django_unit_test()
+def test_anthropic_rejection_keeps_provider_error_type_and_message(opts):
+    """#10589: a 400 carries Anthropic's own reason, bounded; the framework adds no request content."""
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    message = "messages.1.content.0.tool_use.caller: Extra inputs are not permitted"
+    error = _bad_request({"type": "error", "error": {
+        "type": "invalid_request_error", "message": message}})
+    secret = "request text the framework must not add"
+    try:
+        AnthropicProvider(client=_RejectingClient(error)).call(
+            [{"role": "user", "content": secret}], "claude-test", 32)
+        assert False, "a 400 must raise ProviderError"
+    except ProviderError as err:
+        assert err.code == "provider_rejected", f"a 400 must stay provider_rejected, got {err.code}"
+        assert err.request_id == "req_test_rejected", \
+            f"the Anthropic request id must be kept, got {err.request_id!r}"
+        assert err.detail == f"invalid_request_error: {message}", \
+            f"the provider's error type and message must be kept, got {err.detail!r}"
+        assert str(err) == "provider_rejected", \
+            f"str(err) must stay the safe code, got {str(err)!r}"
+        assert secret not in err.detail, "the framework must add no request content to the detail"
+
+    long_error = _bad_request({"type": "error", "error": {
+        "type": "invalid_request_error", "message": "x" * 2000}})
+    try:
+        AnthropicProvider(client=_RejectingClient(long_error)).call(
+            [{"role": "user", "content": "hi"}], "claude-test", 32)
+        assert False, "a 400 must raise ProviderError"
+    except ProviderError as err:
+        assert len(err.detail) == 512, \
+            f"the detail must be cut to 512 characters, got {len(err.detail)}"
+
+    for body in (None, "not json", {"error": "flat"}, {"error": {"type": 7}},
+                 {"messages": [{"role": "user", "content": "SYNTHETIC_PROMPT_10589"}]}):
+        try:
+            AnthropicProvider(client=_RejectingClient(_bad_request(body))).call(
+                [{"role": "user", "content": "hi"}], "claude-test", 32)
+            assert False, "a 400 must raise ProviderError"
+        except ProviderError as err:
+            assert err.code == "provider_rejected" and err.detail == "HTTP 400", \
+                f"an unusable error body {body!r} must fall back to the status only, got {err.detail!r}"
+
+
+@th.django_unit_test()
+def test_anthropic_echoed_request_text_is_stored_as_is_and_cut(opts):
+    """#10589: the provider's own text is kept verbatim, cut at 512; nothing is redacted."""
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
+    from mojo.helpers.llm_providers.base import ProviderError
+
+    marker = "SYNTHETIC_PROMPT_10589"
+    echoed = f"messages.0.content: invalid value {marker!r}"
+    for message, expected in (
+            (echoed, f"invalid_request_error: {echoed}"),
+            (echoed + " " + "e" * 1000, (f"invalid_request_error: {echoed} " + "e" * 1000)[:512])):
+        error = _bad_request({"type": "error", "error": {
+            "type": "invalid_request_error", "message": message}})
+        try:
+            AnthropicProvider(client=_RejectingClient(error)).call(
+                [{"role": "user", "content": marker}], "claude-test", 32)
+            assert False, "a 400 must raise ProviderError"
+        except ProviderError as err:
+            assert err.detail == expected, \
+                f"the provider's text must be stored as-is and cut at 512, got {err.detail[:80]!r} ({len(err.detail)})"
+            assert marker in err.detail, \
+                "text the provider echoes stays in the detail; the framework does not redact it"
