@@ -132,27 +132,41 @@ nonexistent one behave identically.
 A filter, `?search=`, `?sort=` or `_field=` that walks **into** a related
 record works only when you could list those records yourself, the model
 declares that walk, or it is the model's own group link
-(`?domain__group=5` on a certificate or vhost). Otherwise a filter, `?search=`
-or `?sort=` is **silently ignored**, like a protected field, and you get the
-result as if you had not sent it. A `_field=` on the aggregation surface is
-refused with a `400` instead (see below).
+(`?domain__group=5` on a certificate or vhost). Otherwise a filter is
+**refused with a `400`** that names it, and no rows come back:
 
 ```
 # a plain member listing their groups
-GET /api/group?public_messages__email__startswith=a   → ignored (needs support access)
+GET /api/group?public_messages__email__startswith=a
+  → 400 {"error": "filter 'public_messages__email__startswith' is not available on Group"}
 # a tenant manager listing members: these walks are declared
 GET /api/group/member?group=5&user__email__icontains=bob      → applied
-GET /api/group/member?group=5&user__phone_number__startswith=1 → ignored
+GET /api/group/member?group=5&user__phone_number__startswith=1 → 400
 ```
 
+Before django-mojo 1.43 such a filter was silently ignored, so the list came
+back with every row as if it had been filtered. If your screen needs the walk,
+ask for it to be declared in the model's `FILTER_RELATED`.
+
+- The same `400` applies to `_mode=count`, to the ordinary filters of every
+  `_agg` mode, and to CSV downloads. A `_stats` bundle naming such a filter
+  comes back `null`; the other bundles still count.
+- A filter on a nested user's private field (for example
+  `?user__requires_mfa=true` on the member list) gets the same `400` when you
+  may not see that field.
+- A targeted `?search=field:value` on a field the model searches but you may
+  not use is a `400` (`search field '<field>' is not available on <Model>`).
+  Free-text search is unchanged: those fields are left out, and if none are
+  left the search returns nothing.
 - Comparing the link itself is never a walk: `?user=5`, `?user_id=5`,
   `?user__id=5`, `?user__in=5,6` and `?user__isnull=true` always work.
 - Global admins who can list the related model are unaffected.
-- A link Django hides (`+` in the path) is always ignored and is reported as a
+- A link Django hides (`+` in the path) is treated like a
+  [protected field](#protected-fields): silently ignored, and reported as a
   security event.
 - `__not` and `__not_in` work only at the end of a key
   (`?user__email__not=...`). A key with either in the middle
-  (`?user__not__email=...`) is ignored.
+  (`?user__not__email=...`) is also treated like a protected field and ignored.
 - `?sort=<relation>` sorts by the link's own id; sorting by a reverse or
   many-to-many relation is ignored.
 - `_field=<reverse relation>__id` on the aggregation surface is a `400`

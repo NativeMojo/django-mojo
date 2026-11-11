@@ -104,7 +104,10 @@ GET /api/incident/event?category=ossec&_mode=count
 - **An empty bundle** `{}` counts the base queryset (an "All" chip).
 - **Per-bundle failure is soft.** A bundle that references an unusable field or
   value returns `null` for that key (the rest still count); the request stays
-  `200`. Render such chips label-only.
+  `200`. Render such chips label-only. That includes a bundle filtering into a
+  related record you may not use (see
+  [Filters Into Related Records](filtering.md#filters-into-related-records)):
+  since 1.43 it is `null`, not the unfiltered count.
 - **Structural problems are hard `400`s** — `_stats` that isn't a JSON object,
   a bundle whose value isn't an object, a bundle name that's empty or over 64
   characters, or more than the cap (default **12**, server setting

@@ -14,6 +14,12 @@ answered questions about related rows the caller cannot see:
 
 T1-T4, T6, T7, T10 and the sort test fail on the pre-fix code. T5 and the allowed
 rows of T8 pass before and after.
+
+#10675: a refused walk used to be dropped silently, so the list came back 200
+with every row as if filtered. It is now a 400 naming the key; a `_stats`
+bundle on it is null. T1, T2, T6 and T11 fail on the drop-silent code. A
+hidden `+` link or an interior not / not_in (T3, T9) is caught first by the
+sensitive guard (#6446), which still drops silently.
 """
 import json
 
@@ -108,8 +114,18 @@ def _group_count(opts, extra):
     return _count(opts, "/api/group", dict({"name__startswith": P}, **extra))
 
 
-@th.django_unit_test("T1 a plain member's group count ignores public_messages walks")
-def test_member_public_messages_walk_dropped(opts):
+def _refused(opts, path, params, key):
+    """A filter the caller may not use is a 400 naming it (#10675)."""
+    resp = opts.client.get(path, params=params)
+    assert resp.status_code == 400, (
+        f"GET {path} {params} must be refused, got {resp.status_code} {resp.response}")
+    error = str((resp.json or {}).get("error", ""))
+    assert key in error and "not available" in error, (
+        f"the 400 must name {key!r} as not available, got {error!r}")
+
+
+@th.django_unit_test("T1 a plain member's group list refuses public_messages walks")
+def test_member_public_messages_walk_refused(opts):
     _login(opts, MEMBER)
     base = _group_count(opts, {})
     assert base == 1, f"fixture: the member must see their one group, got {base}"
@@ -119,33 +135,31 @@ def test_member_public_messages_walk_dropped(opts):
         ("public_messages__message__contains", "4242", "9999"),
     ]
     for key, match, miss in probes:
-        hit = _group_count(opts, {key: match})
-        none = _group_count(opts, {key: miss})
-        assert hit == base and none == base, (
-            f"{key} must not change a plain member's count: base {base}, "
-            f"match {hit}, non-match {none} (the count is reading PublicMessage)")
+        for value in (match, miss):
+            _refused(opts, "/api/group", {"name__startswith": P, key: value}, key)
+    # The key is named as sent, dotted form included.
+    _refused(opts, "/api/group", {"name__startswith": P, "public_messages.email": P + "jane"},
+             "public_messages.email")
 
 
-@th.django_unit_test("T1 _mode=count and _stats ignore public_messages walks for a plain member")
-def test_member_public_messages_walk_dropped_count_and_stats(opts):
+@th.django_unit_test("T1 _mode=count refuses and _stats nulls public_messages walks for a plain member")
+def test_member_public_messages_walk_refused_count_and_stats(opts):
     _login(opts, MEMBER)
     key = "public_messages__email__startswith"
-    resp = opts.client.get("/api/group", params={
-        "name__startswith": P, key: P + "zzz", "_mode": "count"})
-    assert resp.status_code == 200, f"_mode=count failed: {resp.response}"
-    assert resp.response["count"] == 1, (
-        f"_mode=count must ignore {key}, got {resp.response['count']}")
-    stats = json.dumps({"hit": {key: P + "jane"}, "miss": {key: P + "zzz"}})
+    _refused(opts, "/api/group", {"name__startswith": P, key: P + "zzz", "_mode": "count"}, key)
+    stats = json.dumps({"hit": {key: P + "jane"}, "miss": {key: P + "zzz"},
+                        "named": {"name__startswith": P}})
     resp = opts.client.get("/api/group", params={
         "name__startswith": P, "_mode": "count", "_stats": stats})
     assert resp.status_code == 200, f"_stats failed: {resp.response}"
     got = resp.response.get("stats") or {}
-    assert got.get("hit") == got.get("miss") == 1, (
-        f"_stats bundles must both equal the base count when {key} is dropped, got {got}")
+    assert got.get("hit") is None and got.get("miss") is None, (
+        f"_stats bundles on {key} must be null, not a count, got {got}")
+    assert got.get("named") == 1, f"a sibling bundle must still count, got {got}"
 
 
-@th.django_unit_test("T2 member-level view_fileman cannot read uploaders' email or phone by count")
-def test_brand_admin_file_user_walk_dropped(opts):
+@th.django_unit_test("T2 member-level view_fileman cannot filter uploads by uploaders' email or phone")
+def test_brand_admin_file_user_walk_refused(opts):
     _login(opts, BRAND)
     base = _count(opts, "/api/fileman/file", {"group": opts.group_id, "filename__startswith": P})
     assert base == 1, f"fixture: the brand admin must see the one upload, got {base}"
@@ -155,11 +169,8 @@ def test_brand_admin_file_user_walk_dropped(opts):
     ]
     for key, match, miss in probes:
         params = {"group": opts.group_id, "filename__startswith": P}
-        hit = _count(opts, "/api/fileman/file", dict(params, **{key: match}))
-        none = _count(opts, "/api/fileman/file", dict(params, **{key: miss}))
-        assert hit == base and none == base, (
-            f"{key} must not change the brand admin's count: base {base}, "
-            f"match {hit}, non-match {none}")
+        for value in (match, miss):
+            _refused(opts, "/api/fileman/file", dict(params, **{key: value}), key)
     resp = opts.client.get("/api/fileman/file", params={"group": opts.group_id, "filename__startswith": P})
     row = (resp.response.get("data") or [{}])[0]
     served = row.get("user") if isinstance(row.get("user"), dict) else {}
@@ -251,14 +262,12 @@ def test_allowed_walks_kept(opts):
 
 
 @th.django_unit_test("T6 a view_members viewer cannot filter members by phone")
-def test_viewer_member_phone_walk_dropped(opts):
+def test_viewer_member_phone_walk_refused(opts):
     _login(opts, VIEWER)
     path = "/api/group/member"
-    base = _count(opts, path, {"group": opts.group_id})
-    hit = _count(opts, path, {"group": opts.group_id, "user__phone_number__startswith": PHONE[:8]})
-    none = _count(opts, path, {"group": opts.group_id, "user__phone_number__startswith": "+1555099"})
-    assert hit == base and none == base, (
-        f"user__phone_number is not a declared walk: base {base}, match {hit}, non-match {none}")
+    key = "user__phone_number__startswith"
+    for value in (PHONE[:8], "+1555099"):
+        _refused(opts, path, {"group": opts.group_id, key: value}, key)
 
 
 @th.django_unit_test("T7 the Assistant refuses a denied walk and accepts a declared one")
@@ -396,6 +405,53 @@ def test_disguised_exclusion_parser(opts):
     assert filters == {} and excludes.get("filename") == "a" and excludes.get("user") == "1" \
             and list(excludes.get("user__in") or []) == ["1", "2"], (
         f"a trailing __not / __not_in must still become an exclusion, got {excludes}")
+
+
+@th.django_unit_test("T11 _agg filter params are refused, not dropped (#10675)")
+def test_agg_filter_param_refused(opts):
+    _login(opts, MEMBER)
+    params = {"name__startswith": P, "_mode": "top", "_field": "kind"}
+    resp = opts.client.get("/api/group", params=params)
+    assert resp.status_code == 200, f"fixture: _mode=top on kind must work, got {resp.response}"
+    key = "public_messages__email__startswith"
+    _refused(opts, "/api/group", dict(params, **{key: P + "zzz"}), key)
+
+
+@th.django_unit_test("T11 a targeted search on a refused field is a 400; an undeclared one is ignored")
+def test_targeted_search_refused(opts):
+    """No framework model declares a SEARCH_FIELDS entry the guards remove, so
+    a test-owned probe carries GroupMember's schema with a private User
+    field (#8648) added."""
+    from objict import objict
+    from mojo.apps.account.models import User, GroupMember
+    from mojo.models.rest import MojoModel
+    from mojo import errors as me
+    from testit.helpers import get_mock_request
+
+    refuse = MojoModel.on_rest_list_refuse_unavailable_search.__func__
+    probe = type("MemberSearchProbe", (), {
+        "_meta": GroupMember._meta,
+        "RestMeta": type("RestMeta", (), {
+            "SEARCH_FIELDS": ["user__username", "user__requires_mfa", "user__not__email"],
+        }),
+    })
+    viewer = User.objects.get(username=VIEWER)
+    for field in ("user__requires_mfa",):
+        request = get_mock_request(user=viewer)
+        request.DATA = objict(search=f"{field}:x")
+        try:
+            refuse(probe, request)
+        except me.ValueException as err:
+            assert field in str(err) and "not available" in str(err), \
+                f"the refusal must name {field!r}, got {err}"
+        else:
+            assert False, f"search={field}:x must be refused for a view_members viewer"
+    # user__not__email is sensitive-guarded (#6446): ignored, as before.
+    for search in ("user__username:x", "user__phone_number:x", "user__not__email:x",
+                   "plain words", "-excluded"):
+        request = get_mock_request(user=viewer)
+        request.DATA = objict(search=search)
+        refuse(probe, request)  # raises on failure
 
 
 def _target_id():

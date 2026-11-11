@@ -22,6 +22,13 @@ ACTIVE_REQUEST = ContextVar("ACTIVE_REQUEST", default=None)
 LOGGING_CLASS = None
 MOJO_APP_STATUS_200_ON_ERROR = settings.MOJO_APP_STATUS_200_ON_ERROR
 MOJO_REST_LIST_PERM_DENY = settings.get_static("MOJO_REST_LIST_PERM_DENY", True)
+# A list filter (or targeted search) the caller may not use is refused with a
+# 400 naming the key (#10675). False keeps the pre-1.43 silent drop, for a
+# deployment whose screens still send such filters. Deprecated from day one,
+# removed in a later minor. Conf-file only (get_static): a Setting row must
+# never be able to turn the refusal off.
+MOJO_REST_REFUSE_UNAVAILABLE_FILTERS = settings.get_static(
+    "MOJO_REST_REFUSE_UNAVAILABLE_FILTERS", True)
 
 # Graph names that describe HOW MUCH of a record to return, not a purpose-built
 # view. An undefined COMMON name falls back to `default` (ordinary list/detail
@@ -565,6 +572,15 @@ def walk_verdict(model, key, request, search=False):
 def walk_denied(model, key, request, search=False):
     """True when walk_verdict refuses `key` for this viewer (#8680)."""
     return walk_verdict(model, key, request, search=search) is not None
+
+
+def raise_unavailable_filter(model, key):
+    """Refuse a list filter or targeted search the caller may not use (#10675).
+
+    Worded like the `_field` refusal in rest_aggregation. Names the key as
+    sent, so the caller knows which one to declare in FILTER_RELATED.
+    """
+    raise me.ValueException(f"filter '{key}' is not available on {model.__name__}")
 
 
 def _warn_can_save_deprecated(cls_name):
@@ -1969,6 +1985,12 @@ class MojoModel:
         raw strings (query params) or JSON-native (bundles: list / int / bool
         / None).
 
+        A related-model walk or viewer-restricted User field the caller may
+        not use raises ``ValueException`` (400) naming the key (#10675);
+        ``_stats`` turns that into a ``null`` bundle. Sensitive columns are
+        still dropped silently. ``MOJO_REST_REFUSE_UNAVAILABLE_FILTERS =
+        False`` restores the drop for the relation guards.
+
         Returns:
             (filters, excludes) — two dicts for ``queryset.filter(**filters)``
             / ``queryset.exclude(**excludes)``. Search and application stay
@@ -1986,6 +2008,7 @@ class MojoModel:
             # features). Never confuse with a model field.
             if key.startswith("_"):
                 continue
+            sent_key = key
             # Split key to check for foreign key relationships
             if "." in key:
                 key = key.replace(".", "__")
@@ -2006,29 +2029,36 @@ class MojoModel:
             # and it runs BEFORE the __not/__not_in rewrites below so every
             # operator form of a sensitive key is dropped, not just the bare one.
             #
-            # DROP-SILENT, not 400: _count_bundles catches ValueException by
-            # design and turns the bundle null, so a raise could not behave
-            # identically across the three surfaces. Dropping makes all three
-            # act as if the key were never sent, which is also how this parser
-            # already treats unknown and reserved keys.
+            # DROP-SILENT, not 400: a sensitive key must look like an unknown
+            # one, so list, count and `_stats` all act as if it were never
+            # sent, which is also how this parser treats unknown and reserved
+            # keys. (The two relation guards below refuse instead, #10675.)
             if is_sensitive_filter_path(cls, key):
                 logit.warn(f"dropped sensitive filter on {cls.__name__}: {key}")
                 cls._report_sensitive_probe(request, key)
                 continue
             # A field the viewer is not shown on a nested User is not
-            # filterable by them either (#8648). Dropped silently, with no
-            # incident: ordinary portal searches reach here.
+            # filterable by them either (#8648). Refused with a 400 naming
+            # the key (#10675), with no incident: ordinary portal searches
+            # reach here. The verdict depends only on the key, the schema and
+            # the viewer, never on row data, so the refusal is no oracle.
             if is_viewer_restricted_path(cls, key, request):
+                if MOJO_REST_REFUSE_UNAVAILABLE_FILTERS:
+                    raise_unavailable_filter(cls, sent_key)
                 continue
             # A path into a related model the viewer cannot list in full is
-            # the same count oracle one hop further (#8680): dropped with a
-            # warning, like the guards above. A hidden `+` link has no
-            # legitimate caller, so that one also raises an incident.
+            # the same count oracle one hop further (#8680). Refused with a
+            # 400 naming the key (#10675): dropping it handed back every row
+            # as if filtered. A hidden `+` link has no legitimate caller, so
+            # that one also raises an incident first. `_stats` turns the
+            # raise into a null bundle.
             verdict = walk_verdict(cls, key, request)
             if verdict is not None:
-                logit.warn(f"dropped related filter on {cls.__name__}: {key}")
                 if verdict == "hidden":
                     cls._report_sensitive_probe(request, key)
+                if MOJO_REST_REFUSE_UNAVAILABLE_FILTERS:
+                    raise_unavailable_filter(cls, sent_key)
+                logit.warn(f"dropped related filter on {cls.__name__}: {key}")
                 continue
 
             # Determine if this is an exclusion filter
@@ -2154,6 +2184,7 @@ class MojoModel:
         """
         filters, excludes = cls.build_rest_filters(request, request.QUERY_PARAMS)
         queryset = cls.on_rest_list_default_filters(request, queryset, filters, excludes)
+        cls.on_rest_list_refuse_unavailable_search(request)
         queryset = cls.on_rest_list_search(request, queryset)
         queryset = queryset.filter(**filters)
         if excludes:
@@ -2204,6 +2235,44 @@ class MojoModel:
         if applied:
             queryset = queryset.filter(**applied)
         return queryset
+
+    @classmethod
+    def on_rest_list_refuse_unavailable_search(cls, request):
+        """Refuse a targeted ``search=field:value`` on a field the guards
+        remove for this viewer (#10675).
+
+        on_rest_list_search drops such a field silently, and with every other
+        term gone the search could return every row as if it had matched. Only
+        a field the walk rule or the viewer check removed is refused; an
+        undeclared or sensitive field is still ignored, and free-text search
+        is unchanged. Runs on the REST list only, so the Assistant tools,
+        which call on_rest_list_search directly, keep their own handling.
+        """
+        import re
+
+        if not MOJO_REST_REFUSE_UNAVAILABLE_FILTERS:
+            return
+        search_query = (request.DATA.get('search', None) or "").strip()
+        if not search_query:
+            return
+        search_fields = getattr(cls.RestMeta, 'SEARCH_FIELDS', None)
+        if search_fields is None:
+            search_fields = [
+                field.name for field in cls._meta.get_fields()
+                if field.get_internal_type() in ["CharField", "TextField"]
+            ]
+        # Same tokenizer as on_rest_list_search: group 3 is a field name.
+        pattern = r'"([^"]+)"|(-?)(\w+):(\S+)|(-?)(\S+)'
+        for match in re.findall(pattern, search_query):
+            field_name = match[2]
+            if not field_name or field_name not in search_fields:
+                continue
+            if is_sensitive_filter_path(cls, field_name):
+                continue
+            if (is_viewer_restricted_path(cls, field_name, request)
+                    or walk_denied(cls, field_name, request, search=True)):
+                raise me.ValueException(
+                    f"search field '{field_name}' is not available on {cls.__name__}")
 
     @classmethod
     def on_rest_list_search(cls, request, queryset):

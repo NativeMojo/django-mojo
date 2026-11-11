@@ -258,28 +258,32 @@ def _member_count(opts, extra=""):
     return resp.response["count"]
 
 
-@th.django_unit_test("case 8: filters into the private user fields are ignored for view_members, applied for account viewers")
+def _refused(opts, path, key):
+    resp = opts.client.get(path)
+    assert resp.status_code == 400, \
+        f"{path} must be refused with a 400, got {resp.status_code}: {opts.client.last_response.body}"
+    error = str((resp.json or {}).get("error", ""))
+    assert key in error and "not available" in error, \
+        f"the 400 must name {key!r} as not available, got {error!r}"
+
+
+@th.django_unit_test("case 8: filters into the private user fields are refused for view_members, applied for account viewers")
 def test_filter_oracle(opts):
     _login(opts, VIEWER)
     everyone = _list_members(opts)
     for probe in PRIVATE_FILTERS:
-        filtered = _list_members(opts, f"&{probe}")
-        assert set(filtered) == set(everyone), \
-            f"{probe} must be dropped for a view_members viewer: {sorted(filtered)} vs {sorted(everyone)}"
-    total = _member_count(opts)
-    assert _member_count(opts, "&user__is_superuser=True") == total, \
-        "_mode=count must drop user__is_superuser for a view_members viewer"
+        key = probe.split("=")[0]
+        _refused(opts, f"/api/group/member?group={opts.group_id}&size=100&{probe}", key)
+    _refused(opts, f"/api/group/member?group={opts.group_id}&_mode=count&user__is_superuser=True",
+             "user__is_superuser")
     by_email = _list_members(opts, f"&user__email={TARGET}")
     assert set(by_email) == {opts.target_id}, \
         f"an email filter still applies for a view_members viewer, got {sorted(by_email)}"
     searched = _list_members(opts, f"&search={TARGET}")
     assert opts.target_id in searched and len(searched) < len(everyone), \
         f"search by email still works for a view_members viewer, got {sorted(searched)}"
-    resp = opts.client.get(f"/api/group?id={opts.group_id}&members__user__is_superuser=True")
-    assert resp.status_code == 200, \
-        f"group list must succeed for a member, got {resp.status_code}: {opts.client.last_response.body}"
-    assert [g["id"] for g in resp.response.data] == [opts.group_id], \
-        "the reverse form members__user__is_superuser must be dropped for a non-account viewer"
+    _refused(opts, f"/api/group?id={opts.group_id}&members__user__is_superuser=True",
+             "members__user__is_superuser")
 
     _login(opts, ACCOUNT)
     filtered = _list_members(opts, "&user__requires_mfa=True")
@@ -464,11 +468,10 @@ def test_apikey_acting_as_self(opts):
     _assert_stripped(user, "ApiKey request whose user is the nested user")
 
 
-@th.django_unit_test("case 17: _stats drops a private user predicate for a view_members viewer and keeps the email one")
+@th.django_unit_test("case 17: _stats nulls a private user predicate for a view_members viewer and keeps the email one")
 def test_stats_bundles(opts):
     import json
     _login(opts, VIEWER)
-    total = _member_count(opts)
     resp = opts.client.get("/api/group/member", params={
         "group": opts.group_id, "_mode": "count",
         "_stats": json.dumps({"hidden": {"user__is_superuser": True},
@@ -476,5 +479,5 @@ def test_stats_bundles(opts):
     })
     assert resp.status_code == 200, \
         f"the count must succeed, got {resp.status_code}: {opts.client.last_response.body}"
-    assert resp.response.get("stats") == {"hidden": total, "email": 1}, \
-        f"the hidden bundle must count every member and the email bundle one, got {resp.response!r}"
+    assert resp.response.get("stats") == {"hidden": None, "email": 1}, \
+        f"the hidden bundle must be null (#10675) and the email bundle one, got {resp.response!r}"
