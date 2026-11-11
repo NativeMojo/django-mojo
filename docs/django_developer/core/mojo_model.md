@@ -420,10 +420,19 @@ and are not hops. A hidden relation (`related_name="+"`) is always refused,
 for every caller, and raises a security event. `not` / `not_in` are
 operators only as the last segment (`user__email__not`); anywhere else in a
 key (`user__not__email`) the key is dropped, and the parser strips only that
-trailing suffix.
+trailing suffix. Both of those are caught first by the sensitive-field guard
+(#6446), so they are still dropped silently.
 
-A key that hops passes only when one of these holds, else it is dropped
-(filters, count, `_stats`, search, sort) or answered 400 (`_field=`):
+A key that hops passes only when one of these holds. Otherwise, since #10675
+(1.43), a filter is refused: `build_rest_filters` raises `ValueException`
+(400, `filter '<key as sent>' is not available on <Model>`). That one raise
+covers the list, `_mode=count`, the filters of every `_agg` mode and CSV,
+which all parse before the mode dispatch. A `_stats` bundle turns it into
+`null`. A filter on a nested User's private lookup (#8648) gets the same 400.
+A targeted `?search=field:value` on a declared search field the guards remove
+is a 400 too (`on_rest_list_refuse_unavailable_search`, REST list only); free
+text search leaves such fields out, sort ignores the walk, and `_field=` is a
+400 as before:
 
 1. **It is the model's own `RestMeta.GROUP_FIELD` path** (trailing lookups
    removed), e.g. Certificate `domain__group`. The server already scopes by
@@ -456,8 +465,15 @@ which refuses it as before. No request (a job or the shell building filters)
 leaves the key alone.
 
 **Consumers:** a scoped caller (a tenant manager, a group-level permission, an
-ApiKey) loses every undeclared walk into a model they cannot list in full.
-Declare the walks your screens need in `FILTER_RELATED`.
+ApiKey) loses every undeclared walk into a model they cannot list in full,
+and since 1.43 gets a 400 for it instead of an unfiltered list. Declare the
+walks your screens need in `FILTER_RELATED`.
+
+**Compatibility switch:** `MOJO_REST_REFUSE_UNAVAILABLE_FILTERS = False` in a
+deployment's settings brings back the pre-1.43 drop (a log warning, and the
+incident for a hidden link) while its screens are fixed. It is read once with
+`settings.get_static`, never from a database Setting, so a tenant cannot turn
+the refusal off. It is deprecated now and will be removed in a later minor.
 
 Models can opt into a stricter allow-list by setting
 `AGGREGATION_FIELDS` on `RestMeta`:

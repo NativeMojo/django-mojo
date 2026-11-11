@@ -1096,6 +1096,7 @@ restart. See
 - `MOJO_CUSTOM_SERIALIZERS`
 - `MOJO_DEFAULT_SERIALIZER`
 - `MOJO_REST_LIST_PERM_DENY`
+- `MOJO_REST_REFUSE_UNAVAILABLE_FILTERS` — default `True`. A list filter, `_stats` bundle or targeted search walking into a related record the caller may not use is refused with a 400 (`_stats`: `null`). `False` brings back the pre-1.43 silent drop while a deployment fixes its screens. **File-only** (`settings.get_static`). Temporary: deprecated from 1.43 and removed in a later minor. See [Related-model walks](../core/mojo_model.md#related-model-walks).
 - `MOJO_SENSITIVE_BODY_PATHS` — default `[]`. Opt-in list of full `request.path` prefixes (for example `["/api/payments/webhooks"]`, matched by whole segment; `/` means every path). A failed REST request under a listed path stores no request body, query string or exception message in its error Event, Incident, Ticket or LLM triage payload, and its request/response logs write the `sensitive_body` marker. **File-only** (`settings.get_static`); a bad value stops startup with `ImproperlyConfigured`. Bodies stay stored by default because they are needed for debugging. See [Sensitive request bodies](../security/README.md#sensitive-request-bodies).
 - `MOJO_SERIALIZER_CACHE`
 - `MOJO_TEMP_DIR`
