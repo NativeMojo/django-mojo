@@ -1,17 +1,37 @@
 # Packaged Admin Security client
 
-The packaged Portal is **portal-mojo 0.2.22**, source revision
-`a758fdf3d45877df629405377778179fa6cbb0bc` (tag `v0.2.22`). It is a clean canonical
+The packaged Portal is **portal-mojo 0.2.28**, source revision
+`048bcb4c0fcd23b12fac30b6a39d94e10fc3d360` (tag `v0.2.28`). It is a clean canonical
 macOS arm64 build with Node **24.21.0** and npm **11.19.0**.
 
-- Manifest SHA-256: `1a26ef9695ed4094de0af267aeec35b50f1f33e8d2c90a0640ca8b17910e7c4a`
-- Lockfile SHA-256: `426f33cc5f5527b7b33a2a268c33892ebe53116ab8346a61f97277e716b70d60`
-- Inventory: 160 files
+- Manifest SHA-256: `accac872f377e101b14a7cc43c193c7ac18f52fc81291862241a315c3a7e78ff`
+- Lockfile SHA-256: `3070ebeb9fd688f0e9a3441de7000d54ae97689c5957cac3bfcd45976659fe94`
+- Inventory: 161 files
 
 See [the packaging guide](../../django_developer/account/admin.md) for the
 platform-bound reproducibility proof and offline replacement procedure.
 
-This build simplifies navigation and Domains flows, separates **AI Assistant**
+This build confirms a sensitive action in place. On HTTP 440
+`reauth_required` a **Confirm it's you** modal opens over the current screen
+and offers only the methods the account has: passkey, password, and each active
+sign-in provider the deployment allows (from the me graph's `has_password` /
+`has_passkey`, `GET /api/account/oauth_connection?user=<id>` and the public
+`GET /api/auth/config`). Provider and **Use the sign-in page** confirmation
+open the hosted `/auth?force_reauth=1` page in a pop-up that returns to the
+same-origin Admin URL with a one-time `mojo_stepup` marker (for example
+`/admin/v2/?mojo_stepup=<nonce>`), tells the opener and closes. The opener
+accepts only the same account with a newer `auth_time`. A same-account
+confirmation keeps the session and open dialogs, and the pressed action
+finishes; a save that carries a key asks for the key again. See
+[Step-up authentication](step_up_auth.md).
+
+Also new since 0.2.22: hosted sign-out through the `signed_out` landing, the
+**Groups** page for global `manage_groups`, every sign-in callback URL and
+domain on the **Sign-in** page, preset table filters that **Clear all** keeps,
+the tools each stored Assistant message called, and realtime retry after a
+server authentication timeout.
+
+Included from the 0.2.22 build: it simplifies navigation and Domains flows, separates **AI Assistant**
 setup from **MCP connections**, and uses focused dialogs for Conversations,
 Skills and Memory. Memory distinguishes personal, global and selected group
 audiences; group read access does not imply permission to edit. The Admin

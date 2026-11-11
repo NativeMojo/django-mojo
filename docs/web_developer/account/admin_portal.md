@@ -13,7 +13,17 @@ origin. Django ships the exact compiled artifact and needs no frontend build.
 For the pinned manifest hash, ownership, offline recovery and archive proof,
 see [the backend packaging guide](../../django_developer/account/admin.md).
 
-The bundled release is **portal-mojo 0.2.22**. Admin navigation and Domains flows
+The bundled release is **portal-mojo 0.2.28**. A request that returns HTTP 440
+`reauth_required` opens an in-place **Confirm it's you** modal that offers only
+the account's own methods (passkey, password, active sign-in providers). Provider
+and sign-in-page confirmation run the hosted `/auth?force_reauth=1` page in a
+pop-up that returns to `/admin/v2/?mojo_stepup=<nonce>`; a same-account
+confirmation keeps the session and the pressed action finishes (see
+[Step-up authentication](step_up_auth.md)). Sign-out goes through the hosted
+`signed_out` landing, the **Groups** page opens for global `manage_groups`, and the
+**Sign-in** page lists every callback URL and domain.
+
+From 0.2.22, admin navigation and Domains flows
 are simplified. **Assistant → Setup** separates **AI Assistant** configuration
 from **MCP connections**; MCP does not require an AI provider key or model.
 Conversations, Skills and Memory use focused dialogs, contextual help and clear

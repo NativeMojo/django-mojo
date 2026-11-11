@@ -42,6 +42,15 @@ stores the fresh token pair, and retries the blocked request once. Cancel keeps
 the valid session and current page. A password response that still requires MFA
 or a forced password change is treated as incomplete and is not retried.
 
+The packaged Portal at `/admin/v2/` also stays on the page. Its **Confirm it's
+you** modal offers only the account's methods: passkey, password, and each active
+sign-in provider the deployment allows. Provider and **Use the sign-in page**
+confirmation open the hosted `/auth?force_reauth=1` page in a pop-up, which
+returns to the same-origin Admin URL with a one-time `mojo_stepup` marker and
+tells the opener; tokens are never posted between windows. The opener accepts
+only the same account with a newer `auth_time`, keeps the session and open
+dialogs, and retries the pressed action.
+
 ## Gated operations (when the feature is enabled)
 
 Change username, change email, change phone, revoke sessions (log out

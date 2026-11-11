@@ -16,17 +16,17 @@ Compiled assets use a relative base; Portal API requests always use same-origin
 
 ## Pinned identity and offline replacement
 
-The current artifact is portal-mojo **0.2.22**, source revision
-`a758fdf3d45877df629405377778179fa6cbb0bc` (tag `v0.2.22`),
+The current artifact is portal-mojo **0.2.28**, source revision
+`048bcb4c0fcd23b12fac30b6a39d94e10fc3d360` (tag `v0.2.28`),
 built clean with Node **24.21.0** / npm **11.19.0** and lockfile SHA-256
-`426f33cc5f5527b7b33a2a268c33892ebe53116ab8346a61f97277e716b70d60`.
-Its 160-file inventory includes the Vite manifest and lazy chunks.
+`3070ebeb9fd688f0e9a3441de7000d54ae97689c5957cac3bfcd45976659fe94`.
+Its 161-file inventory includes the Vite manifest and lazy chunks.
 The identity is the SHA-256 of the exact `admin-artifact.json` bytes:
 
-`1a26ef9695ed4094de0af267aeec35b50f1f33e8d2c90a0640ca8b17910e7c4a`
+`accac872f377e101b14a7cc43c193c7ac18f52fc81291862241a315c3a7e78ff`
 
 This is the canonical `npm run build:admin -- --canonical` output of tag
-`v0.2.22`, built locally on macOS arm64. Two fresh clean builds produced
+`v0.2.28`, built locally on macOS arm64. Two fresh clean builds produced
 byte-identical manifest identities and inventories, and the vendor tool checked
 the copy against that digest. The runtime pin is
 `services/admin_artifact.PINNED_MANIFEST_SHA256`.
@@ -40,7 +40,7 @@ Stop processes serving/importing the checkout before replacing the artifact:
 ```bash
 uv run python scripts/vendor_admin_portal.py \
   --source /absolute/path/to/verified/dist/admin \
-  --expected-manifest-sha256 1a26ef9695ed4094de0af267aeec35b50f1f33e8d2c90a0640ca8b17910e7c4a
+  --expected-manifest-sha256 accac872f377e101b14a7cc43c193c7ac18f52fc81291862241a315c3a7e78ff
 uv run python scripts/vendor_admin_portal.py --check
 ```
 
@@ -67,7 +67,45 @@ startup and delivers only its validated allowlist. Provenance and
 
 ## Included Portal behavior
 
-Portal 0.2.22 simplifies the Admin navigation and Domains flows. **Assistant →
+Portal 0.2.28 confirms a sensitive action **in place**. When an endpoint
+returns HTTP 440 `reauth_required`, a **Confirm it's you** modal opens over the
+current screen and offers only what the account can use: **Passkey**,
+**Password**, and **Continue with** a provider (for example **Continue with
+Google**) for each active sign-in connection that the deployment also allows.
+**Use the sign-in page** is the fallback. Provider and sign-in-page
+confirmation run the normal hosted `/auth` page with `force_reauth=1` in a
+pop-up. It returns to the same-origin Admin URL with a one-time `mojo_stepup`
+marker (for example `/admin/v2/?mojo_stepup=<nonce>`), posts completion to the
+opener and closes; tokens never travel by message. The opener accepts it only
+for the same account and only with a newer `auth_time`. A blocked pop-up shows
+an inline message; a browser that cuts the pop-up's link back or opens it in
+the same tab still completes on the same screen. Confirming as the same account keeps the session, so open dialogs
+and page state survive, and the pressed action finishes. Assistant setup
+actions that carry no key are re-sent once; saves that carry a key ask for the
+key again. A Domains purchase continues its identical quote exactly once.
+Cancel reads "Not confirmed — nothing was changed." It relies on behavior the
+backend already ships: hosted `/auth` honours `force_reauth=1`, a same-origin
+`redirect` returns without a handoff code, the me graph carries `has_password`
+and `has_passkey`, and `GET /api/account/oauth_connection?user=<id>` and the
+public `GET /api/auth/config` list the methods. No backend change or migration
+is needed.
+
+Portal 0.2.23–0.2.27, included in this build, also:
+
+- sign out through the hosted `signed_out` landing
+  (`/auth?signed_out=1&force_reauth=1`), and let **Sign in** retry after a
+  canceled sign-out;
+- check an ambiguous session denial before sending the user to sign in;
+- open the **Groups** page for the global `manage_groups` permission, matching
+  the server;
+- list every sign-in callback URL and domain on the **Sign-in** page's provider
+  cards, each with its own Copy button;
+- keep a table's selected preset filter out of the filter pills, so **Clear
+  all** no longer flips the preset;
+- show the tools each stored Assistant message called;
+- retry the realtime connection after a server authentication timeout.
+
+The earlier canonical build (portal-mojo 0.2.22) simplifies the Admin navigation and Domains flows. **Assistant →
 Setup** separates the built-in AI Assistant from **MCP connections**, which do
 not require an AI model or provider key. Configuration tasks open focused
 dialogs. Conversations distinguish owned chat from read-only history; Skills
@@ -89,9 +127,10 @@ The earlier canonical build (portal-mojo 0.2.20) added the system admin's
 section (#9127). It is shown only to callers with the global `groups` or
 `manage_groups` permission and calls the Group action `allow_member_subgroups`
 (#9126; see [Group](group.md#letting-a-parents-administrators-create-sub-groups)).
-It also carries portal-mojo #9108: a Portal confirmation that needs a fresh
-sign-in uses the configured hosted sign-in page, and the MFA step is loaded only
-when a challenge asks for it.
+It also carried portal-mojo #9108: a Portal confirmation that needs a fresh
+sign-in used the configured hosted sign-in page (0.2.28 replaces this with the
+in-place modal above), and the MFA step is loaded only when a challenge asks
+for it.
 
 An earlier canonical build fixed the **Passkeys** view, which crashed for any user
 holding a passkey: `Passkey.transports` is a JSON list on the wire, and Portal
