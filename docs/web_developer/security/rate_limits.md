@@ -21,7 +21,9 @@ Required behavior:
 
 1. **Stop sending immediately.** Do not retry the failed request right away.
 2. **Honor `Retry-After`** (seconds). Do not send anything for that identity
-   until it elapses.
+   until it elapses. Browser code on another origin can read it:
+   `Retry-After` is listed in `Access-Control-Expose-Headers`,
+   so `response.headers.get('Retry-After')` works from `fetch`.
 3. If you retry after that and still get 429s, use **exponential backoff with
    jitter**: base 1 s, double per attempt, cap at 60 s, ±50% random jitter.
 4. **Give up after ~20 attempts** and require human interaction to resume. A

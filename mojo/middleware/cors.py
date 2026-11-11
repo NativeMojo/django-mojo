@@ -184,9 +184,11 @@ class CORSMiddleware:
         # WWW-Authenticate is exposed so a browser-hosted OAuth/MCP client can
         # read the RFC 9728 challenge off a 401 and discover where to
         # authenticate. Without it the header is present but unreadable to JS.
+        # Retry-After is exposed so a browser client can read how long a 429
+        # asks it to wait (#10669).
         response['Access-Control-Expose-Headers'] = (
             'Content-Disposition, X-Total-Count, X-Bouncer-Muid, '
-            'X-Bouncer-Reason, WWW-Authenticate'
+            'X-Bouncer-Reason, WWW-Authenticate, Retry-After'
         )
 
         return response
