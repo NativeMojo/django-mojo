@@ -335,14 +335,23 @@ def test_relation_pk_unchanged(opts):
     assert_eq(filters.get("user__isnull"), True, f"user__isnull=true must be True, got {filters}")
 
 
-@th.django_unit_test("REST: sensitive and viewer-restricted paths stay silently dropped")
+@th.django_unit_test("REST: sensitive paths stay silently dropped; viewer-restricted ones are refused by key")
 def test_guarded_paths_still_dropped(opts):
-    for params in ({"user__auth_key__in": "a,b"}, {"user__requires_mfa": "maybe"}):
-        resp = _get(opts, params)
-        assert_eq(resp.status_code, 200,
-                  f"{params} must be dropped silently (200), never a 400 oracle; "
-                  f"got {resp.status_code}: {resp.response}")
-        titles = _titles(resp)
-        assert_eq(titles, ["rfn-a", "rfn-c"], f"{params} must not filter anything, got {titles}")
-    filters, _ = _parse(opts, {"user__requires_mfa": "maybe", "user__auth_key": "x"})
-    assert_eq(filters, {}, f"guarded keys must not reach the filters, got {filters}")
+    resp = _get(opts, {"user__auth_key__in": "a,b"})
+    assert_eq(resp.status_code, 200,
+              f"a sensitive path must be dropped silently (200), never a 400 oracle; "
+              f"got {resp.status_code}: {resp.response}")
+    titles = _titles(resp)
+    assert_eq(titles, ["rfn-a", "rfn-c"], f"a sensitive path must not filter anything, got {titles}")
+    filters, _ = _parse(opts, {"user__auth_key": "x"})
+    assert_eq(filters, {}, f"a sensitive key must not reach the filters, got {filters}")
+    # A viewer-restricted path is refused before its value is read (#10675):
+    # a malformed and a well-formed value get the same 400, so it is no oracle.
+    bodies = []
+    for value in ("maybe", "true"):
+        resp = _get(opts, {"user__requires_mfa": value})
+        assert_eq(resp.status_code, 400,
+                  f"user__requires_mfa={value} must be refused, got {resp.status_code}: {resp.response}")
+        bodies.append(str(resp.response.get("error")))
+    assert_true("user__requires_mfa" in bodies[0] and bodies[0] == bodies[1],
+                f"the refusal must name the key and not depend on the value, got {bodies}")
