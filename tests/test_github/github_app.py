@@ -111,3 +111,99 @@ def test_verify_webhook_no_secret(opts):
 # test_verify_webhook_invalid moved to
 # tests/test_github_extended_serial/github_app.py — they mutate
 # django.conf.settings (GITHUB_WEBHOOK_SECRET) in-process (maestro item #1839).
+
+
+# --- GITHUB_APP_PRIVATE_KEY holding the PEM itself (maestro #10955) ---------
+# _normalize_private_key is pure (no settings), so these run in the default
+# package. Keys are generated per test and never committed.
+
+_FIXED_CLAIMS = {"iat": 1700000000, "exp": 1700000540, "iss": "12345"}
+
+
+def _make_pem(pkcs8=False):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    fmt = (serialization.PrivateFormat.PKCS8 if pkcs8
+           else serialization.PrivateFormat.TraditionalOpenSSL)
+    pem = key.private_bytes(serialization.Encoding.PEM, fmt, serialization.NoEncryption()).decode()
+    return key, pem
+
+
+def _stripped(pem):
+    return "".join(pem.split("\n"))
+
+
+@th.django_unit_test("github app: a PEM value loads and signs a JWT the public key verifies (#10955)")
+def test_private_key_pem_value(opts):
+    import jwt
+    from mojo.apps.github.services.github_app import _normalize_private_key
+
+    key, pem = _make_pem()
+    normalized = _normalize_private_key(pem)
+    assert normalized == pem, "a well-formed PEM must come back unchanged"
+    token = jwt.encode(_FIXED_CLAIMS, normalized, algorithm="RS256")
+    claims = jwt.decode(token, key.public_key(), algorithms=["RS256"],
+                        options={"verify_exp": False, "verify_iat": False})
+    assert claims["iss"] == "12345", f"the signed JWT must verify with the public key, got {claims}"
+
+
+@th.django_unit_test("github app: a one-line PEM with literal \\n escapes normalises to the original (#10955)")
+def test_private_key_escaped_newlines(opts):
+    from mojo.apps.github.services.github_app import _normalize_private_key
+
+    _, pem = _make_pem()
+    escaped = pem.replace("\n", "\\n")
+    assert "\n" not in escaped, "test setup: the escaped value must be one line"
+    assert _normalize_private_key(escaped) == pem, "\\n escapes must turn back into the original PEM"
+
+
+@th.django_unit_test("github app: a PEM with every line break stripped is re-wrapped and signs identically (#10955)")
+def test_private_key_stripped_line_breaks(opts):
+    import jwt
+    from mojo.apps.github.services.github_app import _normalize_private_key
+
+    _, pem = _make_pem()
+    normalized = _normalize_private_key(_stripped(pem))
+    assert normalized == pem, "a stripped PEM must be re-wrapped at 64 columns into the original text"
+    assert jwt.encode(_FIXED_CLAIMS, normalized, algorithm="RS256") == \
+        jwt.encode(_FIXED_CLAIMS, pem, algorithm="RS256"), \
+        "the re-wrapped key must sign exactly like the original (RS256 is deterministic)"
+
+
+@th.django_unit_test("github app: PKCS#8, CRLF, space-joined and quoted PEM values all normalise (#10955)")
+def test_private_key_variants(opts):
+    from mojo.apps.github.services.github_app import _normalize_private_key
+
+    _, pem = _make_pem()
+    _, pkcs8 = _make_pem(pkcs8=True)
+    cases = {
+        "pkcs8": (pkcs8, pkcs8),
+        "pkcs8 stripped": (_stripped(pkcs8), pkcs8),
+        "crlf": (pem.replace("\n", "\r\n"), pem),
+        "space-joined": (" ".join(pem.strip().split("\n")), pem),
+        "double-quoted": ('"' + pem + '"', pem),
+        "single-quoted escaped": ("'" + pem.replace("\n", "\\n") + "'", pem),
+        "surrounding whitespace": ("  \n" + pem + "\n  ", pem),
+    }
+    for name, (value, expected) in cases.items():
+        assert _normalize_private_key(value) == expected, f"{name}: must normalise to the original PEM"
+
+
+@th.django_unit_test("github app: a PEM-shaped value that is not a key normalises to None (#10955)")
+def test_private_key_garbage_is_none(opts):
+    from mojo.apps.github.services.github_app import _normalize_private_key
+
+    _, pem = _make_pem()
+    lines = pem.strip().split("\n")
+    cases = {
+        "garbage body": "-----BEGIN RSA PRIVATE KEY-----\nnot-a-key\n-----END RSA PRIVATE KEY-----\n",
+        "garbage one line": "-----BEGIN RSA PRIVATE KEY-----notakey-----END RSA PRIVATE KEY-----",
+        "mismatched labels": _stripped(pem).replace("END RSA PRIVATE KEY", "END PRIVATE KEY"),
+        "truncated body": "\n".join(lines[:5] + lines[-1:]) + "\n",
+        "no footer": _stripped(pem).split("-----END")[0],
+        "empty": "   ",
+        "not a string": 12345,
+    }
+    for name, value in cases.items():
+        assert _normalize_private_key(value) is None, f"{name}: a value that is not a loadable key must give None"
