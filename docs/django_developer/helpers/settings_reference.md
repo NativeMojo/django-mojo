@@ -852,7 +852,7 @@ restart. See
 ### GITHUB
 
 - `GITHUB_APP_ID`
-- `GITHUB_APP_PRIVATE_KEY`
+- `GITHUB_APP_PRIVATE_KEY` — the RSA private key PEM (line breaks, `\n` escapes or none at all), or the path to a `.pem` file. Never logged. See [Setting the private key](../github/README.md#settings).
 - `GITHUB_CLIENT_ID`
 - `GITHUB_CLIENT_SECRET`
 - `GITHUB_SCOPES`
