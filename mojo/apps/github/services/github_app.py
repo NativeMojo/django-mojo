@@ -6,15 +6,18 @@ signature verification for GitHub App installations.
 
 Settings:
     GITHUB_APP_ID            — GitHub App ID (string or int)
-    GITHUB_APP_PRIVATE_KEY   — Path to the RSA .pem private key file
+    GITHUB_APP_PRIVATE_KEY   — The RSA private key PEM, or the path to a .pem file
     GITHUB_WEBHOOK_SECRET    — Webhook HMAC secret for signature verification
 """
 import hashlib
 import hmac
+import re
 import time
 
 import jwt
 import requests
+from cryptography.exceptions import UnsupportedAlgorithm
+from cryptography.hazmat.primitives import serialization
 
 from django.utils import timezone
 
@@ -34,15 +37,59 @@ def _get_app_id():
     return settings.get("GITHUB_APP_ID", None)
 
 
-def _get_private_key():
-    """Read the PEM private key from the file path in GITHUB_APP_PRIVATE_KEY."""
-    key_path = settings.get("GITHUB_APP_PRIVATE_KEY", None)
-    if not key_path:
+_ONE_LINE_PEM_RE = re.compile(
+    r"^(-----BEGIN [A-Z0-9 ]+-----)\s*(.+?)\s*(-----END [A-Z0-9 ]+-----)$", re.DOTALL)
+
+
+def _normalize_private_key(value):
+    """Return PEM text for a GITHUB_APP_PRIVATE_KEY value that holds the key itself.
+
+    Accepts a PEM with real line breaks, with literal "\\n" escapes, or with
+    every line break stripped (re-wrapped at 64 columns), optionally wrapped
+    in one pair of quotes. Returns None when the value is not a loadable
+    private key. Never logs the value.
+    """
+    if not isinstance(value, str):
         return None
+    value = value.strip()
+    if len(value) >= 2 and value[0] == value[-1] and value[0] in "'\"":
+        value = value[1:-1].strip()
+    if not value:
+        return None
+    pem = value.replace("\\n", "\n").replace("\r\n", "\n").replace("\r", "\n").strip()
+    if "\n" not in pem:
+        match = _ONE_LINE_PEM_RE.match(pem)
+        if not match or match.group(1)[len("-----BEGIN"):] != match.group(3)[len("-----END"):]:
+            logger.error("GitHub App private key in GITHUB_APP_PRIVATE_KEY is not a well-formed PEM")
+            return None
+        body = "".join(match.group(2).split())
+        lines = [body[i:i + 64] for i in range(0, len(body), 64)]
+        pem = "\n".join([match.group(1)] + lines + [match.group(3)])
+    pem += "\n"
+    try:
+        serialization.load_pem_private_key(pem.encode(), password=None)
+    except (ValueError, TypeError, UnsupportedAlgorithm):
+        logger.error("GitHub App private key in GITHUB_APP_PRIVATE_KEY is not a well-formed PEM")
+        return None
+    return pem
+
+
+def _get_private_key():
+    """Return the private key PEM from GITHUB_APP_PRIVATE_KEY.
+
+    The setting holds either the PEM itself (see _normalize_private_key) or
+    the path to a .pem file. The key is never logged.
+    """
+    value = settings.get("GITHUB_APP_PRIVATE_KEY", None)
+    if not value:
+        return None
+    if isinstance(value, str) and "-----BEGIN" in value:
+        return _normalize_private_key(value)
+    key_path = value
     try:
         with open(key_path, "r") as f:
             return f.read()
-    except OSError:
+    except (OSError, ValueError):
         logger.error(f"GitHub App private key could not be read at {key_path}")
         return None
 
