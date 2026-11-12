@@ -130,15 +130,51 @@ def test_ms_create_verified(opts):
         _clean([email], [oid])
 
 
-@th.django_unit_test("microsoft linking: no email at all creates an email-less account")
-def test_ms_create_no_email(opts):
+def _no_global_require_email_row():
+    from mojo.apps.account.models.setting import Setting
+    assert not Setting.objects.filter(key="MICROSOFT_REQUIRE_EMAIL", group__isnull=True).exists(), \
+        "a global MICROSOFT_REQUIRE_EMAIL Setting row would override the file toggle these tests use"
+
+
+@th.django_unit_test("microsoft linking: no email at all is refused by default, creating nothing (#10926)")
+def test_ms_no_email_refused(opts):
+    from mojo import errors as merrors
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.oauth import OAuthConnection
+    from mojo.apps.account.rest.oauth import MICROSOFT_NO_EMAIL_MESSAGE, _find_or_create_user
+    _no_global_require_email_row()
+    oid = "0f0e0d0c-0b0a-0908-0706-050403020101"
+    _clean([], [oid])
+    try:
+        users_before = User.objects.count()
+        raised = None
+        try:
+            _find_or_create_user(PROVIDER, _profile(oid, None, False, display_name=None))
+        except merrors.PermissionDeniedException as exc:
+            raised = exc
+        assert raised is not None, "a first Microsoft sign-in with no email must be refused by default"
+        assert MICROSOFT_NO_EMAIL_MESSAGE in str(raised), f"refusal must carry the no-email message, got {raised}"
+        assert User.objects.count() == users_before, "no user may be created when the sign-in is refused"
+        assert not OAuthConnection.objects.filter(
+            provider=PROVIDER, provider_uid=f"{TID}:{oid}").exists(), \
+            "no connection may be created when the sign-in is refused"
+    finally:
+        _clean([], [oid])
+
+
+@th.django_unit_test("microsoft linking: MICROSOFT_REQUIRE_EMAIL=False lets no email create an email-less account")
+def test_ms_create_no_email_setting_off(opts):
+    from django.conf import settings as django_settings
     from mojo.apps.account.rest.oauth import _find_or_create_user
+    _no_global_require_email_row()
     oid = "0f0e0d0c-0b0a-0908-0706-050403020100"
     _clean([], [oid])
+    original = getattr(django_settings, "MICROSOFT_REQUIRE_EMAIL", None)
+    django_settings.MICROSOFT_REQUIRE_EMAIL = False
     try:
         user, conn, created = _find_or_create_user(
             PROVIDER, _profile(oid, None, False, display_name=None))
-        assert created is True, "a phone-only Microsoft account must still sign up"
+        assert created is True, "with the setting off a phone-only Microsoft account must still sign up"
         assert user.email is None, f"no email expected, got {user.email}"
         assert conn.email is None, f"no connection email expected, got {conn.email}"
         assert user.username.startswith("ms-"), \
@@ -146,6 +182,54 @@ def test_ms_create_no_email(opts):
         again, _, created_again = _find_or_create_user(PROVIDER, _profile(oid, None, False))
         assert again.pk == user.pk and created_again is False, "the second sign-in lands in the same account"
     finally:
+        if original is None:
+            delattr(django_settings, "MICROSOFT_REQUIRE_EMAIL")
+        else:
+            django_settings.MICROSOFT_REQUIRE_EMAIL = original
+        _clean([], [oid])
+
+
+@th.django_unit_test("microsoft linking: an existing connection with no email still signs in with the setting on")
+def test_ms_existing_connection_no_email(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.models.oauth import OAuthConnection
+    from mojo.apps.account.rest.oauth import _find_or_create_user
+    _no_global_require_email_row()
+    oid = "oid-existing-no-email"
+    _clean([], [oid], ["ms_existing_no_email"])
+    user = User(username="ms_existing_no_email", email=None)
+    user.save()
+    OAuthConnection.objects.create(user=user, provider=PROVIDER, provider_uid=f"{TID}:{oid}", email=None)
+    try:
+        signed_in, conn, created = _find_or_create_user(PROVIDER, _profile(oid, None, False))
+        assert signed_in.pk == user.pk, "a known tid:oid must sign in to its account even with no email"
+        assert created is False, "no new account on a known tid:oid"
+        assert conn.provider_uid == f"{TID}:{oid}", f"the existing connection is returned, got {conn.provider_uid}"
+    finally:
+        _clean([], [oid], ["ms_existing_no_email"])
+
+
+@th.django_unit_test("microsoft linking: with registration closed, no email gets the registration refusal first")
+def test_ms_no_email_registration_closed_first(opts):
+    from django.conf import settings as django_settings
+    from mojo import errors as merrors
+    from mojo.apps.account.rest.oauth import MICROSOFT_NO_EMAIL_MESSAGE, _find_or_create_user
+    _no_global_require_email_row()
+    oid = "oid-no-email-reg-closed"
+    _clean([], [oid])
+    original = getattr(django_settings, "OAUTH_ALLOW_REGISTRATION", True)
+    django_settings.OAUTH_ALLOW_REGISTRATION = False
+    try:
+        raised = None
+        try:
+            _find_or_create_user(PROVIDER, _profile(oid, None, False))
+        except merrors.PermissionDeniedException as exc:
+            raised = exc
+        assert raised is not None, "closed registration must refuse the sign-in"
+        assert "registration" in str(raised).lower(), f"the registration refusal must win, got {raised}"
+        assert MICROSOFT_NO_EMAIL_MESSAGE not in str(raised), "the no-email message must not pre-empt closed registration"
+    finally:
+        django_settings.OAUTH_ALLOW_REGISTRATION = original
         _clean([], [oid])
 
 

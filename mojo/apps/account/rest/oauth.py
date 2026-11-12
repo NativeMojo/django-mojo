@@ -295,6 +295,15 @@ def _fallback_username(provider_name, uid):
     return f"{prefix}-{uid}".lower()
 
 
+# Shown when a first Microsoft sign-in carries no email (#10926). When
+# link-while-signed-in exists (#10925) it gains "...and link Microsoft from
+# your account settings".
+MICROSOFT_NO_EMAIL_MESSAGE = (
+    "Your Microsoft account has no email address, so we can't sign you in with it. "
+    "Ask your administrator to add an email address to your Microsoft account, "
+    "then try again, or sign in another way.")
+
+
 def _find_or_create_user(provider_name, profile, state_data=None, request=None):
     """
     Auto-link logic:
@@ -348,8 +357,8 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
             raise merrors.PermissionDeniedException("Account registration via OAuth is not permitted")
         # Per-group registration method gate — a group can disable signup via
         # a given OAuth provider in its auth config. Only applies to the
-        # toggleable providers (google/apple/github) and when a group is
-        # resolved.
+        # toggleable providers (auth_config.REGISTRATION_METHODS) and when a
+        # group is resolved.
         if provider_name in auth_config.REGISTRATION_METHODS:
             _reg_group = _resolve_state_group(state_data)
             if _reg_group is not None:
@@ -357,6 +366,12 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
                 if provider_name not in (_reg_cfg.registration.methods or []):
                     raise merrors.PermissionDeniedException(
                         "Account registration via this provider is not permitted")
+        # A Microsoft profile with no email can never match an existing
+        # account (step 2), so creating one here would silently give the
+        # person a second, empty account. Refuse by default (#10926).
+        if (provider_name == "microsoft" and not email
+                and settings.get("MICROSOFT_REQUIRE_EMAIL", True, kind="bool")):
+            raise merrors.PermissionDeniedException(MICROSOFT_NO_EMAIL_MESSAGE)
         if email_trusted:
             user = User(email=email)
             user.username = user.generate_username_from_email()
