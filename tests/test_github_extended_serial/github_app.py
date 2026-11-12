@@ -127,6 +127,7 @@ def test_private_key_setting_holds_pem(opts):
 @th.django_unit_test("github app: a path in GITHUB_APP_PRIVATE_KEY still works (#10955)")
 def test_private_key_setting_holds_path(opts):
     import os
+    import pathlib
     import tempfile
     _no_global_rows()
     key, pem = _make_key()
@@ -136,6 +137,8 @@ def test_private_key_setting_holds_path(opts):
             f.write(pem)
         with _github_settings(path):
             _assert_signs(key, "path value")
+        with _github_settings(pathlib.Path(path)):
+            _assert_signs(key, "pathlib.Path value")
     finally:
         os.unlink(path)
 
@@ -178,3 +181,32 @@ def test_private_key_bad_values_not_logged(opts):
         assert body not in logged and "A" * 64 not in logged, "no log record may contain key body text"
     finally:
         stdlib_logger.removeHandler(handler)
+
+
+@th.django_unit_test("github app: non-string, empty and non-RSA values count as not configured (#10955)")
+def test_private_key_invalid_values_not_configured(opts):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from mojo.apps.github.services.github_app import _get_private_key, generate_jwt, is_configured
+
+    _no_global_rows()
+    ec_pem = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()).decode()
+    cases = {
+        "None": None, "False": False, "empty": "", "whitespace": "   ",
+        "list": ["not-a-path"], "dict": {"invalid": "value"}, "int": 12345,
+        "EC key": ec_pem,
+    }
+    for name, value in cases.items():
+        with _github_settings(value):
+            assert _get_private_key() is None, f"{name}: _get_private_key() must return None"
+            assert is_configured() is False, f"{name}: is_configured() must be False"
+            raised = None
+            try:
+                generate_jwt()
+            except Exception as exc:
+                raised = exc
+            assert isinstance(raised, ValueError), \
+                f"{name}: generate_jwt() must raise its documented ValueError, got {raised!r}"
+            assert "not configured" in str(raised), f"{name}: ValueError must say not configured, got {raised}"
