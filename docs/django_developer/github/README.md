@@ -130,8 +130,9 @@ itself or a path:
   passing through a single-line input); it is re-wrapped at 64 columns. One
   pair of surrounding quotes is removed. Both `BEGIN RSA PRIVATE KEY` (the
   file GitHub downloads) and `BEGIN PRIVATE KEY` (PKCS#8) are accepted. A value
-  that does not load as a private key counts as not configured.
-- **A path** — anything else is read as a file path, as before.
+  that does not load as an RSA private key counts as not configured.
+- **A path** — any other string (or path object) is read as a file path, as
+  before. Any other type, or a blank value, counts as not configured.
 
 The key is never logged. Through the fleet configuration tool, set it from the
 downloaded file with `config set GITHUB_APP_PRIVATE_KEY=@/path/to/key.pem`;

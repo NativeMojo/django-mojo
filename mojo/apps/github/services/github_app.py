@@ -11,6 +11,7 @@ Settings:
 """
 import hashlib
 import hmac
+import os
 import re
 import time
 
@@ -18,6 +19,7 @@ import jwt
 import requests
 from cryptography.exceptions import UnsupportedAlgorithm
 from cryptography.hazmat.primitives import serialization
+from cryptography.hazmat.primitives.asymmetric import rsa
 
 from django.utils import timezone
 
@@ -46,8 +48,8 @@ def _normalize_private_key(value):
 
     Accepts a PEM with real line breaks, with literal "\\n" escapes, or with
     every line break stripped (re-wrapped at 64 columns), optionally wrapped
-    in one pair of quotes. Returns None when the value is not a loadable
-    private key. Never logs the value.
+    in one pair of quotes. Returns None when the value is not a loadable RSA
+    private key (GitHub Apps sign with RS256). Never logs the value.
     """
     if not isinstance(value, str):
         return None
@@ -67,9 +69,12 @@ def _normalize_private_key(value):
         pem = "\n".join([match.group(1)] + lines + [match.group(3)])
     pem += "\n"
     try:
-        serialization.load_pem_private_key(pem.encode(), password=None)
+        key = serialization.load_pem_private_key(pem.encode(), password=None)
     except (ValueError, TypeError, UnsupportedAlgorithm):
         logger.error("GitHub App private key in GITHUB_APP_PRIVATE_KEY is not a well-formed PEM")
+        return None
+    if not isinstance(key, rsa.RSAPrivateKey):
+        logger.error("GitHub App private key in GITHUB_APP_PRIVATE_KEY is not an RSA private key")
         return None
     return pem
 
@@ -81,9 +86,11 @@ def _get_private_key():
     the path to a .pem file. The key is never logged.
     """
     value = settings.get("GITHUB_APP_PRIVATE_KEY", None)
-    if not value:
+    if isinstance(value, os.PathLike):
+        value = os.fspath(value)
+    if not isinstance(value, str) or not value.strip():
         return None
-    if isinstance(value, str) and "-----BEGIN" in value:
+    if "-----BEGIN" in value:
         return _normalize_private_key(value)
     key_path = value
     try:

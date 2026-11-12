@@ -207,3 +207,15 @@ def test_private_key_garbage_is_none(opts):
     }
     for name, value in cases.items():
         assert _normalize_private_key(value) is None, f"{name}: a value that is not a loadable key must give None"
+
+
+@th.django_unit_test("github app: a loadable non-RSA private key normalises to None (#10955)")
+def test_private_key_non_rsa_is_none(opts):
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.hazmat.primitives.asymmetric import ec
+    from mojo.apps.github.services.github_app import _normalize_private_key
+
+    ec_pem = ec.generate_private_key(ec.SECP256R1()).private_bytes(
+        serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8,
+        serialization.NoEncryption()).decode()
+    assert _normalize_private_key(ec_pem) is None, "an EC key cannot sign RS256, so it must not count as configured"
