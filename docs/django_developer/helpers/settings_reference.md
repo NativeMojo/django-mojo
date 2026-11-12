@@ -1085,6 +1085,17 @@ restart. See
 
 - `MFA_TOKEN_TTL`
 
+### MICROSOFT
+
+Microsoft sign-in; see [Microsoft Settings](../account/oauth.md#microsoft-settings).
+
+- `MICROSOFT_CLIENT_ID`
+- `MICROSOFT_CLIENT_SECRET`
+- `MICROSOFT_CLIENT_SECRET_EXPIRES`
+- `MICROSOFT_REQUIRE_EMAIL` — default `True`. A first Microsoft sign-in with no email at all is refused (403) instead of creating an email-less account; an existing connection still signs in. Global only: a group-scoped row is never read. See [Email trust for Microsoft](../account/oauth.md#email-trust-for-microsoft).
+- `MICROSOFT_SCOPES`
+- `MICROSOFT_TENANT`
+
 ### MISC
 
 - `DEBUG`

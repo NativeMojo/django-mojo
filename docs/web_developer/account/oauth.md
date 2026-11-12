@@ -159,7 +159,20 @@ account, `complete` refuses with `403`:
 Show that message and offer the person's usual sign-in method. If the address
 is unverified and unknown, the account is created **without an email**
 (`email: null`, not verified); the person can add one later through the
-normal change-email flow. Microsoft sign-ins that fail token validation
+normal change-email flow.
+
+If Microsoft sends **no email at all** (the organization left the person's
+Email property empty) and the Microsoft account is not yet linked to any user,
+`complete` refuses with `403` and creates nothing:
+
+```json
+{"status": false, "error": "Your Microsoft account has no email address, so we can't sign you in with it. Ask your administrator to add an email address to your Microsoft account, then try again, or sign in another way.", "code": 403}
+```
+
+Show the message as given. The hosted pages already show it under "We couldn't
+finish signing in". A Microsoft account that is already linked still signs in.
+A deployment can turn this off with `MICROSOFT_REQUIRE_EMAIL = False`, which
+creates the account without an email instead. Microsoft sign-ins that fail token validation
 return `401` "Microsoft sign-in could not be verified".
 
 ### Email Verification on Auto-Link
@@ -416,6 +429,7 @@ server; the frontend sees only `auth_url` and `state`. With the hosted pages or
 | `OAUTH_STATE_TTL` | `600` | Seconds a CSRF state token is valid before it expires |
 | `ALLOWED_REDIRECT_URLS` | `[]` | URLs permitted as `redirect_uri` on the `begin` endpoint, matched by scheme + host + port + segment-bounded path prefix (not by string prefix). Combined at request time with the `allowed_redirect_urls` list in the metadata of the group you pass as `group_uuid` / `group` (inherited up its parent chain), so a tenant can register its own landing origin without a server deploy — that group value is coerced by the same list rules (a JSON array, or a plain / comma-separated string), and a non-list value is ignored. |
 | `OAUTH_ALLOW_REGISTRATION` | `True` | Allow new accounts to be created via OAuth. Set to `False` for invite-only or closed deployments — the complete endpoint returns `403` if no existing account matches. |
+| `MICROSOFT_REQUIRE_EMAIL` | `True` | Refuse a first Microsoft sign-in that carries no email, with `403`, instead of creating an account without an email. Global setting only. |
 
 ---
 
@@ -499,4 +513,5 @@ Admins with `manage_users` (or the combined `users` permission) bypass the locko
 | `403` | Account is disabled |
 | `403` | `begin`: the provider is switched off — for the named group, or, for a provider that is off by default (Microsoft), system-wide even with no group |
 | `403` | Microsoft: an account already uses this (unverified) email |
+| `403` | Microsoft: the Microsoft account has no email and is not yet linked (`MICROSOFT_REQUIRE_EMAIL`, on by default) |
 | `401` | Microsoft: the ID token could not be verified |
