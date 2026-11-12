@@ -119,14 +119,33 @@ Stateless helper functions for GitHub App API authentication. Logs to `github.lo
 | Setting | Default | Purpose |
 |---|---|---|
 | `GITHUB_APP_ID` | — | GitHub App ID (from GitHub App settings page) |
-| `GITHUB_APP_PRIVATE_KEY` | — | Absolute path to the RSA `.pem` private key file |
+| `GITHUB_APP_PRIVATE_KEY` | — | The RSA private key PEM, or the absolute path to a `.pem` file (see below) |
 | `GITHUB_WEBHOOK_SECRET` | — | HMAC secret for webhook signature verification |
+
+**Setting the private key.** `GITHUB_APP_PRIVATE_KEY` holds either the key
+itself or a path:
+
+- **The PEM itself** — any value containing `-----BEGIN`. It may have real line
+  breaks, literal `\n` escapes, or every line break stripped (for example after
+  passing through a single-line input); it is re-wrapped at 64 columns. One
+  pair of surrounding quotes is removed. Both `BEGIN RSA PRIVATE KEY` (the
+  file GitHub downloads) and `BEGIN PRIVATE KEY` (PKCS#8) are accepted. A value
+  that does not load as an RSA private key counts as not configured.
+- **A path** — any other string (or path object) is read as a file path, as
+  before. Any other type, or a blank value, counts as not configured.
+
+The key is never logged. Through the fleet configuration tool, set it from the
+downloaded file with `config set GITHUB_APP_PRIVATE_KEY=@/path/to/key.pem`;
+the `@file` form keeps the line breaks, and the tool shows the value as
+`<redacted>` in `config get` and in its change diffs. If you store it as a
+database setting instead, mark that setting secret, or `/api/settings` returns
+it in clear to settings managers.
 
 ### Functions
 
 #### `is_configured()`
 
-Returns `True` if both `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` are set and the key file exists.
+Returns `True` if both `GITHUB_APP_ID` and `GITHUB_APP_PRIVATE_KEY` are set and the key loads (a PEM value that parses as a private key, or a readable key file).
 
 ```python
 from mojo.apps.github.services.github_app import is_configured
