@@ -111,6 +111,7 @@ MICROSOFT_TENANT        = "common"                                # see below
 | `MICROSOFT_TENANT` | `"common"` | Who may sign in: `common` (personal and work or school accounts), `organizations` (work or school only), `consumers` (personal only), or one tenant's GUID |
 | `MICROSOFT_SCOPES` | `"openid profile email"` | Scopes; no `offline_access` and no Graph scope are needed |
 | `MICROSOFT_CLIENT_SECRET_EXPIRES` | — | `YYYY-MM-DD`; only feeds the Sign-in card's expiry notices |
+| `MICROSOFT_REQUIRE_EMAIL` | `True` | Refuse a first Microsoft sign-in that carries no email at all, instead of creating an email-less account (see [Email trust for Microsoft](#email-trust-for-microsoft)). Global only: a group or tenant setting row cannot turn it off. Not on the Sign-in card |
 
 Register the app in the [Microsoft Entra admin center](https://entra.microsoft.com/)
 (App registrations):
@@ -584,13 +585,27 @@ token says `xms_edov: true`. The profile's `email_verified` is `True` only then;
 | Verified email matches a user | Links to it and sets `is_email_verified=True` |
 | Verified email, no match | New user with that email, `is_email_verified=True` |
 | Unverified email matches a user | **Refused** (`403`, "An account already uses this email. Sign in with your existing method.") — nothing is created |
-| Unverified or no email, no match | New user with `email=None`, `is_email_verified=False`; the reported address is kept only on `OAuthConnection.email` |
+| Unverified email, no match | New user with `email=None`, `is_email_verified=False`; the reported address is kept only on `OAuthConnection.email` |
+| No email, no match | `MICROSOFT_REQUIRE_EMAIL` on (default): **refused** (`403`, "Your Microsoft account has no email address, so we can't sign you in with it. Ask your administrator to add an email address to your Microsoft account, then try again, or sign in another way.") — nothing is created. Off: new user with `email=None`, `is_email_verified=False` |
 
-Why the last row withholds the address: magic login and forgot-password find
+Why an unverified address is withheld: magic login and forgot-password find
 users by email. If the new account held an unverified `victim@example.com`, the
 real owner could later reach an account whose Microsoft connection belongs to
-someone else. Such a user signs in by `tid:oid` and can add an email through
-the normal change-email and verify flow. The post-credential geofence check
+someone else. An email-less user (an unverified address, or no email with
+`MICROSOFT_REQUIRE_EMAIL` off) signs in by `tid:oid` and can add an email
+through the normal change-email and verify flow.
+
+Why no email is refused by default: a profile with no email can never match an
+existing account, so a person whose Entra user has an empty **Email** property
+would land in a brand-new, empty account with none of their groups, and that
+account would hold the Microsoft link for every later sign-in. The registration
+refusals (`OAUTH_ALLOW_REGISTRATION`, the group's `registration.methods`) are
+checked first. A returning user with an existing connection is never refused.
+**Admin fix:** set the user's **Email** property in the Microsoft Entra admin
+center (Users → the user → Properties → Contact information), then sign in
+again; a verified email then links to the existing account. A deployment that
+wants email-less (for example phone-only) accounts sets
+`MICROSOFT_REQUIRE_EMAIL = False`. The post-credential geofence check
 (`_lookup_known_user`) also ignores an unverified email, so it cannot borrow
 another account's `bypass_geofence`.
 
