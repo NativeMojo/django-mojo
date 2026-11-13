@@ -57,7 +57,11 @@ def on_assistant_message(request):
         "conversation_id": result["conversation_id"],
         "tool_calls_made": result.get("tool_calls_made", []),
         "duration_ms": result.get("duration_ms"),
+        "stop_reason": result.get("stop_reason"),
     }
+    if result.get("response_repeats_step"):
+        data["response_repeats_step"] = True
+        data["step_message_id"] = result.get("step_message_id")
     blocks = result.get("blocks")
     if blocks:
         data["blocks"] = blocks
