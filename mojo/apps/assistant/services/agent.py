@@ -250,7 +250,10 @@ def _accumulate_usage(totals, response_usage):
         totals[key] = totals.get(key, 0) + (response_usage.get(key, 0) or 0)
 
 
-def _reply_content_for_request(content):
+_THINKING_TYPES = ("thinking", "redacted_thinking")
+
+
+def _reply_content_for_request(content, keep_thinking=True):
     """Return a model reply's content blocks in a form Anthropic accepts back.
 
     The reply is sent back on the next turn of the tool loop, and stored
@@ -259,6 +262,11 @@ def _reply_content_for_request(content):
     contain non-whitespace text``), and the SDK's ``model_dump`` adds
     ``None`` fields such as ``citations`` and ``caller`` that are not part
     of the request format. Drop both; every other block passes unchanged.
+
+    With ``keep_thinking=False`` thinking blocks are dropped too. Anthropic
+    signs a thinking block against the system prompt, the tools and every
+    earlier message, so a block replayed from stored history can be
+    refused (``provider_rejected``).
     """
     cleaned = []
     for block in content or []:
@@ -268,10 +276,29 @@ def _reply_content_for_request(content):
         kind = block.get("type")
         if kind == "text" and not (block.get("text") or "").strip():
             continue
+        if not keep_thinking and kind in _THINKING_TYPES:
+            continue
         if kind in ("text", "tool_use"):
             block = {k: v for k, v in block.items() if v is not None}
         cleaned.append(block)
     return cleaned
+
+
+def _strip_thinking(messages):
+    """Drop thinking blocks from every assistant turn, in place.
+
+    Called when the tool list changes between calls (``load_tools``): a
+    thinking block is signed against the tools it was made with, and
+    Anthropic refuses it once they differ. Text and tool_use blocks keep
+    their order.
+    """
+    for msg in messages:
+        if msg.get("role") != "assistant" or not isinstance(msg.get("content"), list):
+            continue
+        msg["content"] = [
+            block for block in msg["content"]
+            if not (isinstance(block, dict) and block.get("type") in _THINKING_TYPES)
+        ]
 
 
 def _dumps_tool_result(
@@ -1401,7 +1428,7 @@ def _build_conversation_messages(conversation, max_history):
             if msg.content:
                 content.append({"type": "text", "text": msg.content})
             if msg.tool_calls:
-                content.extend(_reply_content_for_request(msg.tool_calls))
+                content.extend(_reply_content_for_request(msg.tool_calls, keep_thinking=False))
             if content:
                 messages.append({"role": "assistant", "content": content})
         elif msg.role == "tool_result":
@@ -1519,8 +1546,16 @@ def run_assistant(
     t_start = time.time()
     operation_id = uuid.uuid4().hex
 
+    sent_tool_names = None
+
     try:
         for turn_idx in range(max_turns):
+            # load_tools grows `tools` in place; earlier thinking was signed
+            # under the old list and would be refused, so drop it.
+            tool_names = tuple(t["name"] for t in tools)
+            if sent_tool_names is not None and tool_names != sent_tool_names:
+                _strip_thinking(messages)
+            sent_tool_names = tool_names
             result = llm.call(
                 messages, system=system_prompt, tools=tools,
                 feature="assistant", context={
@@ -1758,8 +1793,16 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
     t_start = time.time()
     operation_id = uuid.uuid4().hex
 
+    sent_tool_names = None
+
     try:
         for turn_idx in range(max_turns):
+            # load_tools grows `tools` in place; earlier thinking was signed
+            # under the old list and would be refused, so drop it.
+            tool_names = tuple(t["name"] for t in tools)
+            if sent_tool_names is not None and tool_names != sent_tool_names:
+                _strip_thinking(messages)
+            sent_tool_names = tool_names
             result = llm.call(
                 messages, system=system_prompt, tools=tools,
                 feature="assistant", context={
