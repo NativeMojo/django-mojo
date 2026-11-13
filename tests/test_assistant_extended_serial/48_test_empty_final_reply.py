@@ -70,15 +70,28 @@ def _fake_model(turns):
         yield
 
 
+def _post_assistant(user, message):
+    """POST /api/assistant in-process, through the real view and service."""
+    import json
+    from django.test import Client
+    from mojo.apps.account.utils.jwtoken import JWToken
+
+    token = JWToken(user.get_auth_key()).create(uid=user.pk).access_token
+    response = Client(HTTP_HOST="127.0.0.1").post(
+        "/api/assistant", data=json.dumps({"message": message}),
+        content_type="application/json", HTTP_AUTHORIZATION="Bearer " + token)
+    return response.status_code, response.json()
+
+
 def _assistant_messages(conversation_id):
     from mojo.apps.assistant.models import Message
     return list(Message.objects.filter(
         conversation_id=conversation_id, role="assistant").order_by("created", "pk"))
 
 
-@th.django_unit_test("regression #11025: HTTP reply empty when the last turn has no text")
+@th.django_unit_test("regression #11025: service result empty when the last turn has no text")
 @th.requires_app("mojo.apps.assistant")
-def test_http_reply_repeats_step_text(opts):
+def test_service_result_repeats_step_text(opts):
     from mojo.apps.assistant.models import Conversation
     from mojo.apps.assistant.services.agent import run_assistant
 
@@ -156,3 +169,67 @@ def test_final_turn_with_text_is_unchanged(opts):
     stored = _assistant_messages(result["conversation_id"])
     assert_eq([m.content for m in stored], [ANSWER, "Final words."], "history is the step then the reply")
     Conversation.objects.filter(pk=result["conversation_id"]).delete()
+
+
+@th.django_unit_test("regression #11025: POST /api/assistant drops the repeat fields")
+@th.requires_app("mojo.apps.assistant")
+def test_endpoint_reply_repeats_step_text(opts):
+    from mojo.apps.assistant.models import Conversation
+
+    Conversation.objects.filter(user=opts.user).delete()
+    with _fake_model(_step_then({"stop_reason": "end_turn", "content": []})):
+        status, payload = _post_assistant(opts.user, "what is the answer?")
+    assert_eq(status, 200, f"the endpoint should answer, got {status}: {payload}")
+    data = payload["data"]
+    assert_eq(data["response"], ANSWER, "the endpoint returns the step's answer")
+    assert_eq(data.get("response_repeats_step"), True, f"the JSON must carry the repeat flag, got {data}")
+    stored = _assistant_messages(data["conversation_id"])
+    assert_eq(data.get("step_message_id"), stored[0].pk, "step_message_id must name the step's Message")
+    assert_eq(data.get("stop_reason"), "end_turn", f"the JSON must carry stop_reason, got {data}")
+    assert_eq([m.content for m in stored], [ANSWER, ""], "history holds the answer once; the final Message is empty")
+    Conversation.objects.filter(pk=data["conversation_id"]).delete()
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_endpoint_final_text_has_no_flag(opts):
+    from mojo.apps.assistant.models import Conversation
+
+    Conversation.objects.filter(user=opts.user).delete()
+    final = {"stop_reason": "end_turn", "content": [{"type": "text", "text": "Final words."}]}
+    with _fake_model(_step_then(final)):
+        status, payload = _post_assistant(opts.user, "what is the answer?")
+    assert_eq(status, 200, f"the endpoint should answer, got {status}: {payload}")
+    data = payload["data"]
+    assert_eq(data["response"], "Final words.", "a final turn with text is the reply")
+    assert_eq(data.get("stop_reason"), "end_turn", f"the JSON must carry stop_reason, got {data}")
+    assert_true("response_repeats_step" not in data and "step_message_id" not in data,
+                f"a reply with its own text carries no repeat fields, got {data}")
+    Conversation.objects.filter(pk=data["conversation_id"]).delete()
+
+
+@th.django_unit_test()
+@th.requires_app("mojo.apps.assistant")
+def test_ws_handler_event_carries_flags(opts):
+    from mojo.apps.assistant import handler
+    from mojo.apps.assistant.models import Conversation, Message
+
+    Conversation.objects.filter(user=opts.user, title=CONV_TITLE).delete()
+    conv = Conversation.objects.create(user=opts.user, title=CONV_TITLE)
+    Message.objects.create(conversation=conv, role="user", content="what is the answer?")
+    request_id = "00000000-0000-0000-0000-000000011025"
+    events = []
+    with _fake_model(_step_then({"stop_reason": "end_turn", "content": []})), \
+            mock.patch("mojo.apps.realtime.manager.send_event_to_user",
+                       side_effect=lambda topic, uid, event: events.append(event)):
+        handler._run_agent_thread(opts.user.pk, conv.pk, "what is the answer?", request_id=request_id)
+    terminal = [e for e in events if e.get("type") == "assistant_response"]
+    assert_eq(len(terminal), 1, f"exactly one assistant_response event, got {[e.get('type') for e in events]}")
+    event = terminal[0]
+    stored = _assistant_messages(conv.pk)
+    assert_eq(event["response"], "", "over WS response stays as stored")
+    assert_eq(event.get("response_repeats_step"), True, f"the event must carry the repeat flag, got {event}")
+    assert_eq(event.get("step_message_id"), stored[0].pk, "step_message_id must name the step's Message")
+    assert_eq(event.get("stop_reason"), "end_turn", f"the event must carry stop_reason, got {event}")
+    assert_eq(event.get("request_id"), request_id, "the event echoes the request id")
+    conv.delete()
