@@ -107,6 +107,10 @@ empty arrays, and arrays longer than five return HTTP 400.
 
 The `blocks` array is only present when the LLM includes structured data. See [Structured Data Blocks](#structured-data-blocks) for details.
 
+`stop_reason` is the model's reason for ending the run (`end_turn`, `max_tokens`, `refusal`, ...), for triage.
+
+**When the last turn has no text.** The model can write its answer alongside a tool call and then end the run without more text. The REST reply then returns that earlier answer as `response` (and its `blocks`), with `"response_repeats_step": true` and `step_message_id`, the id of the stored step message that holds it. Conversation history keeps the answer once, on that step message; the final message is stored empty. If the run wrote no text at all, `response` is a short fixed explanation (for `max_tokens`: "The reply hit the length limit before any answer was written. Please try a narrower question."), stored like any reply.
+
 #### User attachment contract
 
 Attachments are capability-free metadata references, not uploaded bytes. Upload
@@ -1096,7 +1100,7 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 | `assistant_approval_required` | A mutating tool produced an approval card | `{conversation_id, request_id, action_id, block}` |
 | `assistant_approval_ack` | An `assistant_approval` decision was accepted for processing | `{conversation_id, request_id, action_id}` |
 | `assistant_approval_result` | The action was resolved (terminal for that action) | `{conversation_id, request_id, action_id, block, message_id}` |
-| `assistant_response` | Final LLM response (terminal event) | `{conversation_id, request_id, message_id, created, response, tool_calls_made, blocks}` |
+| `assistant_response` | Final LLM response (terminal event) | `{conversation_id, request_id, message_id, created, response, tool_calls_made, blocks, stop_reason}`, plus `response_repeats_step` and `step_message_id` when the last turn had no text |
 | `assistant_error` | On failure (terminal event) | `{conversation_id, request_id, error}`, plus `code` (and `action_id`) on an approval refusal |
 
 **`assistant_text` payload fields**:
@@ -1119,6 +1123,11 @@ The server publishes events to the user's WebSocket topic as the assistant proce
 | `response` | string | Narrative text with block fences already stripped |
 | `tool_calls_made` | array | List of `{tool, input}` objects for tools called during this turn |
 | `blocks` | array or null | Parsed structured-data blocks. `null` when none present. Always included — never absent. |
+| `stop_reason` | string or null | The model's reason for ending the run (`end_turn`, `max_tokens`, `refusal`, ...) |
+| `response_repeats_step` | boolean | Present and `true` only when the last turn had no text and the answer is the earlier `assistant_text` already sent live. `response` is then empty, as stored; do not render a new bubble for it. |
+| `step_message_id` | integer | With `response_repeats_step`: the stored step message that holds the answer |
+
+If the run wrote no text at all, `response` is a short fixed explanation (for example, the reply hit the length limit), stored like any reply.
 
 The `message_id` and `created` fields make the WS event consistent with the REST detail graph shape, allowing the client to correlate WS events with conversation history retrieved via `GET /api/assistant/conversation/<id>?graph=detail`.
 
