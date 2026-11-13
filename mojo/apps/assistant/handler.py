@@ -501,10 +501,15 @@ def _run_agent_thread(user_id, conversation_id, message, request_id=None,
                 "blocks": result.get("blocks") or None,
                 "tool_calls_made": result.get("tool_calls_made", []),
                 "duration_ms": result.get("duration_ms"),
+                "stop_reason": result.get("stop_reason"),
             }
+            if result.get("response_repeats_step"):
+                response_data["response_repeats_step"] = True
+                response_data["step_message_id"] = result.get("step_message_id")
             on_event("response", response_data)
-            logger.info("assistant thread completed: user=%s conv=%s tools=%d",
-                        user_id, conversation_id, len(response_data["tool_calls_made"]))
+            logger.info("assistant thread completed: user=%s conv=%s tools=%d stop_reason=%s",
+                        user_id, conversation_id, len(response_data["tool_calls_made"]),
+                        response_data["stop_reason"])
     except Exception:
         logger.exception("assistant thread: failed to deliver result to user %s", user_id)
         on_event("error", {"error": "Failed to deliver response. Please check conversation history."})

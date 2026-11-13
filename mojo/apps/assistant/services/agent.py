@@ -301,6 +301,50 @@ def _strip_thinking(messages):
         ]
 
 
+_EMPTY_REPLY_MESSAGES = {
+    "max_tokens": "The reply hit the length limit before any answer was written. "
+                  "Please try a narrower question.",
+    "refusal": "I can't help with that request.",
+}
+_EMPTY_REPLY_DEFAULT = "I finished without writing a reply. Please ask again."
+
+
+def _final_reply(content, stop_reason, step):
+    """Build the reply for the turn that ends the run (#11025).
+
+    ``step`` is ``(text, blocks, message_id)`` from the last tool_use turn of
+    this run that wrote text, or None. Returns a dict: ``stored_text`` and
+    ``stored_blocks`` for the final Message, ``response`` and ``blocks`` for
+    the caller, and ``repeats_step`` / ``step_message_id``.
+
+    - The final turn has text: it is the reply, as before.
+    - No text, but an earlier step wrote some: the caller gets that step's
+      text, flagged ``repeats_step``. The stored final Message stays empty,
+      so history never holds the answer twice.
+    - No text anywhere: a fixed message per stop reason is stored and
+      returned, like the max-turns message.
+    """
+    text_parts = [b["text"] for b in content or [] if b.get("type") == "text"]
+    text, blocks = _parse_blocks("\n".join(text_parts) if text_parts else "")
+    reply = {
+        "stored_text": text, "stored_blocks": blocks,
+        "response": text, "blocks": blocks,
+        "repeats_step": False, "step_message_id": None,
+    }
+    if text or blocks:
+        return reply
+    if step:
+        step_text, step_blocks, step_message_id = step
+        reply.update({
+            "response": step_text, "blocks": list(step_blocks or []),
+            "repeats_step": True, "step_message_id": step_message_id,
+        })
+        return reply
+    fixed = _EMPTY_REPLY_MESSAGES.get(stop_reason, _EMPTY_REPLY_DEFAULT)
+    reply.update({"stored_text": fixed, "response": fixed})
+    return reply
+
+
 def _dumps_tool_result(
         obj, user=None, conversation=None, tool_name=None, _reporter=None):
     """Safely serialize a tool result to a JSON string.
@@ -1547,6 +1591,7 @@ def run_assistant(
     operation_id = uuid.uuid4().hex
 
     sent_tool_names = None
+    last_step = None
 
     try:
         for turn_idx in range(max_turns):
@@ -1579,41 +1624,47 @@ def run_assistant(
             })
 
             if stop_reason != "tool_use":
-                # Agent is done — extract text response
-                text_parts = []
-                for block in result["content"]:
-                    if block.get("type") == "text":
-                        text_parts.append(block["text"])
-
-                raw_text = "\n".join(text_parts) if text_parts else ""
-                response_text, blocks = _parse_blocks(raw_text)
+                # Agent is done — the reply is this turn's text, else the
+                # last step's text (not stored again), else a fixed message.
+                reply = _final_reply(result["content"], stop_reason, last_step)
+                stored_blocks = reply["stored_blocks"]
+                blocks = reply["blocks"]
                 duration_ms = int((time.time() - t_start) * 1000)
 
                 if context_refs:
-                    blocks = blocks or []
-                    blocks.append({"type": "context", "references": context_refs})
+                    context_block = {"type": "context", "references": context_refs}
+                    stored_blocks = (stored_blocks or []) + [context_block]
+                    blocks = (blocks or []) + [context_block]
 
                 Message.objects.create(
                     conversation=conversation,
                     role="assistant",
-                    content=response_text,
-                    blocks=blocks or None,
+                    content=reply["stored_text"],
+                    blocks=stored_blocks or None,
                     duration_ms=duration_ms,
                     usage=usage_totals or None,
                     tool_calls=result["content"] if any(
                         b.get("type") == "tool_use" for b in result["content"]
                     ) else None,
                 )
+                logger.info(
+                    f"assistant done conv={conversation.pk} stop_reason={stop_reason} "
+                    f"repeats_step={reply['repeats_step']}")
 
-                return {
-                    "response": response_text,
+                response = {
+                    "response": reply["response"],
                     "blocks": blocks,
                     "conversation_id": conversation.pk,
                     "tool_calls_made": tool_calls_made,
                     "pending_actions": pending_actions,
                     "duration_ms": duration_ms,
                     "usage": usage_totals or None,
+                    "stop_reason": stop_reason,
                 }
+                if reply["repeats_step"]:
+                    response["response_repeats_step"] = True
+                    response["step_message_id"] = reply["step_message_id"]
+                return response
 
             # Split content into text vs tool_use; persist text on the
             # assistant turn and keep tool_calls clean (only tool_use blocks).
@@ -1648,13 +1699,15 @@ def run_assistant(
             turn_blocks.extend(pending_actions[pending_before:])
 
             # Store tool interaction messages
-            Message.objects.create(
+            step_msg = Message.objects.create(
                 conversation=conversation,
                 role="assistant",
                 content=interim_text,
                 blocks=turn_blocks or None,
                 tool_calls=tool_blocks or None,
             )
+            if interim_text:
+                last_step = (interim_text, interim_blocks, step_msg.pk)
             Message.objects.create(
                 conversation=conversation,
                 role="tool_result",
@@ -1794,6 +1847,7 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
     operation_id = uuid.uuid4().hex
 
     sent_tool_names = None
+    last_step = None
 
     try:
         for turn_idx in range(max_turns):
@@ -1825,9 +1879,11 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
             })
 
             if stop_reason != "tool_use":
-                text_parts = [b["text"] for b in result["content"] if b.get("type") == "text"]
-                raw_text = "\n".join(text_parts) if text_parts else ""
-                response_text, blocks = _parse_blocks(raw_text)
+                # Over WS the step text was already sent live as `text`, so a
+                # reply that repeats it keeps `response` as stored (empty) and
+                # carries the flags instead; the panel would show it twice.
+                reply = _final_reply(result["content"], stop_reason, last_step)
+                blocks = reply["stored_blocks"]
                 duration_ms = int((time.time() - t_start) * 1000)
 
                 if context_refs:
@@ -1836,12 +1892,15 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
 
                 msg = Message.objects.create(
                     conversation=conversation, role="assistant",
-                    content=response_text, blocks=blocks or None,
+                    content=reply["stored_text"], blocks=blocks or None,
                     duration_ms=duration_ms,
                     usage=usage_totals or None,
                 )
-                return {
-                    "response": response_text,
+                logger.info(
+                    f"assistant ws done conv={conversation.pk} stop_reason={stop_reason} "
+                    f"repeats_step={reply['repeats_step']}")
+                response = {
+                    "response": reply["stored_text"],
                     "blocks": blocks,
                     "message_id": msg.pk,
                     "created": msg.created.isoformat(),
@@ -1850,7 +1909,12 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
                     "pending_actions": pending_actions,
                     "duration_ms": duration_ms,
                     "usage": usage_totals or None,
+                    "stop_reason": stop_reason,
                 }
+                if reply["repeats_step"]:
+                    response["response_repeats_step"] = True
+                    response["step_message_id"] = reply["step_message_id"]
+                return response
 
             # Split content into text vs tool_use; emit intermediate text
             # over WS so users see the model's reasoning before tool calls fire.
@@ -1881,11 +1945,13 @@ def run_assistant_ws(user, message, conversation_id, on_event=None,
             turn_blocks = list(interim_blocks or [])
             turn_blocks.extend(pending_actions[pending_before:])
 
-            Message.objects.create(
+            step_msg = Message.objects.create(
                 conversation=conversation, role="assistant",
                 content=interim_text, blocks=turn_blocks or None,
                 tool_calls=tool_blocks or None,
             )
+            if interim_text:
+                last_step = (interim_text, interim_blocks, step_msg.pk)
             Message.objects.create(
                 conversation=conversation, role="tool_result", content="", tool_calls=tool_results,
             )

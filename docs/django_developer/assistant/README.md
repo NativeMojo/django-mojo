@@ -45,8 +45,21 @@ User sends message via REST
             → Publish WS event "assistant_plan_update"
         → Repeat until LLM stops calling tools
     → Store assistant response as Message
-    → Return response + conversation_id + pending_actions
+    → Return response + conversation_id + pending_actions + stop_reason
 ```
+
+**Final reply when the last turn has no text** (`_final_reply` in
+`services/agent.py`). The model can write its answer beside a tool call, then
+end the run with no text. Text from a tool_use turn is stored on that turn's
+own assistant `Message` and sent live as `assistant_text`; it is never copied
+to the final `Message`, which is stored empty so history and the model's replay
+hold the answer once. The REST result then returns the last such step text of
+this run as `response`, with `response_repeats_step: True` and
+`step_message_id`. Over WebSocket the step text was already shown live, so
+`assistant_response` keeps `response` as stored and only carries the flags.
+When the run wrote no text at all, a fixed message per `stop_reason`
+(`max_tokens`, `refusal`, otherwise a generic one) is stored and returned, like
+the max-turns message. `stop_reason` is on the result and in the final log line.
 
 > **Chat mutations use approval cards, apart from owner-state calls.** Explicit
 > MCP execution consent additionally permits eligible ordinary tools; protected
