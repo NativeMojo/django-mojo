@@ -1362,7 +1362,7 @@ class Group(MojoSecrets, MojoModel):
             return None
         data = request.DATA
         parent_id = None
-        for name in ("parent", "parent_id"):
+        for name in ("parent"):
             if name not in data:
                 continue
             value = data.get(name)
@@ -1387,8 +1387,9 @@ class Group(MojoSecrets, MojoModel):
         return parent
 
     # Fields `basic` hides that a list query could filter, sort or aggregate
-    # on, and the export columns that carry what `basic` hides (#11001).
-    LIST_HIDDEN_QUERY_FIELDS = ("metadata", "auth_domain", "parent")
+    # on (with parent's `parent_id` column alias), and the export columns
+    # that carry what `basic` hides (#11001).
+    LIST_HIDDEN_QUERY_FIELDS = ("metadata", "auth_domain", "parent", "parent_id")
     LIST_HIDDEN_EXPORT_COLUMNS = ("metadata.timezone", "parent.id", "parent.name")
 
     @classmethod

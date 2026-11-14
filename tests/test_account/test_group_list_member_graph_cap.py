@@ -168,6 +168,18 @@ def test_hidden_field_filters_sorts_and_aggregates_never_reach_plain_rows(opts):
     resp = _list(opts, _mode="count", parent=opts.parent_id)
     assert resp.status_code == 200 and resp.response.get("count") == 0, \
         f"a parent filter must not count plain-member rows, got {resp.response!r}"
+    for key, value in (("parent_id", None), ("parent_id__in", None), ("parent__id", None), ("parent_id__isnull", "false")):
+        rows = _rows(_list(opts, **{key: value or opts.parent_id}), key)
+        assert not rows, f"?{key}= must not match plain-member rows, got {sorted(rows)}"
+    resp = _list(opts, _mode="distinct", _field="parent__id")
+    assert str(opts.parent_id) not in json.dumps(resp.response.get("data", [])), \
+        f"distinct on parent__id must not show a plain-member group's parent, got {resp.response!r}"
+    parent_stats = {"hit": {"parent_id": opts.parent_id}, "hit2": {"parent": opts.parent_id}}
+    resp = _list(opts, _mode="count", _stats=json.dumps(parent_stats))
+    assert resp.status_code == 200, f"parent _stats: expected 200, got {resp.status_code}: {resp.response!r}"
+    for name in parent_stats:
+        assert resp.response.get("stats", {}).get(name) in (0, None), \
+            f"a parent _stats bundle ({name}) must not count plain-member rows, got {resp.response!r}"
 
     stats = {"hit": {"metadata__redemption_policy__min_trust_level": SECRET}}
     resp = _list(opts, _mode="count", _stats=json.dumps(stats))
@@ -186,6 +198,9 @@ def test_mixed_caller_parent_query_reaches_only_full_view_rows(opts):
     rows = _rows(_list(opts, parent=opts.parent_id), "mixed parent filter")
     assert set(rows) == {opts.a_id}, \
         f"a parent filter must match A (manage_group) and never B (plain), got {sorted(rows)}"
+    rows = _rows(_list(opts, parent_id=opts.parent_id), "mixed parent_id filter")
+    assert set(rows) == {opts.a_id}, \
+        f"a parent_id filter must match A (manage_group) and never B (plain), got {sorted(rows)}"
     rows = _rows(_list(opts, sort="parent"), "mixed parent sort")
     assert set(rows) == {opts.a_id}, \
         f"sort=parent must order A (manage_group) and never B (plain), got {sorted(rows)}"
