@@ -48,7 +48,7 @@ def setup_group_list_member_graph_cap(opts):
 
     parent = Group.objects.create(name=f"{PREFIX}parent", kind="organization")
     group_a = Group.objects.create(
-        name=f"{PREFIX}a", kind="organization",
+        name=f"{PREFIX}a", kind="organization", parent=parent,
         metadata={"redemption_policy": {"min_trust_level": SECRET}, "timezone": TIMEZONE})
     group_b = Group.objects.create(
         name=f"{PREFIX}b", kind="organization", parent=parent, auth_domain=AUTH_DOMAIN,
@@ -161,6 +161,14 @@ def test_hidden_field_filters_sorts_and_aggregates_never_reach_plain_rows(opts):
     rows = _rows(_list(opts, sort="metadata"), "sort")
     assert not rows, f"sort=metadata must not order plain-member rows, got {sorted(rows)}"
 
+    rows = _rows(_list(opts, parent=opts.parent_id), "parent filter")
+    assert not rows, f"a parent filter must not match plain-member rows, got {sorted(rows)}"
+    rows = _rows(_list(opts, sort="parent"), "parent sort")
+    assert not rows, f"sort=parent must not order plain-member rows, got {sorted(rows)}"
+    resp = _list(opts, _mode="count", parent=opts.parent_id)
+    assert resp.status_code == 200 and resp.response.get("count") == 0, \
+        f"a parent filter must not count plain-member rows, got {resp.response!r}"
+
     stats = {"hit": {"metadata__redemption_policy__min_trust_level": SECRET}}
     resp = _list(opts, _mode="count", _stats=json.dumps(stats))
     assert resp.status_code == 200, f"count: expected 200, got {resp.status_code}: {resp.response!r}"
@@ -170,6 +178,17 @@ def test_hidden_field_filters_sorts_and_aggregates_never_reach_plain_rows(opts):
     resp = _list(opts, _mode="distinct", _field="auth_domain")
     assert AUTH_DOMAIN not in json.dumps(resp.response), \
         f"distinct on auth_domain must not show a plain-member group's domain, got {resp.response!r}"
+
+
+@th.django_unit_test()
+def test_mixed_caller_parent_query_reaches_only_full_view_rows(opts):
+    _login(opts, "mixed")
+    rows = _rows(_list(opts, parent=opts.parent_id), "mixed parent filter")
+    assert set(rows) == {opts.a_id}, \
+        f"a parent filter must match A (manage_group) and never B (plain), got {sorted(rows)}"
+    rows = _rows(_list(opts, sort="parent"), "mixed parent sort")
+    assert set(rows) == {opts.a_id}, \
+        f"sort=parent must order A (manage_group) and never B (plain), got {sorted(rows)}"
 
 
 @th.django_unit_test()

@@ -1388,7 +1388,7 @@ class Group(MojoSecrets, MojoModel):
 
     # Fields `basic` hides that a list query could filter, sort or aggregate
     # on, and the export columns that carry what `basic` hides (#11001).
-    LIST_HIDDEN_QUERY_FIELDS = ("metadata", "auth_domain")
+    LIST_HIDDEN_QUERY_FIELDS = ("metadata", "auth_domain", "parent")
     LIST_HIDDEN_EXPORT_COLUMNS = ("metadata.timezone", "parent.id", "parent.name")
 
     @classmethod

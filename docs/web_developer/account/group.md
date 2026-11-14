@@ -130,6 +130,8 @@ GET /api/group?kind=organization&sort=name
   on `metadata` (including `metadata__…` paths) or `auth_domain` only ever
   matches the groups they read in full; plain-member groups are left out of
   the result, the counts and the aggregates. It is not an error.
+- The same holds for `parent`: `?parent=<id>`, `sort=parent` or a `parent__…`
+  path only ever matches the groups they read in full.
 - Their CSV export (`download_format=csv`) leaves out the `Parent Id`,
   `Parent Name` and `timezone` columns, for every row.
 - An API key lists its own groups and a group token lists none, as before.

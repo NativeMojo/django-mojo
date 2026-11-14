@@ -337,7 +337,7 @@ alive = group.is_effectively_active()
 > `on_rest_handle_list` does the same per row through `rest_list_row_graph`,
 > using `Group.full_view_group_ids(user, ids)` (the same rule, batched: one
 > query for the member rows and one per ancestor level). In that member branch
-> only, a list query on `metadata*` or `auth_domain` (filter, `sort`, `_field`,
+> only, a list query on `metadata*`, `auth_domain` or `parent` (filter, `sort`, `_field`,
 > `_agg_field`, `_stats`) is narrowed to the full-view groups, and the CSV
 > export drops `LIST_HIDDEN_EXPORT_COLUMNS` (`metadata.timezone`, `parent.id`,
 > `parent.name`) for every row. Admins with a global grant, ApiKeys and group
