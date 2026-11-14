@@ -8,6 +8,7 @@ from mojo.helpers.settings import settings
 from mojo import errors as merrors
 from objict import objict
 import copy
+import json
 import uuid
 
 
@@ -813,12 +814,59 @@ class Group(MojoSecrets, MojoModel):
         ms = self.get_member_for_user(request.user, check_parents=True)
         if ms is None:
             return False
-        if ms.has_permission(["view_group", "manage_group"]):
+        if self.member_has_full_view(request.user, member=ms):
             return True
         # we still allow the user to view the group if they are a member
         # but we limit the fields they can see
         request.DATA.set("graph", "basic")
         return True
+
+    @classmethod
+    def member_full_view_perms(cls):
+        """Member grants that read a group in full rather than at `basic`."""
+        return ["view_group", "manage_group"] + list(cls.get_rest_meta_prop("VIEW_PERMS", []))
+
+    def member_has_full_view(self, user, member=None):
+        """True when the user's nearest member row (this group, else the
+        nearest ancestor) holds a full-view grant. The one rule detail and list
+        reads share (#11001); anyone else who may read the group sees `basic`.
+        """
+        if member is None:
+            member = self.get_member_for_user(user, check_parents=True)
+        return member is not None and member.has_permission(self.member_full_view_perms())
+
+    @classmethod
+    def full_view_group_ids(cls, user, group_ids, max_depth=8):
+        """The ids among `group_ids` that `user` reads in full: the
+        member_has_full_view rule for many groups at once. One query for the
+        user's member rows, then one per ancestor level, rather than one
+        ancestor walk per group. `group_ids` are effectively active groups
+        (the list's own queryset), so no per-level activeness check is needed.
+        """
+        if not is_signed_in_user(user):
+            return set()
+        perms = cls.member_full_view_perms()
+        nearest = {}
+        for member in user.members.filter(is_active=True).order_by("id"):
+            nearest[member.group_id] = member  # last row wins, as .last() does
+        full = set()
+        pending = {gid: gid for gid in group_ids}
+        # self plus max_depth ancestors, the levels get_member_for_user visits
+        for _ in range(max_depth + 1):
+            climb = {}
+            for origin, node in pending.items():
+                member = nearest.get(node)
+                if member is None:
+                    climb[origin] = node
+                elif member.has_permission(perms):
+                    full.add(origin)
+            if not climb:
+                break
+            parents = dict(cls.objects.filter(id__in=set(climb.values()))
+                           .values_list("id", "parent_id"))
+            pending = {origin: parents[node] for origin, node in climb.items()
+                       if parents.get(node)}
+        return full
 
     def check_edit_permission(self, perms, request):
         # WRITE gate for POST/PUT/DELETE on /api/group/<pk> and its
@@ -1338,6 +1386,54 @@ class Group(MojoSecrets, MojoModel):
             return None
         return parent
 
+    # Fields `basic` hides that a list query could filter, sort or aggregate
+    # on, and the export columns that carry what `basic` hides (#11001).
+    LIST_HIDDEN_QUERY_FIELDS = ("metadata", "auth_domain")
+    LIST_HIDDEN_EXPORT_COLUMNS = ("metadata.timezone", "parent.id", "parent.name")
+
+    @classmethod
+    def _list_query_reads_hidden_fields(cls, request):
+        """True when the list request filters, sorts or aggregates on a field
+        in LIST_HIDDEN_QUERY_FIELDS: a query key, `sort`, `_field`,
+        `_agg_field` or a `_stats` bundle key."""
+        names = list(request.GET.keys()) + list(request.DATA.keys())
+        for key in ("sort", "_field", "_agg_field"):
+            value = request.DATA.get(key)
+            if value:
+                names.append(str(value))
+        stats = request.DATA.get("_stats")
+        if isinstance(stats, str):
+            try:
+                stats = json.loads(stats)
+            except ValueError:
+                stats = None
+        if isinstance(stats, dict):
+            for bundle in stats.values():
+                if isinstance(bundle, dict):
+                    names.extend(bundle.keys())
+        for name in names:
+            root = str(name).lstrip("-").split("__")[0].split(".")[0]
+            if root in cls.LIST_HIDDEN_QUERY_FIELDS:
+                return True
+        return False
+
+    @classmethod
+    def rest_list_row_graph(cls, request, obj, graph):
+        full_ids = getattr(request, "_group_list_full_view_ids", None)
+        if full_ids is None or obj.pk in full_ids:
+            return graph
+        return "basic"
+
+    @classmethod
+    def rest_list_export_fields(cls, request, fields):
+        # Accepted deviation (#11001): a user's export drops these columns
+        # for every row, even ones they read in full.
+        if getattr(request, "_group_list_full_view_ids", None) is None:
+            return fields
+        hidden = cls.LIST_HIDDEN_EXPORT_COLUMNS
+        return [field for field in fields
+                if (field[0] if isinstance(field, (list, tuple)) else field) not in hidden]
+
     @classmethod
     def on_rest_handle_list(cls, request):
         # A group token gets NO Group records at all — list and detail stay
@@ -1378,6 +1474,16 @@ class Group(MojoSecrets, MojoModel):
 
             # Combine both querysets
             combined_ids = set(groups_with_perms.values_list('id', flat=True)) | set(all_user_groups.values_list('id', flat=True))
+
+            if combined_ids and api_key is None:
+                # A user reads each group as opening it would (#11001): rows
+                # without a full-view grant are capped at `basic`
+                # (rest_list_row_graph), and a query on a field `basic` hides
+                # never reaches them.
+                full_ids = cls.full_view_group_ids(request.user, combined_ids)
+                request._group_list_full_view_ids = full_ids
+                if cls._list_query_reads_hidden_fields(request):
+                    combined_ids = combined_ids & full_ids
 
             if combined_ids:
                 return cls.on_rest_list(request, cls.objects.filter(id__in=combined_ids))
