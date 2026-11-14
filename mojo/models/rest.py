@@ -1774,6 +1774,26 @@ class MojoModel:
         return cls.on_rest_list_response(request, queryset)
 
     @classmethod
+    def rest_list_row_graph(cls, request, obj, graph):
+        """The graph one list row is served in; ``graph`` is the request's.
+
+        Override to narrow single rows below the requested graph, the way a
+        detail read can (#11001: Group caps a plain member's rows at
+        ``basic``). Only a model that overrides this hook is serialized row by
+        row; the envelope's ``graph`` stays the requested name.
+        """
+        return graph
+
+    @classmethod
+    def rest_list_export_fields(cls, request, fields):
+        """The columns a non-JSON list export (CSV, …) writes.
+
+        Override to drop columns the caller may not read; the default keeps
+        ``fields`` unchanged.
+        """
+        return fields
+
+    @classmethod
     def on_rest_list_response(cls, request, queryset):
         # Implement pagination
         page_size = request.DATA.get_typed(["size", "limit"], 10, int)
@@ -1806,6 +1826,8 @@ class MojoModel:
             if formats_localize and format in formats_localize:
                 localize = formats_localize[format]
 
+            fields = cls.rest_list_export_fields(request, fields)
+
             # Get timezone from request for localization
             timezone = request.DATA.get("timezone")
 
@@ -1817,7 +1839,13 @@ class MojoModel:
                 localize=localize,
                 timezone=timezone
             )
-        serializer = manager.get_serializer(paged_queryset, graph=graph, many=True)
+        # Only a model that overrides rest_list_row_graph is serialized row by
+        # row, so every other model (and any custom serializer class) gets the
+        # exact call it got before.
+        extra = {}
+        if cls.rest_list_row_graph.__func__ is not MojoModel.rest_list_row_graph.__func__:
+            extra["row_graph"] = lambda obj: cls.rest_list_row_graph(request, obj, graph)
+        serializer = manager.get_serializer(paged_queryset, graph=graph, many=True, **extra)
         resp = serializer.to_response(request, count=count, start=page_start, size=page_size)
         resp.log_context = {
             "endpoint": "list",

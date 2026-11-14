@@ -62,10 +62,13 @@ disappears from your lists until the group is reactivated.
 
 `member_count` is the count of active direct members of the group (does not include descendant groups). Available on the `default` graph only — `basic` stays minimal. List endpoints use `default` by default, so the field appears without needing `?graph=`.
 
-> **Reads are downgraded for plain members.** A member without
-> `view_group`/`manage_group` still gets a `200` on `GET /api/group/<id>`, but
-> the response is the minimal `basic` graph (no `metadata`, `auth_domain`, or
-> `parent`). Grant `view_group` (or higher) to see the full `default` graph.
+> **Reads are downgraded for plain members.** A member whose member row (in
+> this group, else the nearest parent group they belong to) holds none of
+> `view_group`, `manage_group`, `view_groups`, `manage_groups` or `groups`
+> still gets a `200` on `GET /api/group/<id>`, but the response is the minimal
+> `basic` graph (no `metadata`, `auth_domain`, or `parent`), whatever `graph`
+> was asked for. Grant `view_group` (or higher) to see the full `default`
+> graph. The group list applies the same rule to each row (see List Groups).
 
 ## Update Group
 
@@ -111,11 +114,28 @@ grant or remove them.
 
 ## List Groups
 
-Requires `view_groups` or `manage_groups` permission.
-
 ```
 GET /api/group?kind=organization&sort=name
 ```
+
+- A global `view_groups`, `manage_groups`, `manage_group` or `groups` grant
+  lists every group, in the requested graph.
+- Any other signed-in user lists the groups they belong to and the groups
+  their member grants cover. Each row reads exactly as opening that group
+  would: a group where they are a plain member (see Get Group) comes back in
+  the `basic` graph, with no `metadata`, `auth_domain` or `parent`, whichever
+  `graph` was asked for. The other rows use the requested graph, so one page
+  can mix both. The envelope's `graph` is still the requested name.
+- For such a user, a filter, `sort`, `_field`, `_agg_field` or `_stats` bundle
+  on `metadata` (including `metadata__…` paths) or `auth_domain` only ever
+  matches the groups they read in full; plain-member groups are left out of
+  the result, the counts and the aggregates. It is not an error.
+- The same holds for `parent`: `?parent=<id>`, `?parent_id=<id>`, `sort=parent`
+  or a `parent__…` / `parent_id__…` path only ever matches the groups they read
+  in full.
+- Their CSV export (`download_format=csv`) leaves out the `Parent Id`,
+  `Parent Name` and `timezone` columns, for every row.
+- An API key lists its own groups and a group token lists none, as before.
 
 ## Available Graphs
 

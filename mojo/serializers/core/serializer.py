@@ -79,7 +79,7 @@ class OptimizedGraphSerializer:
     - Memory-efficient QuerySet handling
     """
 
-    def __init__(self, instance, graph="default", many=False, request=None, bypass_cache=False, simple_mode=False, nested=False, **kwargs):
+    def __init__(self, instance, graph="default", many=False, request=None, bypass_cache=False, simple_mode=False, nested=False, row_graph=None, **kwargs):
         """
         Initialize optimized serializer.
 
@@ -91,10 +91,13 @@ class OptimizedGraphSerializer:
         :param simple_mode: Behave exactly like simple serializer (no cache overhead at all)
         :param nested: This serializer renders a related object inside another
             row; see _nested_view
+        :param row_graph: Optional callable(obj) returning the graph one row of
+            a many-serialization is rendered in; see _serialize_row
         :param kwargs: Additional options (cache, etc.)
         """
         self.graph = graph
         self.nested = nested
+        self.row_graph = row_graph
         self.request = request
         self.instance = instance
         self.many = many
@@ -133,9 +136,25 @@ class OptimizedGraphSerializer:
         Main serialization method with caching and optimization.
         """
         if self.many:
+            if self.row_graph is not None:
+                return [self._serialize_row(obj) for obj in self.instance]
             return [self._serialize_instance_cached(obj) for obj in self.instance]
         return self._serialize_instance_cached(self.instance)
 
+    def _serialize_row(self, obj):
+        """One list row in the graph `row_graph` picks for it (#11001).
+
+        A row whose graph matches the list's is serialized as usual. Any other
+        row gets its own serializer in that graph; the cache key carries the
+        graph, so the two renderings never share a cache entry.
+        """
+        graph = self.row_graph(obj)
+        if graph == self.graph:
+            return self._serialize_instance_cached(obj)
+        row = OptimizedGraphSerializer(
+            obj, graph=graph, bypass_cache=self.bypass_cache,
+            simple_mode=self.simple_mode, nested=self.nested)
+        return row.serialize()
 
 
     def _serialize_instance_cached(self, obj):

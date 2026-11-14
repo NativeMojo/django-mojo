@@ -328,7 +328,22 @@ alive = group.is_effectively_active()
 > groups; system-perm admins pass the primary permission check and never reach
 > these fallbacks).
 
-`member_count` is exposed via REST as an `extra` on the `default` graph (not `basic` — that stays minimal). List endpoints use `default` by, well, default, so the field appears in list payloads without an explicit `?graph=` parameter. Backed by `members.filter(is_active=True).count()` per record — at very large scale, consider an annotated queryset instead.
+> **Full view vs `basic`, one rule for detail and list (#11001).**
+> `group.member_has_full_view(user)` is True when the user's nearest member row
+> (`get_member_for_user(user, check_parents=True)`) holds any of
+> `member_full_view_perms()`: `view_group`, `manage_group` plus `VIEW_PERMS`
+> (`view_groups`, `manage_groups`, `manage_group`, `groups`).
+> `check_view_permission` serves `basic` to any other member, and
+> `on_rest_handle_list` does the same per row through `rest_list_row_graph`,
+> using `Group.full_view_group_ids(user, ids)` (the same rule, batched: one
+> query for the member rows and one per ancestor level). In that member branch
+> only, a list query on `metadata*`, `auth_domain` or `parent` (`parent_id` too) (filter, `sort`, `_field`,
+> `_agg_field`, `_stats`) is narrowed to the full-view groups, and the CSV
+> export drops `LIST_HIDDEN_EXPORT_COLUMNS` (`metadata.timezone`, `parent.id`,
+> `parent.name`) for every row. Admins with a global grant, ApiKeys and group
+> tokens never reach that branch and are unchanged.
+
+`member_count` is exposed via REST as an `extra` on the `default` graph (not `basic` — that stays minimal). List endpoints use `default` by, well, default, so the field appears in list payloads without an explicit `?graph=` parameter — for rows the caller reads in full (see above). Backed by `members.filter(is_active=True).count()` per record — at very large scale, consider an annotated queryset instead.
 
 > **Non-`User` identities (e.g. API keys).** `get_member_for_user` returns `None`
 > for any identity that is not a request `User`. An `ApiKey` authenticating a

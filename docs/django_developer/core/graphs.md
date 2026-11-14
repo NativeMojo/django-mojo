@@ -217,6 +217,30 @@ The rules:
   parent entry would carry its nested user from one viewer to another. The
   per-request cache is unchanged.
 
+### `rest_list_row_graph`: Narrowing One List Row
+
+A list serializes every row in the requested graph. A model whose detail read
+can narrow one caller's view of one row (Group caps a plain member at `basic`
+in `check_view_permission`) keeps its list in line by overriding two
+classmethods on `MojoModel`:
+
+- `rest_list_row_graph(request, obj, graph)` returns the graph `obj` is served
+  in; the default returns `graph`, the one the request asked for (already
+  resolved and permission-checked). Only a model that overrides it is
+  serialized row by row, with the serializer's `row_graph` option; every other
+  model gets the exact call it got before. The cache key carries the graph, so
+  the two renderings never share an entry, and the envelope's `graph` stays the
+  requested name. Work out per-request state once (Group stores the caller's
+  full-view group ids on the request in `on_rest_handle_list`) rather than
+  querying per row.
+- `rest_list_export_fields(request, fields)` returns the `FORMATS` columns a
+  non-JSON export writes; the default returns `fields`. An export is one column
+  set for the whole file, so a model drops a hidden column for every row.
+
+A narrowed row's hidden fields can still be probed through filters, `sort` and
+`_mode` aggregates; the model narrows the queryset itself for such a query
+(Group: `metadata`, `auth_domain` and `parent`/`parent_id` queries reach only full-view rows, #11001).
+
 ## The `ai` Graph: What the Assistant Reads
 
 `ai` is a reserved graph name. The admin assistant's generic model paths —
