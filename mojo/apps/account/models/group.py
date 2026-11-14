@@ -1362,7 +1362,7 @@ class Group(MojoSecrets, MojoModel):
             return None
         data = request.DATA
         parent_id = None
-        for name in ("parent"):
+        for name in ("parent", "parent_id"):
             if name not in data:
                 continue
             value = data.get(name)
