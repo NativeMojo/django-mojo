@@ -171,9 +171,12 @@ def test_hidden_field_filters_sorts_and_aggregates_never_reach_plain_rows(opts):
     for key, value in (("parent_id", None), ("parent_id__in", None), ("parent__id", None), ("parent_id__isnull", "false")):
         rows = _rows(_list(opts, **{key: value or opts.parent_id}), key)
         assert not rows, f"?{key}= must not match plain-member rows, got {sorted(rows)}"
-    resp = _list(opts, _mode="distinct", _field="parent__id")
-    assert str(opts.parent_id) not in json.dumps(resp.response.get("data", [])), \
-        f"distinct on parent__id must not show a plain-member group's parent, got {resp.response!r}"
+    rows = _rows(_list(opts, sort="parent_id"), "parent_id sort")
+    assert not rows, f"sort=parent_id must not order plain-member rows, got {sorted(rows)}"
+    for field in ("parent__id", "parent_id"):
+        resp = _list(opts, _mode="distinct", _field=field)
+        assert str(opts.parent_id) not in json.dumps(resp.response.get("data", [])), \
+            f"distinct on {field} must not show a plain-member group's parent, got {resp.response!r}"
     parent_stats = {"hit": {"parent_id": opts.parent_id}, "hit2": {"parent": opts.parent_id}}
     resp = _list(opts, _mode="count", _stats=json.dumps(parent_stats))
     assert resp.status_code == 200, f"parent _stats: expected 200, got {resp.status_code}: {resp.response!r}"
@@ -201,9 +204,10 @@ def test_mixed_caller_parent_query_reaches_only_full_view_rows(opts):
     rows = _rows(_list(opts, parent_id=opts.parent_id), "mixed parent_id filter")
     assert set(rows) == {opts.a_id}, \
         f"a parent_id filter must match A (manage_group) and never B (plain), got {sorted(rows)}"
-    rows = _rows(_list(opts, sort="parent"), "mixed parent sort")
-    assert set(rows) == {opts.a_id}, \
-        f"sort=parent must order A (manage_group) and never B (plain), got {sorted(rows)}"
+    for sort in ("parent", "parent_id"):
+        rows = _rows(_list(opts, sort=sort), f"mixed {sort} sort")
+        assert set(rows) == {opts.a_id}, \
+            f"sort={sort} must order A (manage_group) and never B (plain), got {sorted(rows)}"
 
 
 @th.django_unit_test()

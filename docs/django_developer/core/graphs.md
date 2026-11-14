@@ -239,7 +239,7 @@ classmethods on `MojoModel`:
 
 A narrowed row's hidden fields can still be probed through filters, `sort` and
 `_mode` aggregates; the model narrows the queryset itself for such a query
-(Group: `metadata`, `auth_domain` and `parent` queries reach only full-view rows, #11001).
+(Group: `metadata`, `auth_domain` and `parent`/`parent_id` queries reach only full-view rows, #11001).
 
 ## The `ai` Graph: What the Assistant Reads
 
