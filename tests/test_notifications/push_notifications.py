@@ -953,6 +953,38 @@ def test_fcm_message_with_collapse_id_silent(opts):
 
 
 @th.django_unit_test()
+def test_fcm_collapse_id_multibyte_cut(opts):
+    """apns-collapse-id is cut to 64 UTF-8 bytes without splitting a character."""
+    client, http = _fake_fcm_client()
+    collapse_id = "a" * 63 + "\u00e9" + "b"
+    client.send(token="tok", title="Call", body="Ana", collapse_id=collapse_id)
+    header = http.messages[-1]["apns"]["headers"]["apns-collapse-id"]
+    assert header == "a" * 63, f"a 2-byte char crossing byte 64 must be dropped whole, got {header!r}"
+    assert len(header.encode("utf-8")) <= 64, f"header must fit 64 bytes, got {len(header.encode('utf-8'))}"
+    assert http.messages[-1]["android"]["collapse_key"] == collapse_id, "Android keeps the full id"
+
+
+@th.django_unit_test()
+def test_user_push_notification_forwards_collapse_id(opts):
+    """user.push_notification(collapse_id=...) reaches each device's delivery."""
+    from mojo.apps.account.models import User, RegisteredDevice
+
+    user = User.objects.get(username=TEST_USER)
+    RegisteredDevice.objects.filter(user=user, device_id="collapse_user_device").delete()
+    device = RegisteredDevice.objects.create(
+        user=user, device_token="collapse_user_token", device_id="collapse_user_device",
+        platform="ios", device_name="Collapse User Test")
+    try:
+        deliveries = user.push_notification(title="Call", body="Ringing", collapse_id="call-90")
+        mine = [d for d in deliveries if d.device_id == device.id]
+        assert mine, f"Expected a delivery for the test device, got {len(deliveries)} deliveries"
+        assert mine[0].platform_data.get("collapse_id") == "call-90", \
+            f"user.push_notification must forward collapse_id, got {mine[0].platform_data}"
+    finally:
+        device.delete()
+
+
+@th.django_unit_test()
 def test_device_send_records_collapse_id(opts):
     """device.send(collapse_id=...) passes it to FCM and records it on the delivery, real and test mode."""
     from mojo.apps.account.models import User, RegisteredDevice
