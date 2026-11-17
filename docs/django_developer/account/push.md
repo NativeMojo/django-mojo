@@ -97,7 +97,7 @@ delivery = device.send(
 # Returns NotificationDelivery or None (if category disabled or no config)
 ```
 
-**Collapse id (one notification per thing):** pass `collapse_id` to `device.send()` or `user.push_notification()` so a later push with the same id replaces the earlier one on the phone instead of stacking. Use it for anything that should show at most once and be updated or cleared later, such as an incoming call:
+**Collapse id (one notification per thing):** pass `collapse_id` to `device.send()` or `user.push_notification()` so a later push with the same id replaces the earlier one on the phone instead of stacking. Use it for anything that should show at most once and be updated later, such as an incoming call:
 
 ```python
 user.push_notification(title="Incoming call", body="Ana is calling",
@@ -105,7 +105,7 @@ user.push_notification(title="Incoming call", body="Ana is calling",
 # later, replace it (e.g. "Missed call") by sending again with the same collapse_id
 ```
 
-On Android it sets `android.collapse_key`, and for a visible notification also `android.notification.tag`, so the new notification replaces the shown one. On iPhone it sets the `apns-collapse-id` header (APNs allows 64 bytes; longer ids are truncated). Silent (data-only) pushes keep `apns-priority: 5`. The id is recorded in `delivery.platform_data["collapse_id"]`, in real and test mode. Omit it and nothing changes. Data values are sent as strings, as FCM requires (`True` arrives as `"True"`).
+On Android it sets `android.collapse_key`, and for a visible notification also `android.notification.tag`, so the new notification replaces the shown one. On iPhone it sets the `apns-collapse-id` header (APNs allows 64 bytes; longer ids are cut to 64 UTF-8 bytes, never splitting a character). Silent (data-only) pushes keep `apns-priority: 5`. The id is recorded in `delivery.platform_data["collapse_id"]`, in real and test mode. Omit it and nothing changes. The framework only replaces: no push removes a shown notification by itself. To clear one (for example when a call ends), send a silent push with data the app understands and have the app dismiss the notification with that tag or collapse id. Data values are sent as strings, as FCM requires (`True` arrives as `"True"`).
 
 **Category-based preference check:** Before sending, `send()` checks `push_preferences.get(category, True)`. If the user has opted out of a category, `send()` returns `None` without creating a delivery record.
 

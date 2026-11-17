@@ -1778,8 +1778,10 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             kind: Optional notification kind for preference check.
                   When provided, the user's notification preferences are
                   checked before sending. Omit for system/transactional pushes.
-            collapse_id: Optional id; pushes with the same id replace each other
-                on each device, so a later one updates or clears the earlier.
+            collapse_id: Optional id; a later push with the same id replaces the
+                earlier one on each device. Removing a shown notification
+                (e.g. when a call ends) is up to the app: send a silent push
+                and have the app dismiss the notification with that id.
 
         Returns:
             List of NotificationDelivery objects
