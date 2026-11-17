@@ -1660,7 +1660,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
 
         # ── 3. Wipe secrets (MojoSecrets encrypted JSON field) ────────────────
         try:
-            self.mojo_secrets = {}
+            self.clear_secrets()
             self.save(update_fields=["mojo_secrets"])
         except Exception:
             pass

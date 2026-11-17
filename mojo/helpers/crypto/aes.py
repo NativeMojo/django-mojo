@@ -14,7 +14,8 @@ import json
 from functools import lru_cache
 from base64 import b64encode, b64decode
 from Crypto.Cipher import AES
-from Crypto.Protocol.KDF import PBKDF2
+from Crypto.Protocol.KDF import PBKDF2, HKDF
+from Crypto.Hash import SHA256
 from Crypto.Random import get_random_bytes
 from Crypto.Util.py3compat import tobytes
 from objict import objict
@@ -70,6 +71,68 @@ def decrypt(enc_data_b64, password, ignore_errors=True):
         return objict.from_json(decrypted_str)
     except Exception:
         return decrypted_str
+
+
+V2_PREFIX = "v2:"
+V2_HKDF_INFO = b"mojo-secrets-v2"
+
+
+def is_v2(blob):
+    """True for a server-keyed v2 blob. ':' is not base64, so no legacy blob matches."""
+    return isinstance(blob, str) and blob.startswith(V2_PREFIX)
+
+
+def _derive_v2_key(key, salt):
+    return HKDF(tobytes(key), 32, salt, SHA256, context=V2_HKDF_INFO)
+
+
+def encrypt_v2(data, key, context):
+    """Encrypt with a server-held key; context is bound as GCM associated data.
+
+    Returns "v2:" + b64(salt16 | nonce12 | tag16 | ciphertext). Reads no settings.
+    """
+    if isinstance(data, dict):
+        data = json.dumps(data)
+    if not isinstance(data, str):
+        raise mojo.errors.ValueException("Data must be a string or dictionary")
+    if not key:
+        raise ValueError("encrypt_v2 requires a key")
+    salt = get_random_bytes(SALT_LENGTH)
+    cipher = AES.new(_derive_v2_key(key, salt), AES.MODE_GCM, nonce=get_random_bytes(NONCE_LENGTH))
+    cipher.update(tobytes(context))
+    ciphertext, tag = cipher.encrypt_and_digest(data.encode('utf-8'))
+    return V2_PREFIX + b64encode(salt + cipher.nonce + tag + ciphertext).decode('utf-8')
+
+
+def decrypt_v2(blob, keys, context):
+    """Decrypt a v2 blob trying each key in order; returns (data, key_index).
+
+    Raises ValueError when the blob is not v2 or no key opens it for this context.
+    """
+    if not is_v2(blob):
+        raise ValueError("not a v2 secrets blob")
+    raw = b64decode(blob[len(V2_PREFIX):])
+    if len(raw) < SALT_LENGTH + NONCE_LENGTH + TAG_LENGTH:
+        raise ValueError("v2 secrets blob is truncated")
+    salt = raw[:SALT_LENGTH]
+    nonce = raw[SALT_LENGTH:SALT_LENGTH + NONCE_LENGTH]
+    tag = raw[SALT_LENGTH + NONCE_LENGTH:SALT_LENGTH + NONCE_LENGTH + TAG_LENGTH]
+    ciphertext = raw[SALT_LENGTH + NONCE_LENGTH + TAG_LENGTH:]
+    for index, key in enumerate(keys or []):
+        if not key:
+            continue
+        cipher = AES.new(_derive_v2_key(key, salt), AES.MODE_GCM, nonce=nonce)
+        cipher.update(tobytes(context))
+        try:
+            decrypted = cipher.decrypt_and_verify(ciphertext, tag)
+        except ValueError:
+            continue
+        decrypted_str = decrypted.decode('utf-8')
+        try:
+            return objict.from_json(decrypted_str), index
+        except Exception:
+            return decrypted_str, index
+    raise ValueError("no secrets key can decrypt this v2 blob")
 
 
 def _derive_key_uncached(password_bytes, salt_bytes, key_length):

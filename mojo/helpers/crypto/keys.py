@@ -24,6 +24,19 @@ def secret_keys():
         settings.get_static("SECRET_KEY_FALLBACKS", []))
 
 
+def secrets_keys():
+    """MOJO_SECRETS_KEY first, then each MOJO_SECRETS_KEY_FALLBACKS entry.
+
+    Opt-in key for MojoSecrets v2 blobs. Never falls back to SECRET_KEY: a
+    routine SECRET_KEY rotation must not make stored credentials unreadable.
+    File-based only (get_static), like secret_keys(). An empty primary means
+    the site has not opted in; fallbacks still decrypt existing v2 rows.
+    """
+    return build_key_list(
+        settings.get_static("MOJO_SECRETS_KEY", ""),
+        settings.get_static("MOJO_SECRETS_KEY_FALLBACKS", []))
+
+
 def build_key_list(primary, fallbacks):
     """Normalize (primary, fallbacks) into an ordered candidate list.
 
