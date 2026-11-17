@@ -150,6 +150,13 @@ runtime-injectable key-acceptance list.
   breaks, but cross-rotation equality comparisons are void.
 - **Per-Group/per-User secrets** (webhook secrets, user auth keys) — these are
   DB values independent of `SECRET_KEY`; a rotation does not touch them.
+- **`MojoSecrets`** — never derived from `SECRET_KEY`. Its optional server key
+  is `MOJO_SECRETS_KEY` with its own `MOJO_SECRETS_KEY_FALLBACKS`
+  (`keys.secrets_keys()`), on purpose: a `SECRET_KEY` rotation must not make
+  stored credentials unreadable. The v2 primitives are
+  `aes.encrypt_v2(data, key, context)`, `aes.decrypt_v2(blob, keys, context)`
+  (returns `(data, key_index)`, raises `ValueError`) and `aes.is_v2(blob)`. See
+  [MojoModel → Server-held key](../core/mojo_model.md#server-held-key-mojo_secrets_key-opt-in).
 
 ## Asymmetric (Public/Private Key) Encryption
 

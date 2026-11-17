@@ -1275,6 +1275,16 @@ registered resource is enabled; until then every endpoint answers 404.
 
 ### SECRET
 
+- `MOJO_SECRETS_KEY` — opt-in server-held key for `MojoSecrets` (default
+  empty = today's row-derived encryption, unchanged). When set (32+
+  characters, same on every host, backed up apart from the database), new and
+  changed stored secrets are written as `v2:` blobs only this key can open.
+  Never derived from or falling back to `SECRET_KEY`. **File-only**
+  (`settings.get_static`). See
+  [MojoModel → Server-held key](../core/mojo_model.md#server-held-key-mojo_secrets_key-opt-in).
+- `MOJO_SECRETS_KEY_FALLBACKS` — older `MOJO_SECRETS_KEY` values still
+  accepted for reads (default `[]`), for rotation and rollback with
+  `manage.py rewrap_secrets`. **File-only**.
 - `SECRET_KEY` — the deployment signing/wrapping root. Beyond Django's own
   uses, mojo derives from it directly: bouncer token signing, bouncer pass
   cookies, and filevault's per-file key wrapping. **File-only** everywhere in

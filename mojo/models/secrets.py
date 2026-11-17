@@ -1,7 +1,13 @@
+from django.core.exceptions import ImproperlyConfigured
 from django.db import models
 from mojo.helpers import crypto, logit
+from mojo.helpers.crypto import aes
+from mojo.helpers.crypto.keys import secrets_keys
 from mojo.helpers.settings import settings
 from objict import objict, merge_dicts
+
+
+MIN_SECRETS_KEY_LENGTH = 32
 
 
 class SecretsUnavailableError(RuntimeError):
@@ -46,8 +52,37 @@ class MojoSecrets(models.Model):
             self._exposed_secrets = objict()
             return self._exposed_secrets
         if self._exposed_secrets is None:
-            self._exposed_secrets = crypto.decrypt(self.mojo_secrets, self._get_secrets_password(), False)
+            if aes.is_v2(self.mojo_secrets):
+                data, _ = aes.decrypt_v2(self.mojo_secrets, self._secrets_key_list(), self._secrets_context())
+                self._exposed_secrets = data
+            else:
+                self._exposed_secrets = crypto.decrypt(self.mojo_secrets, self._get_secrets_password(), False)
         return self._exposed_secrets
+
+    def _secrets_key_list(self):
+        # Seam: tests set this per instance; production reads MOJO_SECRETS_KEY(_FALLBACKS).
+        return secrets_keys()
+
+    def _secrets_context(self):
+        # Binds a v2 blob to this model and row, so a copied blob is refused.
+        return f"{self._meta.concrete_model._meta.label_lower}.{self.pk}.mojo_secrets"
+
+    def _secrets_write_key(self):
+        """The key new blobs are written with, or None for today's legacy write.
+
+        Setting MOJO_SECRETS_KEY is the opt-in. A model that overrides
+        _get_secrets_password keeps its own (legacy) scheme.
+        """
+        if type(self)._get_secrets_password is not MojoSecrets._get_secrets_password:
+            return None
+        keys = self._secrets_key_list()
+        primary = keys[0] if keys else ""
+        if not primary:
+            return None
+        if not isinstance(primary, str) or len(primary) < MIN_SECRETS_KEY_LENGTH:
+            raise ImproperlyConfigured(
+                f"MOJO_SECRETS_KEY must be at least {MIN_SECRETS_KEY_LENGTH} characters")
+        return primary
 
     def _get_secrets_password(self):
         # override this to create your own secrets password
@@ -59,7 +94,11 @@ class MojoSecrets(models.Model):
     def save_secrets(self):
         if self._secrets_changed:
             if self._exposed_secrets:
-                self.mojo_secrets = crypto.encrypt( self._exposed_secrets, self._get_secrets_password())
+                key = self._secrets_write_key()
+                if key:
+                    self.mojo_secrets = aes.encrypt_v2(self._exposed_secrets, key, self._secrets_context())
+                else:
+                    self.mojo_secrets = crypto.encrypt( self._exposed_secrets, self._get_secrets_password())
             else:
                 self.mojo_secrets = None
             self._secrets_changed = False
