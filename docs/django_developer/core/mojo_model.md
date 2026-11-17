@@ -1013,9 +1013,70 @@ secrets = integration.secrets
 
 Encryption is AES-based, keyed per-instance using the record's `created` timestamp and class name. Never create individual encrypted fields — always use the secrets system.
 
-Because the key is derived from the row's own non-secret columns, `MojoSecrets`
-protects against a leaked REST graph, **not** against someone holding the
-database. When the threat model includes the database itself, use `KSMSecrets`.
+By default the key is derived from the row's own non-secret columns, so
+`MojoSecrets` protects against a leaked REST graph, **not** against someone
+holding the database. A site can opt in to a server-held key (below), or use
+`KSMSecrets` for KMS-backed custody.
+
+### Server-held key (`MOJO_SECRETS_KEY`, opt-in)
+
+Setting `MOJO_SECRETS_KEY` is the whole opt-in. Without it every release
+behaves exactly as before: legacy writes, legacy reads, nothing re-encrypted.
+
+```python
+# settings / var/django.conf — file-based only, never a DB setting
+MOJO_SECRETS_KEY = "<at least 32 random characters, same on every host>"
+MOJO_SECRETS_KEY_FALLBACKS = []   # older keys, still accepted for reads
+```
+
+With the key set:
+
+- New or changed secrets are stored as `v2:` blobs: AES-256-GCM with a key
+  derived (HKDF-SHA256) from `MOJO_SECRETS_KEY`, bound to the model label and
+  pk. The row's own columns cannot decrypt them, and a blob copied to another
+  row or model is refused on read.
+- Existing (legacy) rows keep reading as they are and become `v2:` only when
+  their secrets are next changed, or when an operator runs `rewrap_secrets`.
+  Upgrading never re-encrypts anything.
+- A key shorter than 32 characters raises `ImproperlyConfigured` on write; it
+  never falls back silently to a legacy write.
+- It does **not** use or fall back to `SECRET_KEY`, so rotating `SECRET_KEY`
+  never touches stored secrets.
+- A model that overrides `_get_secrets_password()` keeps its own scheme and
+  stays legacy.
+
+**Back up the key separately from the database.** Losing it, or removing it
+while `v2:` rows exist, makes those secrets unreadable. The context includes
+the model label (`app_label.modelname`), so renaming a model or app also
+breaks reads of its `v2:` rows; rewrap to legacy first.
+
+**`rewrap_secrets`** (management command; dry run by default):
+
+```bash
+manage.py rewrap_secrets                       # per-model counts, writes nothing
+manage.py rewrap_secrets --apply               # legacy / fallback-key rows -> current key
+manage.py rewrap_secrets --to-legacy --apply   # v2 rows -> legacy (rollback)
+#   --model account.User (repeatable)   --pk 42   --batch-size 200
+```
+
+It prints a fingerprint of the current key (never the key) so you can check
+every host has the same one, and per model: `total`, `v2_primary`,
+`v2_fallback`, `legacy`, `empty_marker`, `rewrapped`. Each row is locked and
+swapped only if unchanged, without `save()`. It stops at the first row it
+cannot decrypt, naming the model and pk, without writing that row; a rerun
+resumes. `--apply` is refused with no key; `--to-legacy --apply` is refused
+while `MOJO_SECRETS_KEY` is set.
+
+**Turn on:** set the key on every host; optionally dry-run, then `--apply`.
+**Rotate:** set the new key, move the old one into
+`MOJO_SECRETS_KEY_FALLBACKS`, run `--apply`, drop the fallback once a dry run
+shows `v2_fallback=0`. **Roll back** (or before installing an older
+django-mojo, which cannot read `v2:`): move the key into the fallbacks (writes
+are legacy again, `v2:` rows still read), run `--to-legacy --apply`, remove
+the key once a dry run shows no `v2` rows.
+
+Re-encrypting does not protect database backups taken before the switch;
+only rotating the credentials stored in them does.
 
 ## KSMSecrets
 

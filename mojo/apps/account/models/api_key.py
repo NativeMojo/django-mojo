@@ -105,11 +105,13 @@ class ApiKey(MojoSecrets, MojoModel):
     changed is that the credential no longer rides along on requests that
     never asked for it, not who may ask.
 
-    Encryption caveat: MojoSecrets derives its key from
-    `{created}{pk}{ClassName}` — every input is a plaintext column on this
-    same row, with no server-side secret mixed in. It therefore protects
+    Encryption caveat: without MOJO_SECRETS_KEY, MojoSecrets derives its key
+    from `{created}{pk}{ClassName}` — every input is a plaintext column on
+    this same row, with no server-side secret mixed in. It then protects
     against exfiltration of the mojo_secrets column alone, NOT against a row
-    or full-table dump. Treat this table as holding live credentials.
+    or full-table dump. A site that sets MOJO_SECRETS_KEY (opt-in) gets
+    server-keyed v2 blobs for new and changed tokens; rewrap_secrets moves
+    existing rows. Treat this table as holding live credentials.
 
     Permissions are explicit (JSON dict, same shape as GroupMember.permissions).
     System-level permissions (sys.*) are always denied regardless of what is in
