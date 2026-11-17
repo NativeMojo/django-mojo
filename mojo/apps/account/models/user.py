@@ -1764,7 +1764,7 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
         )
 
     def push_notification(self, title=None, body=None, data=None,
-                          category="general", action_url=None, kind=None):
+                          category="general", action_url=None, kind=None, collapse_id=None):
         """
         Send push notification to all user's active devices.
         Simple - just loops through devices and calls device.send().
@@ -1778,6 +1778,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
             kind: Optional notification kind for preference check.
                   When provided, the user's notification preferences are
                   checked before sending. Omit for system/transactional pushes.
+            collapse_id: Optional id; pushes with the same id replace each other
+                on each device, so a later one updates or clears the earlier.
 
         Returns:
             List of NotificationDelivery objects
@@ -1796,7 +1798,8 @@ class User(MojoSecrets, MojoAuthMixin, AbstractBaseUser, MojoModel):
                 body=body,
                 data=data,
                 category=category,
-                action_url=action_url
+                action_url=action_url,
+                collapse_id=collapse_id
             )
             if delivery:
                 deliveries.append(delivery)

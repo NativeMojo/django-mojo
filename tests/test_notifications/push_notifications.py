@@ -872,6 +872,136 @@ def test_send_notification_missing_content_returns_400(opts):
     assert resp.status_code == 400, f"Expected 400 for empty notification content, got {resp.status_code}"
 
 
+class _FakeFCMResponse:
+    status_code = 200
+    text = "{}"
+
+    def __init__(self, message_id):
+        self._message_id = message_id
+
+    def json(self):
+        return {"name": self._message_id}
+
+
+class _FakeFCMHttp:
+    """Records the FCM message instead of calling Google."""
+
+    def __init__(self):
+        self.messages = []
+
+    def post(self, url, headers=None, json=None, timeout=None, data=None):
+        self.messages.append(json["message"])
+        return _FakeFCMResponse("projects/test-proj/messages/1")
+
+
+def _fake_fcm_client():
+    from datetime import datetime, timedelta
+    from mojo.helpers.fcm import FCMv1Client
+    http = _FakeFCMHttp()
+    client = FCMv1Client({"project_id": "test-proj"}, http=http)
+    client._access_token = "test-access-token"
+    client._token_expiry = datetime.utcnow() + timedelta(hours=1)
+    return client, http
+
+
+@th.django_unit_test()
+def test_fcm_message_without_collapse_id(opts):
+    """Without collapse_id the FCM message carries no collapse fields."""
+    client, http = _fake_fcm_client()
+    result = client.send(token="tok", title="Hi", body="There", sound="default")
+    assert result["success"], f"Fake send should succeed, got {result}"
+    message = http.messages[-1]
+    android = message.get("android", {})
+    apns = message.get("apns", {})
+    assert "collapse_key" not in android, f"No collapse_key expected, got {android}"
+    assert "tag" not in android.get("notification", {}), f"No tag expected, got {android}"
+    assert "apns-collapse-id" not in apns.get("headers", {}), f"No apns-collapse-id expected, got {apns}"
+
+
+@th.django_unit_test()
+def test_fcm_message_with_collapse_id_visible(opts):
+    """A visible push with collapse_id sets collapse_key, tag and apns-collapse-id."""
+    client, http = _fake_fcm_client()
+    long_id = "call-" + "x" * 80
+    client.send(token="tok", title="Incoming call", body="Ana", sound="default",
+                data={"ringing": True}, collapse_id=long_id)
+    message = http.messages[-1]
+    android = message["android"]
+    assert android["collapse_key"] == long_id, f"collapse_key should be the id, got {android}"
+    assert android["notification"]["tag"] == long_id, f"tag should be the id, got {android}"
+    assert android["notification"]["sound"] == "default", f"sound should be kept, got {android}"
+    header = message["apns"]["headers"]["apns-collapse-id"]
+    assert header == long_id[:64], f"apns-collapse-id should be the first 64 chars, got {header!r}"
+    assert message["apns"]["payload"]["aps"]["sound"] == "default", f"aps sound kept, got {message['apns']}"
+    assert message["data"]["ringing"] == "True", f"True should reach FCM as 'True', got {message['data']}"
+
+
+@th.django_unit_test()
+def test_fcm_message_with_collapse_id_silent(opts):
+    """A silent push with collapse_id keeps apns-priority 5 and has no notification tag."""
+    client, http = _fake_fcm_client()
+    client.send(token="tok", data={"call_id": "c-1"}, collapse_id="call-c-1")
+    message = http.messages[-1]
+    android = message["android"]
+    headers = message["apns"]["headers"]
+    assert android["collapse_key"] == "call-c-1", f"collapse_key should be set, got {android}"
+    assert "notification" not in android, f"Silent push must not get a notification tag, got {android}"
+    assert android["priority"] == "high", f"Silent priority should be kept, got {android}"
+    assert headers["apns-priority"] == "5", f"Silent push must keep apns-priority 5, got {headers}"
+    assert headers["apns-collapse-id"] == "call-c-1", f"apns-collapse-id should be set, got {headers}"
+    assert message["apns"]["payload"]["aps"]["content-available"] == 1, f"content-available kept, got {message['apns']}"
+
+
+@th.django_unit_test()
+def test_device_send_records_collapse_id(opts):
+    """device.send(collapse_id=...) passes it to FCM and records it on the delivery, real and test mode."""
+    from mojo.apps.account.models import User, RegisteredDevice
+
+    user = User.objects.get(username=TEST_USER)
+    RegisteredDevice.objects.filter(user=user, device_id="collapse_test_device").delete()
+    device = RegisteredDevice.objects.create(
+        user=user, device_token="collapse_test_token", device_id="collapse_test_device",
+        platform="android", device_name="Collapse Test")
+
+    class _Config:
+        pk = None
+        test_mode = False
+        is_active = True
+        default_sound = "default"
+
+        def get_fcm_service_account(self):
+            return {"project_id": "test-proj"}
+
+    clients = []
+
+    def client_factory(service_account):
+        client, http = _fake_fcm_client()
+        clients.append(http)
+        return client
+
+    try:
+        delivery = device.send(title="Call", body="Ringing", category="calls", config=_Config(),
+                               client_factory=client_factory, collapse_id="call-77")
+        assert delivery.status == "sent", f"Fake FCM send should be sent, got {delivery.status}"
+        assert delivery.platform_data.get("collapse_id") == "call-77", f"Real send should record collapse_id, got {delivery.platform_data}"
+        message = clients[-1].messages[-1]
+        assert message["android"]["collapse_key"] == "call-77", f"collapse_id should reach FCM, got {message}"
+
+        plain = device.send(title="Call", body="Ringing", category="calls", config=_Config(),
+                            client_factory=client_factory)
+        assert "collapse_id" not in plain.platform_data, f"No collapse_id expected without one, got {plain.platform_data}"
+        assert "collapse_key" not in clients[-1].messages[-1].get("android", {}), "No collapse_key expected without one"
+
+        test_config = _Config()
+        test_config.test_mode = True
+        simulated = device.send(title="Call", body="Ringing", category="calls", config=test_config,
+                                collapse_id="call-78")
+        assert simulated.platform_data.get("test_mode") is True, f"Expected test mode data, got {simulated.platform_data}"
+        assert simulated.platform_data.get("collapse_id") == "call-78", f"Test mode should record collapse_id, got {simulated.platform_data}"
+    finally:
+        device.delete()
+
+
 @th.django_unit_test()
 def test_cleanup_test_data(opts):
     """Clean up test data created during testing."""

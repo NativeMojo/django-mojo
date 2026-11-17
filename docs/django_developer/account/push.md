@@ -97,6 +97,16 @@ delivery = device.send(
 # Returns NotificationDelivery or None (if category disabled or no config)
 ```
 
+**Collapse id (one notification per thing):** pass `collapse_id` to `device.send()` or `user.push_notification()` so a later push with the same id replaces the earlier one on the phone instead of stacking. Use it for anything that should show at most once and be updated or cleared later, such as an incoming call:
+
+```python
+user.push_notification(title="Incoming call", body="Ana is calling",
+                       data={"call_id": "c-42"}, collapse_id="call-c-42")
+# later, replace it (e.g. "Missed call") by sending again with the same collapse_id
+```
+
+On Android it sets `android.collapse_key`, and for a visible notification also `android.notification.tag`, so the new notification replaces the shown one. On iPhone it sets the `apns-collapse-id` header (APNs allows 64 bytes; longer ids are truncated). Silent (data-only) pushes keep `apns-priority: 5`. The id is recorded in `delivery.platform_data["collapse_id"]`, in real and test mode. Omit it and nothing changes. Data values are sent as strings, as FCM requires (`True` arrives as `"True"`).
+
 **Category-based preference check:** Before sending, `send()` checks `push_preferences.get(category, True)`. If the user has opted out of a category, `send()` returns `None` without creating a delivery record.
 
 The `basic` and `default` REST graphs include `is_active` alongside `push_enabled`. Neither graph exposes the device token.
@@ -187,7 +197,7 @@ delivery.platform_data  # FCM response dict (message_id, etc.)
 delivery.push_outcome   # Derived evidence, exposed in basic/default graphs
 ```
 
-New real sends store bounded provider evidence in `platform_data`: `fcm_version`, `message_id`, `success`, `outcome`, `error_code`, `config_id`, and `status_code`. Tokens, credentials, and raw provider error bodies are excluded.
+New real sends store bounded provider evidence in `platform_data`: `fcm_version`, `message_id`, `success`, `outcome`, `error_code`, `config_id`, and `status_code`, plus `collapse_id` when one was passed. Tokens, credentials, and raw provider error bodies are excluded.
 
 | `push_outcome` | Meaning / stored status |
 |---|---|

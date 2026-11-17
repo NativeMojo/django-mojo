@@ -102,7 +102,8 @@ class FCMv1Client:
 
         return self._access_token
 
-    def send(self, token, title=None, body=None, data=None, sound=None, badge=None, priority="high"):
+    def send(self, token, title=None, body=None, data=None, sound=None, badge=None, priority="high",
+             collapse_id=None):
         """
         Send notification via FCM v1 API.
 
@@ -113,6 +114,9 @@ class FCMv1Client:
             data: Custom data payload dict
             sound: Notification sound (default: "default")
             badge: Badge count for iOS
+            collapse_id: Optional id; a later push with the same id replaces this one
+                on the device (Android collapse_key and notification tag, APNs
+                apns-collapse-id, truncated to 64 bytes)
 
         Returns:
             dict with success status and response details
@@ -156,6 +160,13 @@ class FCMv1Client:
             android_config['priority'] = priority
             apns_config['headers'] = {'apns-priority': '5'}
             apns_config['payload'] = {'aps': {'content-available': 1}}
+
+        if collapse_id:
+            collapse_id = str(collapse_id)
+            android_config['collapse_key'] = collapse_id
+            if title or body:
+                android_config.setdefault('notification', {})['tag'] = collapse_id
+            apns_config.setdefault('headers', {})['apns-collapse-id'] = collapse_id.encode('utf-8')[:64].decode('utf-8', 'ignore')
 
         if android_config:
             message['android'] = android_config
