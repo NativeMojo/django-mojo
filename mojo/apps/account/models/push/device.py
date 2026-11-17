@@ -72,7 +72,7 @@ class RegisteredDevice(models.Model, MojoModel):
         return f"{self.device_name or self.device_id} ({self.platform}) - {self.user.username}"
 
     def send(self, title=None, body=None, data=None, category="general", action_url=None,
-             config=None, require_live=False, client_factory=None):
+             config=None, require_live=False, client_factory=None, collapse_id=None):
         """
         Send push notification to this device via FCM.
         Simple and stupid - just send it.
@@ -83,6 +83,8 @@ class RegisteredDevice(models.Model, MojoModel):
             data: Custom data payload dict
             category: Notification category (for user preferences)
             action_url: URL to open when notification is tapped
+            collapse_id: Optional id; pushes with the same id replace each other on
+                the device. Recorded in delivery.platform_data["collapse_id"].
 
         Returns:
             NotificationDelivery object
@@ -120,12 +122,13 @@ class RegisteredDevice(models.Model, MojoModel):
         try:
             # Test mode - fake it
             if config.test_mode:
-                self._send_test(delivery, config)
+                self._send_test(delivery, config, collapse_id=collapse_id)
                 delivery.mark_sent()
                 return delivery
 
             # Real FCM send
-            success = self._send_fcm(delivery, config, client_factory=client_factory)
+            success = self._send_fcm(delivery, config, client_factory=client_factory,
+                                     collapse_id=collapse_id)
             if success:
                 metrics.record("push_sent")
                 delivery.mark_sent()
@@ -144,7 +147,7 @@ class RegisteredDevice(models.Model, MojoModel):
 
         return delivery
 
-    def _send_test(self, delivery, config):
+    def _send_test(self, delivery, config, collapse_id=None):
         """Fake notification for testing."""
         from mojo.helpers import logit, dates
 
@@ -168,9 +171,11 @@ class RegisteredDevice(models.Model, MojoModel):
             'device_name': self.device_name,
             'timestamp': dates.utcnow().isoformat(),
         }
+        if collapse_id:
+            delivery.platform_data['collapse_id'] = str(collapse_id)
         delivery.save(update_fields=['platform_data'])
 
-    def _send_fcm(self, delivery, config, client_factory=None):
+    def _send_fcm(self, delivery, config, client_factory=None, collapse_id=None):
         """Send once and retain bounded evidence, including ambiguous acceptance."""
         from mojo.helpers.fcm import FCMv1Client
         from mojo.apps.account.services.push import provider_test_result
@@ -185,7 +190,8 @@ class RegisteredDevice(models.Model, MojoModel):
             try:
                 result = client.send(token=self.device_token, title=delivery.title, body=delivery.body,
                                      data=data or None,
-                                     sound=config.default_sound if (delivery.title or delivery.body) else None)
+                                     sound=config.default_sound if (delivery.title or delivery.body) else None,
+                                     collapse_id=collapse_id)
             except Exception:
                 result = {'success': False, 'outcome': 'unknown', 'error_code': 'acceptance_unknown'}
         safe = provider_test_result(result)
@@ -194,5 +200,7 @@ class RegisteredDevice(models.Model, MojoModel):
             'outcome': safe['outcome'], 'error_code': safe['error_code'], 'config_id': config.pk,
             'status_code': result.get('status_code') if isinstance(result, dict) else None,
         }
+        if collapse_id:
+            delivery.platform_data['collapse_id'] = str(collapse_id)
         delivery.save(update_fields=['platform_data'])
         return safe['success']
