@@ -278,7 +278,7 @@ room.
 | Flag (`chat_flag`) as a room admin | yes | yes | no |
 | Subscribe to the room topic | yes | yes | no |
 
-Flag by a group (`moderate_chat`) or global (`manage_chat`) moderator does not
+Flag by a group or global moderator (`moderate_chat` or `manage_chat`) does not
 depend on the room row. Every refused flag saves and publishes nothing.
 
 A banned member attempting to mark read or react gets an error and writes

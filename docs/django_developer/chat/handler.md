@@ -179,8 +179,8 @@ framework never redacts the authorized body or rescales the classifier score.
 {"type": "chat_flag", "message_id": 42}
 ```
 
-- Requires room admin role, `moderate_chat` in the room's group, or global
-  `manage_chat`. The room-admin right comes from the membership row: a banned
+- Requires room admin role, or `moderate_chat` / `manage_chat` in the room's
+  group or globally (the same grants as REST `_check_room_moderator`). The room-admin right comes from the membership row: a banned
   or removed admin is refused; a muted admin keeps it, as in the REST
   moderator check. Group and global moderators flag on their own grants,
   whatever their room row says.

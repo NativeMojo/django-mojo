@@ -5,8 +5,8 @@ Policy:
 - A room admin flags on the strength of their membership row. A banned or
   removed admin is refused. A muted admin keeps the right, as with the REST
   moderator check: a mute stops content, not moderation.
-- A group moderator (`moderate_chat` on the room's group) and a global
-  moderator (`manage_chat`) flag on their own grants. Their room membership,
+- A group or global moderator (`moderate_chat` or `manage_chat`, in the
+  room's group or globally, as on REST) flags on their own grant. Their room membership,
   or the lack of one, does not change that.
 - A refusal saves nothing and publishes nothing.
 
@@ -24,7 +24,7 @@ TESTIT_TIER = "core"
 PASSWORD = "TestPass1!"
 PREFIX = "chat-flag-access-"
 EMAILS = {name: f"{PREFIX}{name}@example.com"
-          for name in ("author", "listener", "admin", "groupmod", "staff")}
+          for name in ("author", "listener", "admin", "groupmod", "groupmgr", "staff", "globalmod")}
 ROOM_PREFIX = f"test-{PREFIX}"
 GROUP_NAME = f"test-{PREFIX}group"
 REFUSED = {"type": "error", "error": "Permission denied"}
@@ -45,8 +45,10 @@ def setup_flag_access(opts):
         user.save()
         setattr(opts, name, user)
     opts.staff.add_permission("manage_chat")
+    opts.globalmod.add_permission("moderate_chat")
     opts.group = Group.objects.create(name=GROUP_NAME)
     opts.group.add_member(opts.groupmod).add_permission("moderate_chat")
+    opts.group.add_member(opts.groupmgr).add_permission("manage_chat")
     # Room members hold the group's plain "chat" grant, so they can subscribe.
     for user in (opts.author, opts.listener, opts.admin):
         opts.group.add_member(user).add_permission("chat")
@@ -187,7 +189,10 @@ def test_flag_role_matrix(opts):
     refused(opts.listener, "an active plain member")
 
     # Group and global moderators flag on their own grants, whatever their row.
-    for user, label in ((opts.groupmod, "a group moderator"), (opts.staff, "a global moderator")):
+    for user, label in ((opts.groupmod, "a group moderate_chat holder"),
+                        (opts.groupmgr, "a group manage_chat holder"),
+                        (opts.globalmod, "a global moderate_chat holder"),
+                        (opts.staff, "a global manage_chat holder")):
         for status in (None, "active", "muted", "banned"):
             _set_row(room, user, status, role="member")
             allowed(user, f"{label} with {'no' if status is None else 'a ' + status} room row")

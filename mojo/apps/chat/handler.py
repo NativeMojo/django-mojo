@@ -321,8 +321,8 @@ def _handle_flag(user, data, *, publisher=None):
     if not msg:
         return {"type": "error", "error": "Message not found"}
 
-    # Check permission: room admin, moderate_chat group permission or global
-    # manage_chat. The room-admin right comes from the membership row, so a
+    # Check permission: room admin, or moderate_chat / manage_chat in the
+    # room's group or globally -- the same grants as `_check_room_moderator`. The room-admin right comes from the membership row, so a
     # banned or removed admin flags nothing (#11520). A muted admin keeps it,
     # as in the REST moderator check (`_check_room_moderator`): a mute stops
     # content, not moderation. Group and global moderators flag on their own
@@ -331,9 +331,10 @@ def _handle_flag(user, data, *, publisher=None):
     has_perm = False
     if membership and membership.is_admin and membership.status != "banned":
         has_perm = True
-    if msg.room.group and msg.room.group.user_has_permission(user, "moderate_chat"):
+    if msg.room.group and msg.room.group.user_has_permission(
+            user, ["moderate_chat", "manage_chat"]):
         has_perm = True
-    if user.has_permission("manage_chat"):
+    if user.has_permission(["moderate_chat", "manage_chat"]):
         has_perm = True
 
     if not has_perm or not _policy_allows(user, msg.room):
