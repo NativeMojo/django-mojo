@@ -344,6 +344,9 @@ emits no read event.
 ```json
 {"type": "chat_flag", "message_id": 42}
 ```
+Room admins (not banned or removed; a muted admin still may), group
+moderators (`moderate_chat`) and global moderators (`manage_chat`) may flag.
+Anyone else gets `Permission denied`.
 
 ## Message kinds
 

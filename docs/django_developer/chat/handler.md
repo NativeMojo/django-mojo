@@ -179,7 +179,12 @@ framework never redacts the authorized body or rescales the classifier score.
 {"type": "chat_flag", "message_id": 42}
 ```
 
-- Requires room admin role, `moderate_chat`, or `manage_chat` permission
+- Requires room admin role, `moderate_chat` in the room's group, or global
+  `manage_chat`. The room-admin right comes from the membership row: a banned
+  or removed admin is refused; a muted admin keeps it, as in the REST
+  moderator check. Group and global moderators flag on their own grants,
+  whatever their room row says.
+- A refusal (`Permission denied`) saves nothing and publishes nothing
 - Sets `is_flagged=True`, records `flagged_by` and `flagged_at`
 - Publishes `chat_message_flagged` event (frontends hide the message)
 - Message stays in DB as evidence

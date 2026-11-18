@@ -305,8 +305,11 @@ def _handle_edit(user, data, *, publisher=None):
     }
 
 
-def _handle_flag(user, data):
-    """Handle flagging a message (moderator action)."""
+def _handle_flag(user, data, *, publisher=None):
+    """Handle flagging a message (moderator action).
+
+    `publisher` captures accepted flag events in tests; production omits it.
+    """
     from .models import ChatMessage, ChatMembership
     from mojo.apps.realtime import publish_topic
 
@@ -318,10 +321,15 @@ def _handle_flag(user, data):
     if not msg:
         return {"type": "error", "error": "Message not found"}
 
-    # Check permission: room admin or moderate_chat group permission
+    # Check permission: room admin, moderate_chat group permission or global
+    # manage_chat. The room-admin right comes from the membership row, so a
+    # banned or removed admin flags nothing (#11520). A muted admin keeps it,
+    # as in the REST moderator check (`_check_room_moderator`): a mute stops
+    # content, not moderation. Group and global moderators flag on their own
+    # grants, which a room's membership status does not touch.
     membership = ChatMembership.objects.filter(room=msg.room, user=user).first()
     has_perm = False
-    if membership and membership.is_admin:
+    if membership and membership.is_admin and membership.status != "banned":
         has_perm = True
     if msg.room.group and msg.room.group.user_has_permission(user, "moderate_chat"):
         has_perm = True
@@ -337,7 +345,8 @@ def _handle_flag(user, data):
     msg.save(update_fields=["is_flagged", "flagged_by", "flagged_at"])
 
     # Publish flag event so frontends hide the message
-    publish_topic(msg.room.topic, {
+    publish = publisher or publish_topic
+    publish(msg.room.topic, {
         "type": "chat_message_flagged",
         "message_id": msg.pk,
         "room_id": msg.room_id,
