@@ -275,7 +275,11 @@ room.
 | React (`chat_react`) | yes | yes | **no** |
 | Send (`chat_message`) | yes | no | no |
 | Edit (`chat_edit`) — own message, or any as a room admin | yes | no | no |
+| Flag (`chat_flag`) as a room admin | yes | yes | no |
 | Subscribe to the room topic | yes | yes | no |
+
+Flag by a group or global moderator (`moderate_chat` or `manage_chat`) does not
+depend on the room row. Every refused flag saves and publishes nothing.
 
 A banned member attempting to mark read or react gets an error and writes
 nothing. React's refusal is the **generic** `"Message not found"`, not a
