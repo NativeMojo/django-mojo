@@ -5,8 +5,9 @@ fail-closed boundary before network I/O. `mojo.helpers.llm.call()` and `ask()`
 remain the public facade. Anthropic credentials, SDK calls, bounded one-page
 model discovery, prompt-cache arguments, response conversion, and provider
 error reduction live in the Anthropic adapter. A deliberately configured AWS
-Bedrock route supports bounded Nova 2 Lite text reasoning and, when the route
-admits `images`, validated image input. Neither adapter
+Bedrock route supports bounded Nova 2 Lite or Claude (Haiku 5.5, Sonnet 5.5,
+Opus 5.5) text reasoning and, when the route admits `images`, validated image
+input. Neither adapter
 provides automatic provider or credential failover.
 
 ## Complete policy example
@@ -164,14 +165,102 @@ callers declare tools (see [Tool use on Bedrock](../helpers/llm.md#tool-use-on-b
 adding `"images"` admits image input (see [Image input](#image-input)). Either
 changes the policy hash, so activate the deployed policy again. A tool
 loop of N rounds makes N + 1 calls under one operation id, so give the
-feature envelope a `max_loop_calls` of at least that. Allowed models are exactly
-`us.amazon.nova-2-lite-v1:0`, `eu.amazon.nova-2-lite-v1:0`,
-`jp.amazon.nova-2-lite-v1:0`, and `global.amazon.nova-2-lite-v1:0`.
-`reasoning_efforts` must be a nonempty, unique list drawn from `off`, `low`,
-and `medium`. Region syntax is checked locally; AWS authorizes the actual
+feature envelope a `max_loop_calls` of at least that. `model` must be one of
+the ids in [the Bedrock model allow-list](#bedrock-model-allow-list), spelled
+exactly. `reasoning_efforts` must be a nonempty, unique list drawn from `off`,
+`low`, and `medium`. Region syntax is checked locally; AWS authorizes the actual
 profile/region combination. Choose a source region supported by that exact
-profile in the [AWS Nova 2 Lite region table](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html).
+profile in the model's AWS model card (linked in the allow-list).
 The framework does not enable Bedrock or activate this example policy by default.
+
+### Bedrock model allow-list
+
+The adapter and the policy check read one list,
+`mojo.helpers.llm_providers.bedrock.BEDROCK_MODELS`. A route's `model` must be
+one of these ids exactly; anything else, including a bare model id, an ARN, a
+`-v1:0` suffix on a Claude id or a region prefix the model does not publish, is
+`policy_invalid`. There is no prefix matching.
+
+| Model | Inference-profile ids | AWS model card |
+|---|---|---|
+| Nova 2 Lite | `us.amazon.nova-2-lite-v1:0`, `eu.amazon.nova-2-lite-v1:0`, `jp.amazon.nova-2-lite-v1:0`, `global.amazon.nova-2-lite-v1:0` | [Nova 2 Lite](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-amazon-nova-2-lite.html) |
+| Claude Haiku 5.5 (fast) | `us.anthropic.claude-haiku-5-5`, `ca.anthropic.claude-haiku-5-5`, `eu.anthropic.claude-haiku-5-5`, `au.anthropic.claude-haiku-5-5`, `jp.anthropic.claude-haiku-5-5`, `global.anthropic.claude-haiku-5-5` | [Claude Haiku 5.5](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-haiku-5-5.html) |
+| Claude Sonnet 5.5 (general) | `us.anthropic.claude-sonnet-5-5`, `ca.anthropic.claude-sonnet-5-5`, `eu.anthropic.claude-sonnet-5-5`, `au.anthropic.claude-sonnet-5-5`, `global.anthropic.claude-sonnet-5-5` | [Claude Sonnet 5.5](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-sonnet-5-5.html) |
+| Claude Opus 5.5 (powerful) | `us.anthropic.claude-opus-5-5`, `eu.anthropic.claude-opus-5-5`, `au.anthropic.claude-opus-5-5`, `jp.anthropic.claude-opus-5-5`, `global.anthropic.claude-opus-5-5` | [Claude Opus 5.5](https://docs.aws.amazon.com/bedrock/latest/userguide/model-card-anthropic-claude-opus-5-5.html) |
+
+Sonnet 5.5 has no `jp.` profile and Opus 5.5 has no `ca.` profile.
+
+### Claude routes
+
+A Claude route is a Bedrock route with a Claude id. Everything else about the
+route is the same as for Nova:
+
+```python
+LLM_SAFETY_POLICY["routes"]["my_maestro_mail"] = {
+    "provider": "bedrock",
+    "model": "us.anthropic.claude-sonnet-5-5",
+    "credential": "aws",
+    "capabilities": ["text", "tools", "images"],
+    "region": "us-east-1",
+    "reasoning_efforts": ["off", "low", "medium"],
+}
+```
+
+Claude models think by default on Bedrock, so the adapter always tells a Claude
+model how much to think. The effort a caller passes maps to this
+`additionalModelRequestFields` value:
+
+| Effort | Haiku 5.5 | Sonnet 5.5 | Opus 5.5 |
+|---|---|---|---|
+| `off` | `{"thinking": {"type": "disabled"}, "output_config": {"effort": "low"}}` | `{"thinking": {"type": "between_tools"}, "output_config": {"effort": "low"}}` | `{"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}` |
+| `low` | `{"thinking": {"type": "adaptive"}, "output_config": {"effort": "low"}}` | same | same |
+| `medium` | `{"thinking": {"type": "adaptive"}, "output_config": {"effort": "medium"}}` | same | same |
+
+`off` is the least thinking the model allows: Haiku does not think, Sonnet does
+not think before it answers, and Opus cannot stop thinking, so on Opus `off`
+and `low` send the same request. Nova's `reasoningConfig` is never sent to a
+Claude model. `high` and above are not supported on either family.
+
+Claude thinking is billed as output tokens and counts inside `max_tokens`. Size
+`max_tokens` for the thinking as well as the answer: a reply that reaches
+`max_tokens` before any answer text is `provider_rejected`, its usage is
+charged, and the ledger row's `error_detail` says
+`max_tokens reached before any answer text`. Thinking is never returned to the
+caller or echoed back on a later tool round.
+
+Claude routes have their own circuit: one `LLMCircuitBreaker` row shared by all
+three Claude models, separate from the Nova row, so a Claude access, IAM or
+throttling fault does not stop Nova calls, and the reverse. Permits, token
+budgets, the operation counter and the ledger's `credential_fingerprint` stay
+on the one installation identity, so Claude and Nova calls draw on the same
+Bedrock token budget. `reset_breakers(actor, provider="bedrock")` resets both
+circuits.
+
+Claude image limits: an image over 3,750,000 raw bytes (Bedrock's 5 MB base64
+limit for Claude) is `provider_rejected` before any reservation, and each
+image reserves 4800 tokens instead of Nova's 1600.
+
+### Enabling Anthropic models in the AWS account
+
+Each Anthropic model is enabled once per AWS account, by an administrator:
+
+1. In the Bedrock console, open **Model catalog**, choose the model, and open it
+   in the playground. The first invocation of a model in the account starts an
+   AWS Marketplace subscription for it.
+2. The person doing this needs `aws-marketplace:Subscribe`,
+   `aws-marketplace:Unsubscribe` and `aws-marketplace:ViewSubscriptions`, and
+   the account needs a valid payment method. Calls may succeed for up to 15
+   minutes while the subscription finalises; if a prerequisite is missing the
+   subscription fails and later calls return `AccessDeniedException`
+   (`provider_authentication`). Some accounts also need extra account-level
+   access from AWS Sales.
+3. Repeat for each Claude model a route names.
+
+The server role is never given Marketplace permissions. Once a model is
+enabled it needs only `bedrock:InvokeModel` and
+`bedrock:InvokeModelWithResponseStream` on the Claude inference profile and its
+destination foundation-model resources, as for Nova below. Claude charges
+appear on the AWS bill under AWS Marketplace.
 
 The adapter uses `mojo.helpers.aws.client.get_client` with the existing default
 AWS role/profile chain, including an operator's `AWS_PROFILE`. It pins SigV4,
@@ -194,7 +283,8 @@ route means the installation chain was selected. Neither that nor `ready=True`
 resolves credentials, constructs an AWS client, checks IAM/model access, or
 makes a billed request. Only an authorized guarded invocation proves access.
 All Bedrock routes use one installation-chain accounting identity; refreshing
-role credentials does not reset budgets or the circuit. The two Anthropic key
+role credentials does not reset budgets or the circuits. Claude routes use a
+separate circuit row (see [Claude routes](#claude-routes)). The two Anthropic key
 settings are never read to resolve a Bedrock credential.
 
 See [the call and response contract](../helpers/llm.md#bedrock-reasoning).
@@ -254,7 +344,9 @@ in the request, for any provider:
 
 The operator's `max_input_bytes` still bounds the request text: image data is
 blanked when the guard sizes the request, and each image adds 1600 tokens to
-the permit reservation. Actual billed usage reconciles the permit as for text.
+the permit reservation (4800 on a Claude Bedrock route, where an image over
+3,750,000 raw bytes is also refused first). Actual billed usage reconciles the
+permit as for text.
 Nova bills a flat 230 input tokens per image, included in `input_tokens`.
 GIF and WebP animations are accepted; Nova reads the first frame.
 
@@ -373,7 +465,7 @@ reports when it finishes.
   serialized request. The count never raises a reservation
   above today's byte bound. It is not counted as a request in the budget
   windows and never touches the circuit breaker.
-- **Byte fallback.** Bedrock routes (Nova 2 Lite has no count endpoint),
+- **Byte fallback.** Bedrock routes (the guard does not count Bedrock input),
   requests containing images, and any count that fails, times out or returns
   something other than a positive integer reserve the serialized byte length,
   exactly as before.

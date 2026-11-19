@@ -1,8 +1,8 @@
 # LLM Helper — Django Developer Reference
 
-Provider-neutral LLM facade with Anthropic and an AWS Bedrock Nova 2 Lite
-adapter (text, validated image input, caller-declared tools, and streamed
-answers). Production requests use the mandatory
+Provider-neutral LLM facade with Anthropic and an AWS Bedrock adapter for
+Nova 2 Lite and Claude Haiku 5.5, Sonnet 5.5 and Opus 5.5 (text, validated
+image input, caller-declared tools, and streamed answers). Production requests use the mandatory
 [LLM safety boundary](../security/llm_safety.md).
 
 ```python
@@ -186,11 +186,23 @@ usage = response["usage"]
 
 `ask(..., reasoning_effort="low")` also returns final text. The keyword-only
 effort defaults to `off`; Bedrock permits only the route's declared subset of
-`off`, `low`, and `medium`. Off omits extended thinking; low/medium send the
-fixed reasoning configuration. High effort is unsupported because this
-adapter always sends an output cap. `max_tokens` must be a positive integer
+`off`, `low`, and `medium`. What an effort means depends on the route's model:
+
+- **Nova 2 Lite:** off omits extended thinking; low/medium send the fixed
+  `reasoningConfig`.
+- **Claude:** off is the least thinking the model allows (Haiku none, Sonnet
+  none before the answer, Opus the same as low); low/medium run adaptive
+  thinking at that effort. Nova's `reasoningConfig` is never sent to Claude.
+  The exact request per model is in the
+  [effort table](../security/llm_safety.md#claude-routes).
+
+High effort is unsupported on both. `max_tokens` must be a positive integer
 within both policy caps and the adapter ceiling of 65000, including billed
-reasoning.
+reasoning. Claude thinking is billed as output and counts inside `max_tokens`,
+so size it for the thinking as well as the answer: a Claude reply that hits
+`max_tokens` before any answer text is `provider_rejected`, its usage is
+charged, and the ledger's `error_detail` reads
+`max_tokens reached before any answer text`.
 
 Messages have exactly `role` (`user` or `assistant`) and `content`; content is
 a nonblank string or a nonempty list of `{"type": "text", "text": "..."}`
@@ -349,8 +361,10 @@ while True:
 - Streaming works the same way: read the tool requests from the final
   event's `response["content"]`.
 
-Nova 2 reports reasoning only as `[REDACTED]`, and the facade never returns
-reasoning blocks, so they are not echoed into tool turns.
+Nova 2 reports reasoning only as `[REDACTED]`, and Claude's thinking blocks
+carry a signature; the facade never returns reasoning blocks on either
+family, so they are not echoed into tool turns. Bedrock accepts a Claude tool
+transcript with its thinking blocks removed.
 
 ## `model_choices()` — picker suggestions
 

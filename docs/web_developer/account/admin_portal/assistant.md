@@ -18,9 +18,12 @@ into Redis exactly as it does for every other secret setting, so Redis holds a
 live credential.
 
 The key editor, candidate/stored key checks, and model catalogue remain
-Anthropic-only. Optional Bedrock Nova 2 Lite text reasoning is configured by
-the deployment's static safety policy and uses the server's AWS role/profile
-chain. There are no AWS-key fields, provider-options input, or Bedrock
+Anthropic-only. Optional Bedrock reasoning, on Nova 2 Lite or a Claude model
+from the [Bedrock model allow-list](../../../django_developer/security/llm_safety.md#bedrock-model-allow-list),
+is configured by the deployment's static safety policy and uses the server's
+AWS role/profile chain. Each Claude model is enabled once in the AWS account
+by an administrator; see
+[Enabling Anthropic models](../../../django_developer/security/llm_safety.md#enabling-anthropic-models-in-the-aws-account). There are no AWS-key fields, provider-options input, or Bedrock
 credential probe in these endpoints, and no default Bedrock enablement. A
 Bedrock route may allow server-side tool calls and streamed answers for the
 host app's own features, but the Admin Assistant still needs an Anthropic
