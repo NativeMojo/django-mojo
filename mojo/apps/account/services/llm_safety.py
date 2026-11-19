@@ -630,6 +630,26 @@ def _breaker_success(provider, fingerprint, generation, owner):
         half_open_owner="", half_open_expires_at=None)
 
 
+def _breaker_release(provider, fingerprint, generation, owner):
+    """Give back an unused half-open probe so the next call may probe at once."""
+    from mojo.apps.account.models import LLMCircuitBreaker
+    LLMCircuitBreaker.objects.filter(
+        provider=provider, credential_fingerprint=fingerprint, generation=generation,
+        state="half_open", half_open_owner=owner).update(
+            state="open", opened_until=timezone.now(), half_open_owner="",
+            half_open_expires_at=None)
+
+
+def _release_probe(provider, fingerprint, generation, owner):
+    # The caller's own denial code wins over any failure here.
+    if not owner:
+        return
+    try:
+        _breaker_release(provider, fingerprint, generation, owner)
+    except Exception:
+        pass
+
+
 def _breaker_failure(provider, fingerprint, generation, owner, code, policy):
     from mojo.apps.account.models import LLMCircuitBreaker
     with transaction.atomic():
@@ -775,6 +795,7 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
     if route is None or limits is None:
         _blocked("", feature, "route_missing")
     provider_name = route["provider"]
+    circuit, generation, breaker_owner = None, None, ""
     try:
         _policy_agreement(policy)
         if emergency_stopped():
@@ -907,6 +928,7 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
         _record_burn(
             provider_name, feature, reserved_tokens, policy["shared"], limits)
     except LLMSafetyError as err:
+        _release_probe(provider_name, circuit, generation, breaker_owner)
         _blocked(provider_name, feature, err.code, retry_after=err.retry_after)
 
     started = time.monotonic()
@@ -919,6 +941,7 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
             **scalar_context)
     except Exception:
         release_permit(redis, permit)
+        _release_probe(provider_name, circuit, generation, breaker_owner)
         _blocked(provider_name, feature, "ledger_unavailable")
     call_kwargs = dict(
         messages=messages, system=system, tools=tools, model=resolved_model,

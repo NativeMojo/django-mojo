@@ -7,6 +7,7 @@ patches for the fixed installation identity.
 
 from contextlib import contextmanager
 from unittest import mock
+import hashlib
 import json
 import uuid
 
@@ -304,8 +305,20 @@ def test_claude_image_reserves_4800_and_oversized_is_refused_first(opts):
         big = _png(size=(1150, 1120), noise=True)
         assert 3750000 < len(big) <= 5 * 1024 * 1024, \
             f"the fixture must sit between the Claude and the general cap, got {len(big)}"
+        operation_id = uuid.uuid4().hex
         _assert_denied("provider_rejected", lambda: _run_guard(
-            case, factory, messages=_image_messages(big)))
+            case, factory, messages=_image_messages(big),
+            context={"operation_id": operation_id, "job_id": case["marker"]}))
+        _assert_budget_total(case, 13)
+        digest = hashlib.sha256(operation_id.encode("utf-8")).hexdigest()
+        operation_key = (f"mojo:llm:bedrock:{case['fingerprint']}:{case['feature']}"
+                         f":operation:{digest}")
+        counted = list(case["redis"].scan_iter(
+            match=operation_key.rsplit(":", 1)[0] + ":*", count=1000))
+        assert len(counted) == 1, \
+            f"only the admitted image call may hold an operation counter, got {len(counted)}"
+        assert not case["redis"].exists(operation_key), \
+            "an oversized Claude image must be refused before the operation counter"
         assert client.converse.call_count == 1 and not LLMRequest.objects.filter(
             operation=case["marker"]).exists(), \
             "an oversized Claude image must be refused before any ledger row or dispatch"
@@ -334,3 +347,99 @@ def test_claude_rejection_detail_is_bounded_like_nova(opts):
             "a Claude rejection must keep the AWS request id"
         assert all(case["redis"].zcard(key) == 0 for key in _case_keys(case)[:2]), \
             "a Claude rejection must release concurrency"
+
+
+def _probe_ready(fingerprint):
+    """An open circuit whose wait has passed: the next call is the half-open probe."""
+    from django.utils import timezone
+    from mojo.apps.account.models import LLMCircuitBreaker
+
+    LLMCircuitBreaker.objects.update_or_create(
+        provider="bedrock", credential_fingerprint=fingerprint,
+        defaults={"state": "open", "failure_count": 2, "error_code": "provider_timeout",
+                  "opened_until": timezone.now() - timezone.timedelta(seconds=1),
+                  "half_open_owner": "", "half_open_expires_at": None})
+
+
+def _nova_parked(fingerprint):
+    from django.utils import timezone
+    from mojo.apps.account.models import LLMCircuitBreaker
+
+    LLMCircuitBreaker.objects.update_or_create(
+        provider="bedrock", credential_fingerprint=fingerprint,
+        defaults={"state": "open", "failure_count": 3, "error_code": "provider_unavailable",
+                  "opened_until": timezone.now() + timezone.timedelta(seconds=300),
+                  "half_open_owner": "", "half_open_expires_at": None})
+    row = _breaker(fingerprint)
+    return (row.state, row.failure_count, row.error_code, row.generation,
+            row.opened_until, row.half_open_owner)
+
+
+@th.django_unit_test()
+def test_claude_probe_settlements_close_the_claude_circuit_only(opts):
+    def plain(case):
+        _guarded(case, _Client(replies=[_bedrock_reply()]), stream=False)
+
+    def drained(case):
+        list(_guarded(case, _Client(streams=[_events()])))
+
+    def rejected(case):
+        _assert_denied("provider_rejected", lambda: _guarded(
+            case, _Client(replies=[_bedrock_reply(stop="content_filtered")]), stream=False))
+
+    def cancelled(case):
+        answer = _guarded(case, _Client(streams=[_events(("Hel", "lo", " there"))]))
+        assert next(answer)["type"] == "text_delta", "the stream must deliver an event first"
+        answer.close()
+
+    with _claude_case() as case:
+        nova_before = _nova_parked(case["fingerprint"])
+        for name, run in (("plain call", plain), ("drained stream", drained),
+                          ("rejected output", rejected), ("cancelled stream", cancelled)):
+            _probe_ready(case["circuit"])
+            run(case)
+            claude = _breaker(case["circuit"])
+            assert claude.state == "closed" and claude.half_open_owner == "" \
+                and claude.failure_count == 0, \
+                f"a {name} probe must close the Claude circuit, got {claude.state}/{claude.half_open_owner!r}"
+            nova = _breaker(case["fingerprint"])
+            assert (nova.state, nova.failure_count, nova.error_code, nova.generation,
+                    nova.opened_until, nova.half_open_owner) == nova_before, \
+                f"a Claude {name} must not touch the Nova circuit"
+
+
+def _refused_probe_gives_its_turn_back(raw, circuit_key):
+    from mojo.apps.account.services import llm_safety
+
+    with _claude_case(raw) as case:
+        circuit = case[circuit_key]
+        _probe_ready(circuit)
+        shared = case["raw"]["shared"]
+        limits = case["raw"]["features"][case["feature"]]
+        permit = llm_safety.acquire_permit(
+            case["redis"], "bedrock", case["fingerprint"], case["feature"],
+            shared, limits, 5)
+        try:
+            _assert_denied("concurrency_exhausted", lambda: _guarded(
+                case, _Client(replies=[_bedrock_reply()]), stream=False))
+        finally:
+            llm_safety.release_permit(case["redis"], permit, actual_tokens=0)
+        row = _breaker(circuit)
+        assert row.state == "open" and row.half_open_owner == "" \
+            and row.half_open_expires_at is None, \
+            f"a probe refused by the permit must give its turn back, got {row.state}/{row.half_open_owner!r}"
+        client = _Client(replies=[_bedrock_reply()])
+        _guarded(case, client, stream=False)
+        row = _breaker(circuit)
+        assert len(client.calls) == 1 and row.state == "closed" and row.half_open_owner == "", \
+            f"the next call with room must be the probe and close the circuit, got {row.state}"
+
+
+@th.django_unit_test()
+def test_claude_probe_refused_by_the_permit_is_released(opts):
+    _refused_probe_gives_its_turn_back(_claude_policy(), "circuit")
+
+
+@th.django_unit_test()
+def test_nova_probe_refused_by_the_permit_is_released(opts):
+    _refused_probe_gives_its_turn_back(_guard_policy(), "fingerprint")
