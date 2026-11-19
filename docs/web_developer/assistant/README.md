@@ -31,10 +31,8 @@ failures, and truthful explicit refresh outcomes under bounded pagination
 and safety budgets; see [the owner contract](../account/admin_portal/assistant.md).
 REST and WebSocket inputs add no
 provider-options or AWS-credential fields. The tool-enabled Admin Assistant
-continues to use its Anthropic route; an optional Bedrock route (Nova 2 Lite
-or a Claude model from the
-[Bedrock model allow-list](../../django_developer/security/llm_safety.md#bedrock-model-allow-list))
-cannot serve it, because the Assistant's loop relies on prompt caching.
+continues to use its Anthropic route; the optional Bedrock Nova 2 Lite route
+is text-only and cannot satisfy the Assistant's tool capability requirement.
 
 A host application can use the guarded Bedrock helper from its own job
 handler without asking end users for an AI subscription or computer setup.

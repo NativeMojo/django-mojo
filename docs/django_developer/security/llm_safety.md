@@ -234,7 +234,10 @@ throttling fault does not stop Nova calls, and the reverse. Permits, token
 budgets, the operation counter and the ledger's `credential_fingerprint` stay
 on the one installation identity, so Claude and Nova calls draw on the same
 Bedrock token budget. `reset_breakers(actor, provider="bedrock")` resets both
-circuits.
+circuits. Owner diagnostics and `reset_breakers("bedrock")` report and reset
+the two Bedrock circuits together and do not label which is which. A half-open
+probe that a budget or concurrency limit refuses gives its turn back at once,
+so the next call may probe; this holds for Anthropic routes too.
 
 Claude image limits: an image over 3,750,000 raw bytes (Bedrock's 5 MB base64
 limit for Claude) is `provider_rejected` before any reservation, and each
@@ -259,8 +262,9 @@ Each Anthropic model is enabled once per AWS account, by an administrator:
 The server role is never given Marketplace permissions. Once a model is
 enabled it needs only `bedrock:InvokeModel` and
 `bedrock:InvokeModelWithResponseStream` on the Claude inference profile and its
-destination foundation-model resources, as for Nova below. Claude charges
-appear on the AWS bill under AWS Marketplace.
+destination foundation-model resources, as for Nova below. Claude is a
+third-party model billed through AWS Marketplace: its charges appear on the AWS
+bill under the model provider, not under Amazon Bedrock.
 
 The adapter uses `mojo.helpers.aws.client.get_client` with the existing default
 AWS role/profile chain, including an operator's `AWS_PROFILE`. It pins SigV4,
@@ -341,6 +345,9 @@ in the request, for any provider:
 - A route without `images` refuses an image with `capability_unsupported`. A
   malformed, mismatched or misplaced image is `image_invalid`; one over a count,
   size or side limit is `input_too_large`.
+- On a Claude Bedrock route only, an image over 3,750,000 raw bytes but within
+  the 5 MiB limit above is `provider_rejected`, still before any reservation
+  or ledger row (see [Claude routes](#claude-routes)).
 
 The operator's `max_input_bytes` still bounds the request text: image data is
 blanked when the guard sizes the request, and each image adds 1600 tokens to
