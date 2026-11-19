@@ -1,4 +1,4 @@
-"""Bounded Nova 2 Lite text, image and tool calls through AWS Bedrock Converse."""
+"""Bounded Nova 2 Lite and Claude text, image and tool calls through AWS Bedrock Converse."""
 
 import json
 import math
@@ -11,6 +11,32 @@ from .base import ProviderAdapter, ProviderError, validated_usage
 
 NOVA_2_LITE_PROFILES = frozenset(
     f"{prefix}.amazon.nova-2-lite-v1:0" for prefix in ("us", "eu", "jp", "global"))
+# Claude inference profiles, copied from each AWS model card's
+# "Programmatic Access" table. Written out in full: never built.
+CLAUDE_MODELS = {
+    "us.anthropic.claude-haiku-5-5": "haiku",
+    "ca.anthropic.claude-haiku-5-5": "haiku",
+    "eu.anthropic.claude-haiku-5-5": "haiku",
+    "au.anthropic.claude-haiku-5-5": "haiku",
+    "jp.anthropic.claude-haiku-5-5": "haiku",
+    "global.anthropic.claude-haiku-5-5": "haiku",
+    "us.anthropic.claude-sonnet-5-5": "sonnet",
+    "ca.anthropic.claude-sonnet-5-5": "sonnet",
+    "eu.anthropic.claude-sonnet-5-5": "sonnet",
+    "au.anthropic.claude-sonnet-5-5": "sonnet",
+    "global.anthropic.claude-sonnet-5-5": "sonnet",
+    "us.anthropic.claude-opus-5-5": "opus",
+    "eu.anthropic.claude-opus-5-5": "opus",
+    "au.anthropic.claude-opus-5-5": "opus",
+    "jp.anthropic.claude-opus-5-5": "opus",
+    "global.anthropic.claude-opus-5-5": "opus",
+}
+BEDROCK_MODELS = NOVA_2_LITE_PROFILES | frozenset(CLAUDE_MODELS)
+# What "off" sends: the least thinking each Claude model allows.
+CLAUDE_OFF_THINKING = {"haiku": "disabled", "sonnet": "between_tools", "opus": "adaptive"}
+# Bedrock's per-image limit for Claude is 5 MB of base64, 3,750,000 raw bytes.
+CLAUDE_MAX_IMAGE_BYTES = 3750000
+CLAUDE_IMAGE_RESERVED_TOKENS = 4800
 REASONING_EFFORTS = frozenset({"off", "low", "medium"})
 MAX_OUTPUT_TOKENS = 65000
 MAX_TEXT_BYTES = 1024 * 1024
@@ -29,6 +55,35 @@ STREAM_ERRORS = {
     "throttlingException": "provider_rate_limited",
     "validationException": "provider_rejected",
 }
+
+
+def model_family(model):
+    """"claude" for an allowed Claude profile, else "nova"."""
+    return "claude" if model in CLAUDE_MODELS else "nova"
+
+
+def reasoning_fields(model, effort):
+    """The additionalModelRequestFields for one model and effort, or None.
+
+    Nova sends nothing for "off" and its reasoningConfig otherwise. Claude
+    always gets an explicit thinking type and effort. A fresh dict each call.
+    """
+    if model_family(model) == "nova":
+        if effort == "off":
+            return None
+        return {"reasoningConfig": {"type": "enabled", "maxReasoningEffort": effort}}
+    if effort == "off":
+        return {"thinking": {"type": CLAUDE_OFF_THINKING[CLAUDE_MODELS[model]]},
+                "output_config": {"effort": "low"}}
+    return {"thinking": {"type": "adaptive"}, "output_config": {"effort": effort}}
+
+
+def image_reserved_tokens(model):
+    """Tokens the guard reserves per image sent to this model."""
+    if model_family(model) == "claude":
+        return CLAUDE_IMAGE_RESERVED_TOKENS
+    from mojo.helpers.llm_images import IMAGE_RESERVED_TOKENS
+    return IMAGE_RESERVED_TOKENS
 
 
 def _request_id(response):
@@ -194,6 +249,10 @@ def _finish(content, stop_reason, usage, request_id, model, max_tokens, tool_nam
                if block["type"] != "text" or block["text"].strip()]
     has_text = any(block["type"] == "text" for block in content)
     has_tool = any(block["type"] == "tool_use" for block in content)
+    if stop_reason == "max_tokens" and not has_text and not has_tool:
+        # Thinking can spend the whole cap; say so on the ledger.
+        raise ProviderError("provider_rejected", request_id, usage=usage,
+                            detail="max_tokens reached before any answer text")
     if stop_reason == "tool_use":
         if not tool_names or not has_tool:
             reject()
@@ -555,7 +614,7 @@ class BedrockProvider(ProviderAdapter):
     def _request(self, messages, model, max_tokens, system, tools, reasoning_effort,
                  timeout):
         """Validate one request before any SDK work; returns (request, names, timeout)."""
-        if not isinstance(model, str) or model not in NOVA_2_LITE_PROFILES \
+        if not isinstance(model, str) or model not in BEDROCK_MODELS \
                 or not isinstance(reasoning_effort, str) \
                 or reasoning_effort not in REASONING_EFFORTS \
                 or isinstance(max_tokens, bool) or not isinstance(max_tokens, int) \
@@ -565,13 +624,18 @@ class BedrockProvider(ProviderAdapter):
         request = {"modelId": model,
                    "messages": _translate_messages(messages, tool_names),
                    "inferenceConfig": {"maxTokens": max_tokens}}
+        if model_family(model) == "claude" and any(
+                len(block["image"]["source"]["bytes"]) > CLAUDE_MAX_IMAGE_BYTES
+                for message in request["messages"] for block in message["content"]
+                if "image" in block):
+            raise ProviderError("provider_rejected")
         if system is not None and system != "":
             request["system"] = _text_blocks(system)
         if tool_config is not None:
             request["toolConfig"] = tool_config
-        if reasoning_effort != "off":
-            request["additionalModelRequestFields"] = {"reasoningConfig": {
-                "type": "enabled", "maxReasoningEffort": reasoning_effort}}
+        extra = reasoning_fields(model, reasoning_effort)
+        if extra is not None:
+            request["additionalModelRequestFields"] = extra
         timeout = 60 if timeout is None else timeout
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)) \
                 or timeout <= 0:
