@@ -82,7 +82,8 @@ offered only at the MCP resource, so it cannot be combined with `api` on these
 resources. The consent page explicitly asks to let this agent execute ordinary
 tools without approving each change in Admin. For an active superuser that
 includes `activate_llm_policy`, which activates a deployed AI safety policy
-change and reports a TL;DR of it. A client whose built-in sign-in
+change and reports a TL;DR of it; a superuser's existing execution grant
+gains this tool when the framework is updated. A client whose built-in sign-in
 cannot request that scope remains in proposal mode. Existing grants never gain
 it silently; refresh cannot add it, so reconnect with explicit consent.
 

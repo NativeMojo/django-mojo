@@ -1706,6 +1706,11 @@ def _raw_policy(policy):
     return {key: value for key, value in policy.items() if key != "hash"}
 
 
+def _same(a, b):
+    """Constant-time equality that never raises: bytes, so any text compares."""
+    return secrets.compare_digest(str(a).encode("utf-8"), str(b).encode("utf-8"))
+
+
 def _activation_state(hash_rows, record_rows, policy):
     """``(active, previous, mismatch)`` from the two protected rows.
 
@@ -1716,11 +1721,11 @@ def _activation_state(hash_rows, record_rows, policy):
     """
     expected = [str(row.get_value() or "").strip() for row in hash_rows]
     expected = expected[0] if len(expected) == 1 else ""
-    active = bool(expected) and secrets.compare_digest(expected, policy["hash"])
+    active = bool(expected) and _same(expected, policy["hash"])
     recorded = _activated_policy(record_rows)
     previous = None
     if recorded is not None and expected and \
-            secrets.compare_digest(_canonical_hash(recorded), expected):
+            _same(_canonical_hash(recorded), expected):
         previous = recorded
     return active, previous, recorded is not None and previous is None
 
@@ -1741,8 +1746,10 @@ def _summary(raw, active, previous, mismatch, done=False):
         return {"tldr": tldr, "changes": [], "first": True, "record_needed": not done}
     summary = llm_policy_change.describe(raw, previous)
     if mismatch:
-        summary["tldr"] = ("The saved record did not match the active policy, so "
-                           "it cannot be compared. " + summary["tldr"])
+        summary["tldr"] = summary["tldr"].replace(
+            "No earlier policy was recorded to compare with.",
+            "The saved record of the last activation did not match it, so this "
+            "cannot be compared.")
     summary["record_needed"] = False
     return summary
 
@@ -1760,10 +1767,14 @@ def policy_change(actor):
     from mojo.apps.account.services import system_settings
     system_settings.require_system_admin(actor)
     policy = parse_policy()
-    rows = Setting.objects.using("default").filter(group=None).order_by("pk")
+    # One query, so an activation committing in between cannot pair an old
+    # hash with a new record.
+    rows = list(Setting.objects.using("default").filter(
+        group=None, key__in=(EXPECTED_POLICY_HASH_KEY, ACTIVATED_POLICY_KEY)
+    ).order_by("pk"))
     active, previous, mismatch = _activation_state(
-        list(rows.filter(key=EXPECTED_POLICY_HASH_KEY)[:2]),
-        list(rows.filter(key=ACTIVATED_POLICY_KEY)[:2]), policy)
+        [row for row in rows if row.key == EXPECTED_POLICY_HASH_KEY][:2],
+        [row for row in rows if row.key == ACTIVATED_POLICY_KEY][:2], policy)
     return {"active": active, "hash": policy["hash"],
             **_summary(_raw_policy(policy), active, previous, mismatch)}
 
@@ -1798,8 +1809,7 @@ def activate_with_summary(actor, expected_hash=None, via="admin"):
     from mojo.apps.account.services import system_settings
     actor = system_settings.require_system_admin(actor)
     policy = parse_policy()
-    if expected_hash is not None and not secrets.compare_digest(
-            str(expected_hash).strip(), policy["hash"]):
+    if expected_hash is not None and not _same(str(expected_hash).strip(), policy["hash"]):
         raise PolicyChangedError(policy["hash"])
     raw = _raw_policy(policy)
     with transaction.atomic():

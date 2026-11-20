@@ -414,7 +414,7 @@ The `expires_at__gt=now` predicate rides along so the atomic claim and the lazy
 
 ### Fresh auth, and why it is never delegated
 
-(The one tool that deliberately carries no freshness gate is
+(The one tool that deliberately drops its Admin twin's fresh-auth is
 `activate_llm_policy`; see the twin table.)
 
 `auth_time` is a claim on an interactive or OAuth access token, so the REST

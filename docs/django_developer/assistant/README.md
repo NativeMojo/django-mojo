@@ -575,8 +575,11 @@ bound to the originating browser Origin.
 | `activate_llm_policy` | Yes | Activates the deployed policy (`llm_safety.activate_with_summary`) and returns the same `tldr` and `changes`; the agent must relay the `tldr` to the owner |
 
 Both re-check an active literal superuser at call time. The activation has no
-fresh-auth or preview gate, so an MCP execution grant runs it directly; in the
-in-app assistant it is an approval card whose sentence is the TL;DR. The
+fresh-auth or preview gate, so an MCP execution grant runs it directly; a
+proposal-only grant makes an approval card whose sentence is the TL;DR. (The
+in-app chat cannot reach it while a change is pending: its own model calls
+refuse `policy_mixed` then.) The required `hash` argument binds the call to
+the deployed policy. The
 summary compares the deployed policy with `LLM_SAFETY_POLICY_ACTIVATED`, the
 policy recorded at the previous activation; the first activation after this
 record existed lists the whole policy instead. See

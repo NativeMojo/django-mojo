@@ -32,6 +32,10 @@ BREAKER_WORDS = {
     "open_seconds": "seconds it stays tripped",
 }
 MAX_CHANGES = 60
+MAX_LINE = 200
+# The approval path keeps a result's first 8 KB of key-sorted JSON, and
+# "changes" sorts before "tldr": the list stays well under that.
+MAX_CHANGES_BYTES = 4000
 SHARED = "all features together"
 
 
@@ -96,8 +100,8 @@ def _route_lines(feature, old, new):
     if old.get("credential") != new.get("credential"):
         lines.append(f"{feature}: credential {old.get('credential')} → "
                      f"{new.get('credential')}.")
-    efforts_before = list(old.get("reasoning_efforts") or [])
-    efforts_after = list(new.get("reasoning_efforts") or [])
+    efforts_before = sorted(old.get("reasoning_efforts") or [])
+    efforts_after = sorted(new.get("reasoning_efforts") or [])
     if efforts_before != efforts_after:
         lines.append(f"{feature}: reasoning levels {', '.join(efforts_before) or 'none'} "
                      f"→ {', '.join(efforts_after) or 'none'}.")
@@ -128,7 +132,7 @@ def describe(new, old=None):
         changes = [f"{feature}: {_model_words(routes[feature])}."
                    for feature in sorted(routes)]
         tldr = (f"No earlier policy was recorded to compare with. This policy "
-                f"turns on {_plural(len(routes), 'AI feature')}: "
+                f"allows {_plural(len(routes), 'AI feature')}: "
                 f"{_join(sorted(routes)) or 'none'}.")
         return {"tldr": tldr, "changes": _capped(changes), "first": True}
 
@@ -186,7 +190,7 @@ def describe(new, old=None):
         parts.append("changes the policy version")
     if parts:
         tldr = f"This policy {'; '.join(parts)}."
-    elif old != new:
+    elif not changes and old != new:
         changes = ["Only the order of entries changed."]
         tldr = "This policy only reorders entries; nothing it allows changes."
     else:
@@ -195,8 +199,15 @@ def describe(new, old=None):
 
 
 def _capped(changes):
-    """At most MAX_CHANGES lines, the last one saying how many were left out."""
-    if len(changes) <= MAX_CHANGES:
-        return changes
-    kept = changes[:MAX_CHANGES - 1]
-    return kept + [f"…and {len(changes) - len(kept)} more changes."]
+    """At most MAX_CHANGES lines and MAX_CHANGES_BYTES, the last saying how many were left out."""
+    lines = [line if len(line) <= MAX_LINE else line[:MAX_LINE - 1] + "…"
+             for line in changes]
+    kept, size = [], 0
+    for line in lines:
+        size += len(line.encode("utf-8")) + 4
+        if len(kept) >= MAX_CHANGES - 1 or size > MAX_CHANGES_BYTES:
+            break
+        kept.append(line)
+    if len(kept) == len(lines):
+        return kept
+    return kept + [f"…and {len(lines) - len(kept)} more changes."]

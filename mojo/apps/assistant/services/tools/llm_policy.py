@@ -10,17 +10,22 @@ settings that moved, and limits raised or lowered.
 A deliberate exception to "never easier through chat than the portal" (the
 owner's decision): the Admin's **Activate deployed policy** asks for a fresh
 sign-in, this tool does not, so an MCP execution grant runs it directly and a
-proposal-only grant or the in-app chat makes an approval card. The activation
+proposal-only grant makes an approval card. (The in-app chat cannot: while a
+change is pending its own model calls refuse ``policy_mixed``.) The activation
 is bound to the policy summarized: ``hash`` must be the deployed hash, so a
 card or a summary read before another deploy, or on a node with another
 policy, cannot activate a different one. Active superusers only, re-checked at
 call time.
 """
 
+import re
+
 from mojo.apps.assistant import tool
 
 from .cloud.common import can_system_admin, is_system_admin, refuse
 
+
+HASH_PATTERN = re.compile(r"^[0-9a-f]{64}$")
 
 RELAY = ("Tell the person who owns this installation what changed, using the "
          "tldr and the changes list, in plain words.")
@@ -122,9 +127,9 @@ def _tool_activate_llm_policy(params, user):
     if denied is not None:
         return denied
     wanted = str(params.get("hash") or "").strip()
-    if not wanted:
-        return refuse("Pass the hash get_llm_policy_change returned.",
-                      "invalid_request")
+    if not HASH_PATTERN.fullmatch(wanted):
+        return refuse("Pass the full 64-character hash get_llm_policy_change "
+                      "returned, unchanged.", "invalid_request")
     try:
         result = llm_safety.activate_with_summary(
             user, expected_hash=wanted, via="assistant")

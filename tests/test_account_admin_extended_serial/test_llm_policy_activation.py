@@ -197,7 +197,8 @@ def test_hash_without_record(opts):
                 # The record no longer matches a repaired/foreign hash row.
                 _write_hash_only(llm_safety.parse_policy()["hash"][::-1])
                 change = llm_safety.policy_change(root)
-                assert change["tldr"].startswith("The saved record did not match"), \
+                assert change["tldr"].startswith(
+                    "The saved record of the last activation did not match"), \
                     f"a record that does not match the active hash is not a baseline: {change}"
     finally:
         from mojo.apps.account.models import User
@@ -255,8 +256,12 @@ def test_invalid_policy_is_refused(opts):
     try:
         with _policy_rows(), _override_setting("LLM_HOST_FEATURES", ["support_test"]), \
                 _override_setting("LLM_SAFETY_POLICY", broken):
-            result = _handler("activate_llm_policy")({"hash": "x"}, root)
-            assert result.get("error_code") == "policy_invalid", result
+            result = _handler("activate_llm_policy")({"hash": "a" * 64}, root)
+            assert result.get("error_code") == "policy_invalid", \
+                f"a policy that does not parse must be refused as policy_invalid: {result}"
+            odd = _handler("activate_llm_policy")({"hash": "3f2a9c\u2026"}, root)
+            assert odd.get("error_code") == "invalid_request", \
+                f"a shortened or non-ASCII hash must be refused, not crash: {odd}"
             assert not Setting.objects.filter(
                 key=llm_safety.EXPECTED_POLICY_HASH_KEY, group=None).exists(), \
                 "a policy that does not parse must not be activated"

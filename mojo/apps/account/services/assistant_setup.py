@@ -17,8 +17,9 @@ re-implements credential resolution:
     LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED / _ACTIVATED_AT
                                catch-all switch and no-history watermark
 
-The sibling ``llm_safety.activate_policy`` owner action writes the protected
-``LLM_SAFETY_POLICY_EXPECTED_HASH`` agreement row.
+The sibling ``llm_safety.activate_with_summary`` owner action writes the
+protected ``LLM_SAFETY_POLICY_EXPECTED_HASH`` agreement row and the
+``LLM_SAFETY_POLICY_ACTIVATED`` record of the policy it was taken from.
 
 Both credentials are encrypted secret ``Setting`` rows. ``SettingsHelper.get``
 resolves database rows ahead of ``django.conf``, so an Admin-stored credential

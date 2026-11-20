@@ -102,7 +102,7 @@ def test_first_record_lists_the_policy(opts):
     result = llm_policy_change.describe(_policy(), None)
     assert result["first"] is True, f"no record means a first record: {result}"
     assert result["tldr"] == ("No earlier policy was recorded to compare with. This "
-                              "policy turns on 1 AI feature: chat."), result["tldr"]
+                              "policy allows 1 AI feature: chat."), result["tldr"]
     assert result["changes"] == [
         "chat: bedrock us.amazon.nova-2-lite-v1:0 in us-east-1, with tools."], \
         result["changes"]
@@ -141,7 +141,14 @@ def test_long_list_is_capped(opts):
         new["routes"][name] = copy.deepcopy(old["routes"]["chat"])
         new["features"][name] = _limits()
     result = llm_policy_change.describe(new, old)
-    assert len(result["changes"]) == llm_policy_change.MAX_CHANGES, len(result["changes"])
-    assert result["changes"][-1] == "…and 21 more changes.", result["changes"][-1]
+    changes = result["changes"]
+    kept = len(changes) - 1
+    assert 0 < kept < llm_policy_change.MAX_CHANGES, \
+        f"80 changes must be cut below the line cap, got {len(changes)}"
+    assert sum(len(line.encode()) for line in changes) <= \
+        llm_policy_change.MAX_CHANGES_BYTES + 100, \
+        "the list must stay under the byte cap so the approval result keeps the TL;DR"
+    assert changes[-1] == f"…and {80 - kept} more changes.", \
+        f"the last line must count what was left out, got {changes[-1]!r}"
     assert result["tldr"].startswith("This policy adds feature_00, feature_01, "
                                      "feature_02 and 77 more"), result["tldr"]

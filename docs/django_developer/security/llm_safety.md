@@ -380,7 +380,7 @@ Use this rollout sequence:
    audits the expected hash, records the policy it was taken from
    (`LLM_SAFETY_POLICY_ACTIVATED`), and returns a `tldr` plus a `changes`
    list saying what the activation changed compared with the last activated
-   policy: features added or removed, models and abilities that moved, limits
+   policy: features added or removed, models and settings that moved, limits
    raised or lowered. The agent tells the owner that TL;DR.
    `get_llm_policy_change` (or `llm_safety.policy_change`) gives the same
    summary without activating, plus the deployed `hash`; the tool must be
