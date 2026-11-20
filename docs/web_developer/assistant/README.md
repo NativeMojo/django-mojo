@@ -632,7 +632,7 @@ The assistant uses a two-tier system to manage which tools are active in each co
 
 **Core tools** are always available from the first message: memory, models, docs, web, logs, and file tools. These handle general queries.
 
-**Domain tools** (security, jobs, users, groups, metrics, docit, cloud, webapp) are loaded on demand. When the assistant needs domain-specific capabilities, it calls the built-in `load_tools` tool first. You will see this reflected in `tool_calls_made`:
+**Domain tools** (security, jobs, users, groups, metrics, docit, cloud, webapp, ai_policy) are loaded on demand. When the assistant needs domain-specific capabilities, it calls the built-in `load_tools` tool first. You will see this reflected in `tool_calls_made`:
 
 ```json
 "tool_calls_made": [
@@ -663,6 +663,7 @@ The assistant checks the user's permissions before executing each tool. The tool
 | `assistant` | Read, write, and delete memory entries and skills across all tiers (subject to per-tier access rules) |
 | `manage_aws` | Fleet capacity and operation status, managed-engine upgrades and their live status, CloudWatch resources and metrics (`cloud` domain — see [cloud_tools.md](cloud_tools.md)). The capacity **writes** additionally require a literal superuser and are absent from every listing without one; the engine upgrade additionally requires `manage_platform` or `admin`. |
 | `view_platform` / `manage_platform` | Platform sections, framework status and recorded version drift; `manage_platform` (or `admin`) adds deploy retry/verify/converge and the framework update (`cloud` domain) |
+| `admin` + literal superuser | `get_llm_policy_change` and `activate_llm_policy` (`ai_policy` domain): see what a deployed AI safety policy change does and activate it, with a TL;DR for the owner. The activation needs no fresh sign-in, so an MCP execution grant runs it directly. |
 | WebApp authority in any workspace (group `security`, or `manage_webapp` + `manage_dns`) | The `webapp` domain: guided app setup, addresses and certificates, serving and routes, deployment history and evidence, rollback, take offline, delete, and turning a deploy key off. Listed only for operators who hold that authority somewhere, on top of `view_admin` — see [webapp_tools.md](webapp_tools.md) |
 | DNS authority in an eligible local group | The `dns` domain: shared wildcard-validation readiness and setup, on top of global `view_admin`; writes require operator approval and exact target authority — see [dns_tools.md](dns_tools.md) |
 | *(any authenticated user)* | `search_docs` — search the documentation knowledge base (docit domain, `permission: "all"`). Load it with `load_tools(domain="docit")`, which itself requires `view_admin`. Every authenticated user may **call** it, but results are scoped to the asking user's own groups — same rule as `GET /api/docit/search` (see [docit/README.md](../docit/README.md#knowledge-base-search)). |

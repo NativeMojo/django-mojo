@@ -1179,6 +1179,7 @@ See [Incident API: Request LLM Analysis](../logging/incidents.md#request-llm-ana
 | `LLM_HANDLER_MODEL` | (legacy picker pin) | Does not select a guarded model; every guarded request uses its exact policy-route model |
 | `LLM_SAFETY_POLICY` | required | File-owned provider routes, budgets, and breaker thresholds; absence denies calls |
 | `LLM_SAFETY_POLICY_EXPECTED_HASH` | required DB agreement | Owner-activated hash of the policy deployed identically on every node |
+| `LLM_SAFETY_POLICY_ACTIVATED` | written on activation | The activated policy itself, so the next activation can say what it changes |
 | `LLM_EMERGENCY_STOP` | `False` | Deployment OR protected database stop; database uncertainty denies |
 | `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` | `False` | Owner-only catch-all switch; enabling stamps a no-history watermark |
 | `ASSISTANT_MCP_ENABLED` | `False` | Remote agent access (MCP door); switched from the Admin, never from `/api/settings` |

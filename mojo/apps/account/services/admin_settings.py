@@ -35,16 +35,17 @@ FLEET_PROVIDER_KEYS = frozenset({
     "GEOIP_MOJO_SYNC_ENABLED", "GEOIP_API_KEY_MOJO",
     "ADMIN_PROVIDER_SETUP_REVISION", "ADMIN_PROVIDER_VERIFY_STATE",
 })
-# The eleven protected LLM/Assistant controls. Ten are owned by
+# The twelve protected LLM/Assistant controls. Ten are owned by
 # ``services.assistant_setup`` and reached only through its owner-tier endpoint;
-# ``LLM_SAFETY_POLICY_EXPECTED_HASH`` is written only by
-# ``llm_safety.activate_policy``. The safety-policy route for each guarded
+# ``LLM_SAFETY_POLICY_EXPECTED_HASH`` and the policy it was taken from,
+# ``LLM_SAFETY_POLICY_ACTIVATED``, are written only by
+# ``llm_safety.activate_with_summary``. The safety-policy route for each guarded
 # feature owns its exact credential target and model: ``LLM_ADMIN_API_KEY`` and
 # ``LLM_HANDLER_API_KEY`` are independent targets, never fallbacks for one
 # another. ``ASSISTANT_MCP_ENABLED`` is the remote-agent switch whose descriptor
 # is registered by the assistant app. A global database row outranks the
 # deployment file (``helpers/settings/helper.py``), which is exactly why the
-# generic settings surface must refuse all eleven and only their dedicated
+# generic settings surface must refuse all twelve and only their dedicated
 # owner writers may save them.
 ASSISTANT_WRITABLE_KEYS = frozenset({
     "LLM_ADMIN_ENABLED", "LLM_ADMIN_API_KEY", "LLM_ADMIN_MODEL",
@@ -52,7 +53,7 @@ ASSISTANT_WRITABLE_KEYS = frozenset({
     "ASSISTANT_MCP_ENABLED", "LLM_EMERGENCY_STOP",
     "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED",
     "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT",
-    "LLM_SAFETY_POLICY_EXPECTED_HASH",
+    "LLM_SAFETY_POLICY_EXPECTED_HASH", "LLM_SAFETY_POLICY_ACTIVATED",
 })
 # Every Assistant key the generic global writers must refuse.  Protection and
 # writability are separate questions: this set is what fails closed, and it may

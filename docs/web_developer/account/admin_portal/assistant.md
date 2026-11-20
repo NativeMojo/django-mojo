@@ -364,7 +364,9 @@ All three use the same recent-auth literal-owner boundary as save:
 ```
 
 Activates the exact hash of the currently deployed static policy. Keep the
-deployment emergency stop on until every node has the same policy.
+deployment emergency stop on until every node has the same policy. The answer
+adds `tldr` (one sentence) and `changes` (up to 60 short lines) saying what the
+activation changed since the policy activated last, for the page to show.
 
 ```json
 {"action": "reset_breaker", "provider": "anthropic"}

@@ -414,6 +414,9 @@ The `expires_at__gt=now` predicate rides along so the atomic claim and the lazy
 
 ### Fresh auth, and why it is never delegated
 
+(The one tool that deliberately carries no freshness gate is
+`activate_llm_policy`; see the twin table.)
+
 `auth_time` is a claim on an interactive or OAuth access token, so the REST
 endpoint proves recency from the `Authorization` header with zero new transport.
 For a `fresh_auth_seconds="configured"` declaration, the service resolves the
@@ -538,7 +541,9 @@ consent opens eligible ordinary tools; the protected contracts above remain
 proposals. The extra gates
 mirror whatever the visual Admin endpoint that performs the same operation
 requires — so a tool is never easier to reach through chat than through the
-portal.
+portal. One deliberate exception, the owner's decision: `activate_llm_policy`
+drops the Admin's fresh sign-in so the agent that changed the AI policy can
+activate it and tell the owner what changed (see the table).
 
 | Tool(s) | Domain | Permission | Admin twin | Extra gates |
 |---|---|---|---|---|
@@ -566,6 +571,7 @@ portal.
 | `answer_webapp_setup_step`, `cancel_webapp_setup` | webapp | `view_admin` + `authorize` | `edge/rest/webapp_onboarding.py` `onboarding/choose` / `onboarding/cancel` (`requires_fresh_auth(600)`) | `fresh_auth_seconds=600`; bound operation revision |
 | `attach_webapp_address`, `detach_webapp_address`, `take_webapp_offline`, `set_webapp_serving`, `switch_webapp_certificate`, `request_webapp_certificate`, `add_webapp_route`, `remove_webapp_route`, `rollback_webapp` | webapp | `view_admin` + `authorize` | `edge/rest/web_app.py` (`denies_key_backed_session` + `requires_fresh_auth(600)` + `requires_perms('manage_webapp')`) | `fresh_auth_seconds=600`; `manage_webapp` re-checked per group |
 | `revoke_webapp_deploy_key` | webapp | `view_admin` + `authorize` | `edge/rest/web_app.py` `webapp/revoke_key` (`requires_fresh_auth(300)`) | `fresh_auth_seconds=300`; `str(approval.uuid)` is the service's idempotency key |
+| `activate_llm_policy` | ai_policy | `admin` + `authorize` (literal superuser) | `account/rest/admin_assistant.py` `activate_policy` (`denies_key_backed_session` + `requires_fresh_auth(600)`) | `summarize`; required `hash` argument binds the card to the deployed policy — a deliberate **relaxation**: no fresh-auth, so an MCP execution grant runs it directly and an existing execution grant gains it |
 | `delete_webapp` | webapp | `view_admin` + `authorize` | `DELETE edge/webapp/<pk>` (no step-up) | `fresh_auth_seconds=600` — a deliberate **escalation** over the twin |
 
 The `cloud` domain (item #2570) is the first real user of `requires_superuser`

@@ -405,6 +405,7 @@ good re-save whenever the cache has lapsed and the API is down.
 | `LLM_HANDLER_MODEL` | Second-tier pin |
 | `LLM_SAFETY_POLICY` | Required file-owned provider routes and cost envelopes |
 | `LLM_SAFETY_POLICY_EXPECTED_HASH` | Protected owner-activated DB agreement; never edit directly |
+| `LLM_SAFETY_POLICY_ACTIVATED` | Protected record of the activated policy, for the next activation's TL;DR; never edit directly |
 | `LLM_EMERGENCY_STOP` | Static OR protected database stop; unknown database state denies |
 | `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` | Protected owner switch, default off |
 

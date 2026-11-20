@@ -48,6 +48,9 @@ COUNT_TIMEOUT_SECONDS = 3
 ESTIMATE_MARGIN_PERCENT = 10  # integer math: a float 1.10 rounds 50 x 1.10 up to 56
 ESTIMATE_PAD_TOKENS = 64
 EXPECTED_POLICY_HASH_KEY = "LLM_SAFETY_POLICY_EXPECTED_HASH"
+# The policy that hash was taken from, saved beside it by activate_policy so
+# the next activation can say what it changes (llm_policy_change).
+ACTIVATED_POLICY_KEY = "LLM_SAFETY_POLICY_ACTIVATED"
 AUTONOMOUS_TRIAGE_KEY = "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED"
 AUTONOMOUS_TRIAGE_WATERMARK_KEY = "LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT"
 SAFE_CODES = frozenset({
@@ -1682,27 +1685,144 @@ def aggregate_state(hours=24):
     return {"hours": bounded_hours, "requests": requests, "breakers": breakers}
 
 
-def activate_policy(actor):
-    """Owner acknowledgment for a deployed policy hash."""
+class PolicyChangedError(Exception):
+    """The deployed policy is not the one the caller summarized."""
+
+
+def _activated_policy(rows):
+    """The recorded activated policy from its rows, or None when absent/unusable."""
+    if len(rows) != 1:
+        return None
+    value = rows[0].get_value()
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except (TypeError, ValueError):
+            return None
+    return value if isinstance(value, dict) else None
+
+
+def _raw_policy(policy):
+    return {key: value for key, value in policy.items() if key != "hash"}
+
+
+def _activation_state(hash_rows, record_rows, policy):
+    """``(active, previous, mismatch)`` from the two protected rows.
+
+    ``previous`` is the recorded policy only when its own hash equals the
+    activated hash: a record left behind by an older release (which wrote the
+    hash alone) or a repaired hash row is not a baseline, and ``mismatch`` says
+    so.
+    """
+    expected = [str(row.get_value() or "").strip() for row in hash_rows]
+    expected = expected[0] if len(expected) == 1 else ""
+    active = bool(expected) and secrets.compare_digest(expected, policy["hash"])
+    recorded = _activated_policy(record_rows)
+    previous = None
+    if recorded is not None and expected and \
+            secrets.compare_digest(_canonical_hash(recorded), expected):
+        previous = recorded
+    return active, previous, recorded is not None and previous is None
+
+
+def _summary(raw, active, previous, mismatch, done=False):
+    """The TL;DR. ``done`` words it as an activation that just happened."""
+    from mojo.apps.account.services import llm_policy_change
+    if active and previous is not None:
+        tldr = ("The deployed policy was already active; nothing changed." if done
+                else "The deployed policy is already active; nothing changes.")
+        return {"tldr": tldr, "changes": [], "first": False, "record_needed": False}
+    if active:
+        tldr = ("The deployed policy was already active; nothing changed. What it "
+                "holds is now recorded, so the next change can be compared." if done
+                else "The deployed policy is already active, but what it holds is "
+                "not recorded yet. Activating it once changes nothing and lets the "
+                "next change be compared.")
+        return {"tldr": tldr, "changes": [], "first": True, "record_needed": not done}
+    summary = llm_policy_change.describe(raw, previous)
+    if mismatch:
+        summary["tldr"] = ("The saved record did not match the active policy, so "
+                           "it cannot be compared. " + summary["tldr"])
+    summary["record_needed"] = False
+    return summary
+
+
+def policy_change(actor):
+    """Read-only: is the deployed policy active, and what would activating it change.
+
+    Returns ``{"active", "hash", "tldr", "changes", "first", "record_needed"}``.
+    ``record_needed`` means the policy is active but its contents were never
+    recorded (an activation made by an older release): activate once to record
+    it. Raises ``policy_invalid`` when the deployed policy does not parse,
+    exactly as a guarded call would.
+    """
     from mojo.apps.account.models import Setting
     from mojo.apps.account.services import system_settings
     system_settings.require_system_admin(actor)
     policy = parse_policy()
+    rows = Setting.objects.using("default").filter(group=None).order_by("pk")
+    active, previous, mismatch = _activation_state(
+        list(rows.filter(key=EXPECTED_POLICY_HASH_KEY)[:2]),
+        list(rows.filter(key=ACTIVATED_POLICY_KEY)[:2]), policy)
+    return {"active": active, "hash": policy["hash"],
+            **_summary(_raw_policy(policy), active, previous, mismatch)}
+
+
+def _save_protected(Setting, key, value):
+    rows = list(Setting.objects.select_for_update().filter(
+        key=key, group=None).order_by("pk")[:2])
+    row = rows[0] if rows else Setting(key=key, group=None, is_secret=False)
+    row.is_secret = False
+    row.set_value(value)
+    row.save(_protected_writer=key, _skip_cache=True)
+    if len(rows) > 1:
+        Setting.objects.filter(key=key, group=None).exclude(pk=row.pk).delete()
+    # robust: the rows are committed; a Redis failure must not report the
+    # activation as failed, nor stop the other row's push.
+    transaction.on_commit(row.push_to_cache, robust=True)
+
+
+def activate_with_summary(actor, expected_hash=None, via="admin"):
+    """Activate the deployed policy and say what that changed.
+
+    Returns ``{"activated", "already_active", "hash", "tldr", "changes",
+    "first"}``. The summary compares the deployed policy with the one recorded
+    at the previous activation (``ACTIVATED_POLICY_KEY``), trusted only when
+    its hash is the activated one; both rows are rewritten in one transaction,
+    so an already-active activation records the contents and changes nothing
+    else. With ``expected_hash`` the activation refuses (``PolicyChangedError``)
+    unless that is the deployed hash, so a summary read on one node or before
+    a deploy cannot approve a different policy.
+    """
+    from mojo.apps.account.models import Setting
+    from mojo.apps.account.services import system_settings
+    actor = system_settings.require_system_admin(actor)
+    policy = parse_policy()
+    if expected_hash is not None and not secrets.compare_digest(
+            str(expected_hash).strip(), policy["hash"]):
+        raise PolicyChangedError(policy["hash"])
+    raw = _raw_policy(policy)
     with transaction.atomic():
-        rows = list(Setting.objects.select_for_update().filter(
-            key=EXPECTED_POLICY_HASH_KEY, group=None).order_by("pk")[:2])
-        row = rows[0] if rows else Setting(
-            key=EXPECTED_POLICY_HASH_KEY, group=None, is_secret=False)
-        row.is_secret = False
-        row.set_value(policy["hash"])
-        row.save(_protected_writer=EXPECTED_POLICY_HASH_KEY, _skip_cache=True)
-        if len(rows) > 1:
-            Setting.objects.filter(pk__in=[item.pk for item in rows[1:]]).delete()
-        transaction.on_commit(row.push_to_cache)
+        lock = Setting.objects.select_for_update().filter(group=None).order_by("pk")
+        record_rows = list(lock.filter(key=ACTIVATED_POLICY_KEY)[:2])
+        hash_rows = list(lock.filter(key=EXPECTED_POLICY_HASH_KEY)[:2])
+        already, previous, mismatch = _activation_state(hash_rows, record_rows, policy)
+        summary = _summary(raw, already, previous, mismatch, done=True)
+        summary.pop("record_needed", None)
+        _save_protected(Setting, EXPECTED_POLICY_HASH_KEY, policy["hash"])
+        _save_protected(Setting, ACTIVATED_POLICY_KEY, json.dumps(raw, sort_keys=True))
     try:
-        actor.log("LLM safety policy hash activated", "llm:policy_activated")
+        actor.log(f"LLM safety policy {policy['hash'][:12]} activated via {via}: "
+                  f"{summary['tldr']}"[:1000], "llm:policy_activated")
     except Exception:
         pass
+    return {"activated": True, "already_active": already, "hash": policy["hash"],
+            **summary}
+
+
+def activate_policy(actor):
+    """Owner acknowledgment for a deployed policy hash (see activate_with_summary)."""
+    activate_with_summary(actor)
     return True
 
 

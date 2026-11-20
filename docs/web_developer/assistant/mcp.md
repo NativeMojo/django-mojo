@@ -80,7 +80,9 @@ resource=https://<host>/api/assistant/mcp
 Use the exact resource URL from discovery. `mcp:execute` requires `mcp` and is
 offered only at the MCP resource, so it cannot be combined with `api` on these
 resources. The consent page explicitly asks to let this agent execute ordinary
-tools without approving each change in Admin. A client whose built-in sign-in
+tools without approving each change in Admin. For an active superuser that
+includes `activate_llm_policy`, which activates a deployed AI safety policy
+change and reports a TL;DR of it. A client whose built-in sign-in
 cannot request that scope remains in proposal mode. Existing grants never gain
 it silently; refresh cannot add it, so reconnect with explicit consent.
 

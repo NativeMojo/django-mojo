@@ -258,7 +258,8 @@ read *and* write — see
 | `LLM_EMERGENCY_STOP` | `assistant_setup` | Plain global row combined monotonically with deployment stop |
 | `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` | `assistant_setup` | Plain global catch-all switch, off by default |
 | `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT` | `assistant_setup` | Primary-DB no-history watermark |
-| `LLM_SAFETY_POLICY_EXPECTED_HASH` | `llm_safety.activate_policy` | Owner-activated agreement with the deployed static policy |
+| `LLM_SAFETY_POLICY_EXPECTED_HASH` | `llm_safety.activate_with_summary` | Owner-activated agreement with the deployed static policy |
+| `LLM_SAFETY_POLICY_ACTIVATED` | `llm_safety.activate_with_summary` | The policy that hash was taken from, so the next activation can say what it changes |
 
 All are **catalog-protected**: `admin_settings.is_catalog_protected()`
 returns true, so `Setting.set()`, the generic `/api/settings` REST surface, a
@@ -565,6 +566,21 @@ on all seven mutations, `requires_managed_infrastructure` exactly where the twin
 calls `infrastructure.refuse()`, and `requires_superuser` on the two capacity
 tools. System Setup **repair** is deliberately absent: every setup mutation is
 bound to the originating browser Origin.
+
+### AI Policy Domain (`admin` + active superuser)
+
+| Tool | Mutates | What it does |
+|------|---------|--------------|
+| `get_llm_policy_change` | No | Whether the deployed `LLM_SAFETY_POLICY` is active, and what activating it would change: a one-line `tldr` and a `changes` list |
+| `activate_llm_policy` | Yes | Activates the deployed policy (`llm_safety.activate_with_summary`) and returns the same `tldr` and `changes`; the agent must relay the `tldr` to the owner |
+
+Both re-check an active literal superuser at call time. The activation has no
+fresh-auth or preview gate, so an MCP execution grant runs it directly; in the
+in-app assistant it is an approval card whose sentence is the TL;DR. The
+summary compares the deployed policy with `LLM_SAFETY_POLICY_ACTIVATED`, the
+policy recorded at the previous activation; the first activation after this
+record existed lists the whole policy instead. See
+[LLM safety → Policy agreement and rollout](../security/llm_safety.md#policy-agreement-and-rollout).
 
 ### Web Domain (`view_admin`)
 

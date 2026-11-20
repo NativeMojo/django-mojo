@@ -374,8 +374,21 @@ Use this rollout sequence:
    node has restarted.
 2. Deploy the new `LLM_SAFETY_POLICY` to every node while the static stop
    remains true.
-3. In either Admin bundle, fresh-auth as the installation owner and choose
-   **Activate deployed policy**. This writes and audits the expected hash.
+3. Activate the deployed policy: an agent with an MCP execution grant calls
+   the assistant tool `activate_llm_policy`, or an owner chooses **Activate
+   deployed policy** in either Admin bundle (fresh-auth). Either one writes and
+   audits the expected hash, records the policy it was taken from
+   (`LLM_SAFETY_POLICY_ACTIVATED`), and returns a `tldr` plus a `changes`
+   list saying what the activation changed compared with the last activated
+   policy: features added or removed, models and abilities that moved, limits
+   raised or lowered. The agent tells the owner that TL;DR.
+   `get_llm_policy_change` (or `llm_safety.policy_change`) gives the same
+   summary without activating, plus the deployed `hash`; the tool must be
+   given that hash and refuses `policy_changed` when the deployed policy is no
+   longer that one. The recorded policy is a baseline only when its own hash is
+   the activated one; otherwise the summary says it could not compare. A
+   policy activated by a release older than this record reports
+   `record_needed`: activate it once (nothing changes) to record it.
 4. Verify Anthropic candidate credentials if needed, reset breakers only after
    their cause is corrected, then remove the static `LLM_EMERGENCY_STOP=True`
    from deployment configuration and redeploy. Clearing only the database
@@ -573,6 +586,9 @@ Fresh-auth literal-owner actions use `POST /api/account/admin/assistant`:
 ```json
 {"action": "activate_policy"}
 ```
+
+The answer carries `tldr` and `changes`, the plain-words summary of what the
+activation changed (`llm_policy_change.describe`).
 
 ```json
 {"action": "reset_breaker", "provider": "anthropic"}

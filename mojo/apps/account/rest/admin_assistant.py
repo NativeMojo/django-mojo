@@ -118,9 +118,10 @@ def on_admin_assistant_mutate(request):
         if keys != {"action"}:
             raise merrors.ValueException("Activate policy accepts only action")
         from mojo.apps.account.services import llm_safety
-        activated = llm_safety.activate_policy(request.user)
+        result = llm_safety.activate_with_summary(request.user)
         return {"schema_version": assistant_setup.SCHEMA_VERSION,
-                "activated": activated, "state": assistant_setup.state()}
+                "activated": True, "tldr": result["tldr"],
+                "changes": result["changes"], "state": assistant_setup.state()}
     if action == "historical_triage":
         if keys != {"action", "before", "limit"}:
             raise merrors.ValueException(

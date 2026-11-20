@@ -52,7 +52,10 @@ These are read while URL/module bootstrap happens, so changes require a process 
   `LLM_SAFETY_POLICY`; a bad entry stops startup. See
   [Host features](../security/llm_safety.md#host-features).
 - `LLM_SAFETY_POLICY_EXPECTED_HASH` — protected primary-database policy
-  agreement written only by the fresh-auth owner activation action.
+  agreement written only by `llm_safety.activate_with_summary`: the fresh-auth
+  Admin action or the superuser assistant tool `activate_llm_policy`.
+- `LLM_SAFETY_POLICY_ACTIVATED` — protected record of the policy that hash was
+  taken from, written beside it, so the next activation can say what changed.
 - `LLM_EMERGENCY_STOP` — monotonic deployment OR protected database stop.
 - `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ENABLED` — protected owner switch, default
   off; enabling stamps `LLM_AUTONOMOUS_INCIDENT_TRIAGE_ACTIVATED_AT`.
