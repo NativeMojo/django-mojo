@@ -555,6 +555,16 @@ Access/refresh tokens from the provider are stored encrypted in `mojo_secrets` (
 2. **Existing `User` with matching email** → create a new `OAuthConnection` linking this provider to that user
 3. **No match** → create a new `User` + `OAuthConnection`
 
+Path 3 is refused when `OAUTH_ALLOW_REGISTRATION` is off, or when the state
+names a group (`begin` was called with `group_uuid`) whose resolved auth config
+has `registration.enabled` false or leaves the provider out of
+`registration.methods` — the same rules password sign-up follows. When it runs
+under a group, the new user is added to that group and `USER_REGISTERED_HANDLER`
+receives it as `group` (with no group, `group=None` and no membership). Paths 1
+and 2 are never gated, so an existing account or an invited person (who already
+has a `User`) still signs in. The hosted auth pages always pass their group to
+`begin`.
+
 How far the email is trusted depends on the provider. A provider whose profile
 carries `email_verified` (today: Microsoft) gets the rule in
 [Email trust for Microsoft](#email-trust-for-microsoft); the others (Google,
@@ -599,7 +609,8 @@ Why no email is refused by default: a profile with no email can never match an
 existing account, so a person whose Entra user has an empty **Email** property
 would land in a brand-new, empty account with none of their groups, and that
 account would hold the Microsoft link for every later sign-in. The registration
-refusals (`OAUTH_ALLOW_REGISTRATION`, the group's `registration.methods`) are
+refusals (`OAUTH_ALLOW_REGISTRATION`, the group's `registration.enabled` and
+`registration.methods`) are
 checked first. A returning user with an existing connection is never refused.
 **Admin fix:** set the user's **Email** property in the Microsoft Entra admin
 center (Users → the user → Properties → Contact information), then sign in

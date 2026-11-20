@@ -265,6 +265,15 @@ don't pass an explicit callback URL. `returnUrl` must still sit under the backen
 allowlist (`ALLOWED_REDIRECT_URLS`); the appended query does not affect the
 match, which compares scheme, host, port and path only.
 
+To sign in under a group, pass it as an option:
+`MojoAuth.startOAuthLogin('google', undefined, { group_uuid })`, or
+`MojoAuth.startGoogleLogin(undefined, { group_uuid })` (the Apple, GitHub and
+Microsoft shortcuts take the same arguments). `begin` then gets
+`&group_uuid=<uuid>`, and a new account is checked against that group's
+registration rules (`registration.enabled` and `registration.methods`) and
+joins the group. The hosted auth pages pass their own group this way. With no
+options the request is unchanged.
+
 ### If your `redirect_uri` started returning 400
 
 The `begin` endpoint used to accept any `redirect_uri` that shared a **string
