@@ -650,7 +650,7 @@ def test_mojo_auth_forgot_channel(opts):
     )
     with open(js_path, 'r') as fh:
         source = fh.read()
-    assert_true('forgotPasswordCode: function (identifier, channel)' in source,
+    assert_true('forgotPasswordCode: function (identifier, channel, options)' in source,
                 "mojo-auth.js forgotPasswordCode must accept (identifier, channel)")
     assert_true("channel: 'sms'" in source or "channel == 'sms'" in source or "ch === 'sms'" in source,
                 "mojo-auth.js must route channel='sms' into the phone payload")
