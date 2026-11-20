@@ -259,3 +259,11 @@ Passkey helpers likewise accept `loginWithPasskeyDiscoverable(options)` and
 complete. The hosted login template supplies `{ group_uuid: cfg.groupUuid }`
 for passkey sign-in and SMS verification automatically. See
 [Auth Pages](auth_pages.md#brand-context-on-passkey-and-sms-login).
+
+The email-link and reset helpers take the same final `options` object:
+`sendMagicLink(email, options)`, `forgotPasswordCode(identifier, channel, options)`,
+`forgotPasswordLink(email, options)` and `startPhoneRegister(phone, options)`.
+With `group_uuid`, the emailed sign-in or reset link can land on the group's own
+website, and the group's `login.methods` gate applies to the magic link. The
+hosted login and register pages pass their group on all four. Calls without
+`options` send the same body as before.
