@@ -534,7 +534,10 @@ def on_register(request):
     """
     Create a new user account.
 
-    Gated by the ALLOW_USER_REGISTRATION setting (default False).
+    Gated by the ALLOW_USER_REGISTRATION setting (default False), then by the
+    resolved auth config (the group's, or the deployment's with no group):
+    registration.enabled, and for a NEW account "password" in
+    registration.methods. Both refusals are the same 403.
 
     Field set is driven by AUTH_REGISTER_FIELDS (group-scoped); see
     `mojo.apps.account.services.register_schema`. Default config (when the
@@ -593,8 +596,8 @@ def on_register(request):
     # ---- Per-group registration toggle -------------------------------------
     # Layered on the global ALLOW_USER_REGISTRATION kill-switch above: a group
     # can disable signup for its own app via auth config.
-    if not auth_config.resolve_auth_config(
-            group=group, request=request).registration.enabled:
+    reg_cfg = auth_config.resolve_auth_config(group=group, request=request).registration
+    if not reg_cfg.enabled:
         raise merrors.PermissionDeniedException("Registration is not enabled", 403, 403)
 
     # ---- Resolve schema + identity for this group --------------------------
@@ -694,6 +697,18 @@ def on_register(request):
             # Looks like a registration to the caller; it is really a login
             # into the existing account — submitted profile fields are ignored.
             return jwt_login(request, existing, source="sms", is_new_user=False)
+
+    # ---- Password sign-up method gate (new accounts only) ------------------
+    # This endpoint IS the `password` registration method: email + password,
+    # SMS-verified phone and passwordless schemas alike (see
+    # auth_config.REGISTRATION_METHODS). A config that leaves `password` out of
+    # registration.methods refuses a new account here, with or without a group,
+    # like registration.enabled above and with the same answer. It sits after
+    # the returning-phone sign-in, so that path still works, and before any
+    # duplicate check or phone-token consume, so a refused new phone keeps its
+    # token and an existing email gets no "already exists" hint.
+    if "password" not in (reg_cfg.methods or []):
+        raise merrors.PermissionDeniedException("Registration is not enabled", 403, 403)
 
     # ---- Validate the payload for a NEW registration ----------------------
     sanitized = register_schema.validate_payload(
