@@ -12,6 +12,8 @@ from django.utils import timezone
 from django.utils.dateparse import parse_datetime
 
 from mojo.helpers import logit
+from mojo.helpers.llm_providers.bedrock import (
+    BEDROCK_MODELS, image_reserved_tokens, model_family)
 from mojo.helpers.redis import get_connection
 from mojo.helpers.settings import settings
 
@@ -20,8 +22,6 @@ logger = logit.get_logger("mojo.helpers.llm", "llm.log")
 POLICY_KEYS = frozenset({"version", "routes", "shared", "features", "breaker"})
 ROUTE_KEYS = frozenset({"provider", "model", "credential", "capabilities"})
 BEDROCK_ROUTE_KEYS = ROUTE_KEYS | {"region", "reasoning_efforts"}
-BEDROCK_MODELS = frozenset(
-    f"{prefix}.amazon.nova-2-lite-v1:0" for prefix in ("us", "eu", "jp", "global"))
 AWS_REGION_PATTERN = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-[1-9][0-9]*$")
 REASONING_EFFORTS = frozenset({"off", "low", "medium"})
 BEDROCK_CREDENTIAL_IDENTITY = "installation-aws-chain"
@@ -630,6 +630,26 @@ def _breaker_success(provider, fingerprint, generation, owner):
         half_open_owner="", half_open_expires_at=None)
 
 
+def _breaker_release(provider, fingerprint, generation, owner):
+    """Give back an unused half-open probe so the next call may probe at once."""
+    from mojo.apps.account.models import LLMCircuitBreaker
+    LLMCircuitBreaker.objects.filter(
+        provider=provider, credential_fingerprint=fingerprint, generation=generation,
+        state="half_open", half_open_owner=owner).update(
+            state="open", opened_until=timezone.now(), half_open_owner="",
+            half_open_expires_at=None)
+
+
+def _release_probe(provider, fingerprint, generation, owner):
+    # The caller's own denial code wins over any failure here.
+    if not owner:
+        return
+    try:
+        _breaker_release(provider, fingerprint, generation, owner)
+    except Exception:
+        pass
+
+
 def _breaker_failure(provider, fingerprint, generation, owner, code, policy):
     from mojo.apps.account.models import LLMCircuitBreaker
     with transaction.atomic():
@@ -775,6 +795,7 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
     if route is None or limits is None:
         _blocked("", feature, "route_missing")
     provider_name = route["provider"]
+    circuit, generation, breaker_owner = None, None, ""
     try:
         _policy_agreement(policy)
         if emergency_stopped():
@@ -820,6 +841,12 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
         if not credential:
             _deny("credential_missing")
         fingerprint = credential_fingerprint(provider_name, credential)
+        # Claude routes get their own circuit row; permits, budgets and the
+        # ledger stay on the shared installation fingerprint.
+        circuit = fingerprint
+        if provider_name == "bedrock" and model_family(route["model"]) == "claude":
+            circuit = credential_fingerprint(
+                "bedrock", BEDROCK_CREDENTIAL_IDENTITY + ":claude")
         factory = provider_factory or get_provider
         if provider_name == "bedrock":
             adapter = factory(provider_name, region=route["region"])
@@ -885,12 +912,14 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
             redis, provider_name, fingerprint, feature, operation_id,
             policy["shared"], limits)
         generation, breaker_owner = _breaker_lease(
-            provider_name, fingerprint, policy)
+            provider_name, circuit, policy)
         reserved_input, estimated_input, estimate_source = _input_estimate(
             adapter, provider_name, messages, system, tools, resolved_model,
             serialized)
         reserved_tokens = reserved_input + max_tokens
-        if image_count:
+        if image_count and provider_name == "bedrock":
+            reserved_tokens += image_count * image_reserved_tokens(route["model"])
+        elif image_count:
             from mojo.helpers.llm_images import IMAGE_RESERVED_TOKENS
             reserved_tokens += image_count * IMAGE_RESERVED_TOKENS
         permit = acquire_permit(
@@ -899,6 +928,7 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
         _record_burn(
             provider_name, feature, reserved_tokens, policy["shared"], limits)
     except LLMSafetyError as err:
+        _release_probe(provider_name, circuit, generation, breaker_owner)
         _blocked(provider_name, feature, err.code, retry_after=err.retry_after)
 
     started = time.monotonic()
@@ -911,6 +941,7 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
             **scalar_context)
     except Exception:
         release_permit(redis, permit)
+        _release_probe(provider_name, circuit, generation, breaker_owner)
         _blocked(provider_name, feature, "ledger_unavailable")
     call_kwargs = dict(
         messages=messages, system=system, tools=tools, model=resolved_model,
@@ -920,7 +951,8 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
         call_kwargs["reasoning_effort"] = reasoning_effort
     return {
         "policy": policy, "feature": feature, "provider": provider_name,
-        "fingerprint": fingerprint, "adapter": adapter, "redis": redis,
+        "fingerprint": fingerprint, "circuit": circuit, "adapter": adapter,
+        "redis": redis,
         "resolved_model": resolved_model, "generation": generation,
         "breaker_owner": breaker_owner, "reserved_tokens": reserved_tokens,
         "permit": permit, "ledger": ledger, "started": started,
@@ -967,10 +999,10 @@ def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None
     try:
         if breaker == "health" and code in BEDROCK_HEALTH_FAILURES:
             _breaker_failure(
-                provider_name, admission["fingerprint"], admission["generation"],
+                provider_name, admission["circuit"], admission["generation"],
                 admission["breaker_owner"], code, admission["policy"])
         elif breaker != "skip":
-            _breaker_success(provider_name, admission["fingerprint"],
+            _breaker_success(provider_name, admission["circuit"],
                              admission["generation"], admission["breaker_owner"])
         LLMRequest.objects.filter(pk=admission["ledger"].pk).update(**fields)
     except Exception:
@@ -991,7 +1023,7 @@ def _bedrock_unexpected(admission):
     try:
         LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
             status="failed", error_code="provider_failed", finished_at=timezone.now())
-        _breaker_success(admission["provider"], admission["fingerprint"],
+        _breaker_success(admission["provider"], admission["circuit"],
                          admission["generation"], admission["breaker_owner"])
     except Exception:
         _deny("provider_failed")
@@ -1023,7 +1055,7 @@ def _bedrock_cancelled(admission, usage=None, request_id="", healthy=False):
         fields.update(seen)
     try:
         if healthy:
-            _breaker_success(admission["provider"], admission["fingerprint"],
+            _breaker_success(admission["provider"], admission["circuit"],
                              admission["generation"], admission["breaker_owner"])
         LLMRequest.objects.filter(pk=admission["ledger"].pk, status="started").update(
             **fields)
@@ -1046,7 +1078,7 @@ def _settle_success(admission, response):
         "cache_creation_input_tokens"))
     release_permit(admission["redis"], admission["permit"], actual_tokens=actual_tokens)
     try:
-        _breaker_success(provider_name, admission["fingerprint"],
+        _breaker_success(provider_name, admission["circuit"],
                          admission["generation"], admission["breaker_owner"])
     except Exception:
         if provider_name == "bedrock":
@@ -1100,7 +1132,7 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
                             getattr(err, "retry_after", None),
                             detail=getattr(err, "detail", ""))
         _breaker_failure(
-            provider_name, admission["fingerprint"], admission["generation"],
+            provider_name, admission["circuit"], admission["generation"],
             admission["breaker_owner"], err.code, admission["policy"])
         detail = getattr(err, "detail", "")
         LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
@@ -1119,7 +1151,7 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
             status="failed", error_code="provider_failed", finished_at=timezone.now())
         release_permit(admission["redis"], admission["permit"])
         _breaker_failure(
-            provider_name, admission["fingerprint"], admission["generation"],
+            provider_name, admission["circuit"], admission["generation"],
             admission["breaker_owner"], "provider_failed", admission["policy"])
         _record_metrics(provider_name, feature, "failed")
         _deny("provider_failed")
