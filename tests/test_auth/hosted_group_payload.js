@@ -6,7 +6,8 @@ const calls = [];
 const stored = new Map();
 const bytes = new Uint8Array([1]).buffer;
 const context = {
-    console, atob, btoa, Uint8Array,
+    console, atob, btoa, Uint8Array, URLSearchParams,
+    sessionStorage: { setItem: () => {} },
     localStorage: {
         getItem: key => stored.get(key) || null,
         setItem: (key, value) => stored.set(key, value),
@@ -14,6 +15,7 @@ const context = {
     },
     window: {
         PublicKeyCredential: function () {},
+        location: { origin: 'https://auth.example.test', pathname: '/login', search: '?redirect=%2Fhome', href: '' },
         MojoBouncer: { getToken: () => 'test-bouncer', getDuid: () => 'test-device' }
     },
     navigator: { credentials: { get: async () => ({
@@ -22,8 +24,10 @@ const context = {
                     signature: bytes, userHandle: null }
     }) } },
     fetch: async (url, options) => {
-        calls.push({ url, body: JSON.parse(options.body) });
-        const data = url.endsWith('/begin')
+        calls.push({ url, body: options && options.body ? JSON.parse(options.body) : null });
+        const data = url.includes('/oauth/')
+            ? { auth_url: 'https://provider.example.test/authorize' }
+            : url.endsWith('/begin')
             ? { challenge_id: 'test-challenge', publicKey: { challenge: 'AQ', allowCredentials: [] } }
             : { access_token: 'synthetic-access', refresh_token: 'synthetic-refresh' };
         return { ok: true, json: async () => ({ status: true, data }) };
@@ -35,6 +39,15 @@ vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), context);
     const auth = context.MojoAuth;
     auth.init({ baseURL: 'https://auth.example.test' });
     const options = process.argv[4] === 'brand' ? { group_uuid: 'test-brand-4622' } : undefined;
+    if (process.argv[3].startsWith('oauth-')) {
+        // OAuth begin is a GET: record its URL only, there are no tokens.
+        const provider = process.argv[3].slice(6);
+        const name = { google: 'Google', apple: 'Apple', github: 'GitHub', microsoft: 'Microsoft' }[provider];
+        await auth['start' + name + 'Login'](undefined, options);
+        assert.equal(context.window.location.href, 'https://provider.example.test/authorize');
+        process.stdout.write(JSON.stringify(calls));
+        return;
+    }
     if (process.argv[3] === 'sms') await auth.verifySmsLogin('test-user', '123456', options);
     else if (process.argv[3] === 'named') await auth.loginWithPasskey('test-user', options);
     else await auth.loginWithPasskeyDiscoverable(options);

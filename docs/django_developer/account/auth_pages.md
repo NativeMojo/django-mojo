@@ -786,6 +786,11 @@ registration link, including the main switcher and the SMS view's "Create an
 account" escape path. This keeps invite-only and externally provisioned groups
 from advertising a registration flow they do not allow.
 
+The hosted pages pass their group to OAuth `begin` too, so the same switch
+closes sign-up through Google, Apple, GitHub and Microsoft: a new account is
+refused, while an existing or invited one still signs in. A provider left out
+of `registration.methods` is refused for new accounts the same way.
+
 ---
 
 ## Configurable Registration Form

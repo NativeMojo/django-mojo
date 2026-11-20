@@ -173,13 +173,16 @@ returns 403:
 
 This is a **UX guardrail** — it is only enforced when `group_uuid` is present.
 Omitting `group_uuid` bypasses the restriction. Fetch `GET /api/auth/config`
-first and only offer buttons for the methods listed.
+first and only offer buttons for the methods listed. The hosted auth pages
+always send their group, including on OAuth `begin`, so a new Google, Apple,
+GitHub or Microsoft account made there is checked against the group's
+`registration.enabled` and `registration.methods`.
 
 Affected endpoints:
 - `POST /api/auth/login`
 - `POST /api/auth/register`
 - `POST /api/auth/phone/register/start`
-- `GET /api/auth/oauth/<provider>/begin` (`google`, `apple`, `github`)
+- `GET /api/auth/oauth/<provider>/begin` (`google`, `apple`, `github`, `microsoft`)
 - `POST /api/account/passkeys/authenticate/begin`
 
 ---

@@ -68,3 +68,43 @@ def test_hosted_template_group(opts):
     template = (ROOT / "mojo/apps/account/templates/account/login.html").read_text()
     assert "loginWithPasskeyDiscoverable({ group_uuid: cfg.groupUuid })" in template, "hosted passkey must supply its page group"
     assert "verifySmsLogin(phone, code, { group_uuid: cfg.groupUuid })" in template, "hosted SMS verification must supply its page group"
+
+
+def _oauth_begin_url(provider, branded):
+    calls = _payloads(f"oauth-{provider}", branded)
+    assert len(calls) == 1, calls
+    assert calls[0]["body"] is None, "OAuth begin is a GET with no body"
+    return calls[0]["url"]
+
+
+@th.django_unit_test("hosted OAuth begin carries the group for Google and Microsoft")
+def test_hosted_oauth_begin_group(opts):
+    from urllib.parse import urlsplit, parse_qs
+    for provider in ("google", "microsoft"):
+        url = _oauth_begin_url(provider, True)
+        parts = urlsplit(url)
+        assert parts.path == f"/api/auth/oauth/{provider}/begin", url
+        query = parse_qs(parts.query)
+        assert query.get("group_uuid") == ["test-brand-4622"], url
+        assert query.get("redirect_uri") == ["https://auth.example.test/login?redirect=%2Fhome"], url
+
+
+@th.django_unit_test("OAuth begin without options sends no group, as before")
+def test_hosted_oauth_begin_legacy(opts):
+    for provider in ("google", "apple", "github", "microsoft"):
+        url = _oauth_begin_url(provider, False)
+        assert url == (f"https://auth.example.test/api/auth/oauth/{provider}/begin"
+                       "?redirect_uri=https%3A%2F%2Fauth.example.test%2Flogin%3Fredirect%3D%252Fhome"), url
+
+
+@th.django_unit_test("hosted pages pass their group on every OAuth start")
+def test_hosted_oauth_templates_forward_group(opts):
+    import re
+    starts = re.compile(r"MojoAuth\.(startOAuthLogin|start(?:Google|Apple|GitHub|Microsoft)Login)\(([^)]*)\)")
+    found = 0
+    for name in ("login.html", "register.html", "auth_base.html"):
+        source = (ROOT / "mojo/apps/account/templates/account" / name).read_text()
+        for match in starts.finditer(source):
+            found += 1
+            assert "group_uuid:" in match.group(2), f"{name}: {match.group(0)} must pass the page's group_uuid"
+    assert found >= 9, f"expected the four buttons on login and register plus the retry, found {found}"
