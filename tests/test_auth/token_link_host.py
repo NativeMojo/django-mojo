@@ -6,8 +6,9 @@ request carried, or on the frontend of any group the caller named.
 
 The test project sets neither BASE_URL nor WEBAPP_BASE_URL, so the account
 gets an org whose metadata names the frontend the link must land on. The link
-is read back from the account's newest ShortLink row. Four sends in total,
-under the endpoints' 5-per-300 s limit.
+is read back from the account's newest ShortLink row. Each send clears the
+loopback rate limit first, since there are more than the endpoints' 5 per
+300 s.
 
 Maestro item #6350 adds the write side: a manager of a sub-group of that tenant
 cannot store an address of their own for the link to land on.
@@ -21,6 +22,9 @@ EMAIL = "tlh_account@test.com"
 GROUP_HOME = "tlh-home"
 GROUP_FOREIGN = "tlh-foreign"
 GROUP_HOME_CHILD = "tlh-home-child"
+# A product inside the home tenant with its own website (#11789).
+GROUP_HOME_SITE = "tlh-home-site"
+HOME_SITE_BASE = "https://site.tlh-tenant.example"
 EMAIL_SUB_MANAGER = "tlh_sub_manager@test.com"
 PASSWORD = "Tlh##link99"
 HOME_BASE = "https://home.tlh-tenant.example"
@@ -52,7 +56,7 @@ def setup_token_link_host(opts):
     ShortLink.objects.filter(source="tlh_magic_login").delete()
     ShortLink.objects.filter(source="tlh_markup").delete()
     User.objects.filter(email__in=[EMAIL, EMAIL_MARKUP, EMAIL_SUB_MANAGER]).delete()
-    Group.objects.filter(name=GROUP_HOME_CHILD).delete()
+    Group.objects.filter(name__in=[GROUP_HOME_CHILD, GROUP_HOME_SITE]).delete()
     Group.objects.filter(name__in=[GROUP_HOME, GROUP_FOREIGN, GROUP_MARKUP]).delete()
 
     home = Group.objects.create(
@@ -63,6 +67,11 @@ def setup_token_link_host(opts):
     user = User.objects.create(username=EMAIL, email=EMAIL, is_active=True, org=home)
     opts.user_id = user.pk
     opts.foreign_id = foreign.pk
+    opts.foreign_uuid = foreign.get_uuid()
+    site = Group.objects.create(
+        name=GROUP_HOME_SITE, is_active=True, parent=home,
+        metadata={"webapp_base_url": HOME_SITE_BASE})
+    opts.home_site_uuid = site.get_uuid()
     # A sub-group of the home tenant, with a manager who holds nothing globally.
     child = Group.objects.create(name=GROUP_HOME_CHILD, is_active=True, parent=home)
     opts.home_child_id = child.pk
@@ -80,6 +89,10 @@ def setup_token_link_host(opts):
 
 def _send_and_read_link(opts, path, payload, source, params=None):
     from mojo.apps.shortlink.models import ShortLink
+    from mojo.decorators.limits import clear_rate_limits
+
+    # More sends than the endpoints' 5-per-300 s limit run in this module.
+    clear_rate_limits(ip="127.0.0.1")
 
     before = set(ShortLink.objects.filter(user_id=opts.user_id).values_list("pk", flat=True))
     resp = opts.client.post(f"/api/{path}", payload, params=params)
@@ -118,6 +131,36 @@ def test_magic_send_ignores_foreign_group(opts):
     url = _send_and_read_link(
         opts, "auth/magic/send", {"email": EMAIL}, "magic_login",
         params={"group": opts.foreign_id})
+    _assert_on_home(url, "ml", "magic_login")
+
+
+@th.django_unit_test("#11789 magic/send: a foreign group_uuid does not move the link")
+def test_magic_send_ignores_foreign_group_uuid(opts):
+    url = _send_and_read_link(
+        opts, "auth/magic/send", {"email": EMAIL, "group_uuid": opts.foreign_uuid}, "magic_login")
+    _assert_on_home(url, "ml", "magic_login")
+
+
+@th.django_unit_test("#11789 magic/send: a home-tenant group_uuid puts the link on that group's website")
+def test_magic_send_home_group_uuid_uses_its_site(opts):
+    url = _send_and_read_link(
+        opts, "auth/magic/send", {"email": EMAIL, "group_uuid": opts.home_site_uuid}, "magic_login")
+    assert_true(url.startswith(f"{HOME_SITE_BASE}/auth?flow=magic_login&token=ml:"),
+                f"the magic link must be on the named group's website, got {url}")
+
+
+@th.django_unit_test("#11789 forgot: a home-tenant group_uuid puts the reset link on that group's website")
+def test_forgot_home_group_uuid_uses_its_site(opts):
+    url = _send_and_read_link(
+        opts, "auth/forgot",
+        {"email": EMAIL, "method": "link", "group_uuid": opts.home_site_uuid}, "password_reset")
+    assert_true(url.startswith(f"{HOME_SITE_BASE}/auth?flow=password_reset&token=pr:"),
+                f"the reset link must be on the named group's website, got {url}")
+
+
+@th.django_unit_test("#11789 magic/send: with no group the link stays on the account's home website")
+def test_magic_send_no_group_unchanged(opts):
+    url = _send_and_read_link(opts, "auth/magic/send", {"email": EMAIL}, "magic_login")
     _assert_on_home(url, "ml", "magic_login")
 
 

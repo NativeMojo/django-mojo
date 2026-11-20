@@ -451,7 +451,7 @@
             var phone = $("forgot-phone").value.trim();
             if (!phone) { m.showMessage("Please enter your phone number.", "error"); return; }
             var btn = $("btn-forgot"); m.setLoading(btn, true); m.hideMessage();
-            MojoAuth.forgotPasswordCode(phone, "sms")
+            MojoAuth.forgotPasswordCode(phone, "sms", { group_uuid: cfg.groupUuid })
                 .then(function () {
                     m.setLoading(btn, false);
                     sessionStorage.setItem("mat_reset_identifier", phone);
@@ -467,7 +467,7 @@
         var method = document.querySelector('input[name="reset-method"]:checked').value;
         if (!email) { m.showMessage("Please enter your email address.", "error"); return; }
         var btn2 = $("btn-forgot"); m.setLoading(btn2, true); m.hideMessage();
-        (method === "code" ? MojoAuth.forgotPasswordCode(email) : MojoAuth.forgotPasswordLink(email))
+        (method === "code" ? MojoAuth.forgotPasswordCode(email, undefined, { group_uuid: cfg.groupUuid }) : MojoAuth.forgotPasswordLink(email, { group_uuid: cfg.groupUuid }))
             .then(function () {
                 m.setLoading(btn2, false);
                 if (method === "code") {
@@ -581,7 +581,7 @@
         magicPending = true;
         m.setLoading($("btn-magic"), true); m.hideMessage(); updateMagicResend();
         $("btn-magic-change").disabled = true;
-        MojoAuth.sendMagicLink(email)
+        MojoAuth.sendMagicLink(email, { group_uuid: cfg.groupUuid })
             .then(function () {
                 magicSent = { email: email, until: Date.now() + 60000 };
                 try { sessionStorage.setItem(magicKey, JSON.stringify(magicSent)); } catch (_) {}

@@ -254,3 +254,19 @@ def test_mojo_auth_new_helpers(opts):
                 "mojo-auth.js must expose verifySmsLogin for passwordless SMS login")
     assert_true('passkeyRegisterBegin' in source and 'passkeyRegisterComplete' in source,
                 "mojo-auth.js DEFAULT_ENDPOINTS must include the passkey register endpoints")
+
+
+@th.django_unit_test("magic/send is refused for a group whose login.methods omit magic; without a group it stays uniform")
+def test_magic_send_blocked_by_group(opts):
+    # The hosted page now names its group on the email-link send (#11789).
+    from mojo.decorators.limits import clear_rate_limits
+    clear_rate_limits(ip='127.0.0.1')
+    resp = opts.client.post('/api/auth/magic/send', {
+        'email': f'{LM_USER}@test.com', 'group_uuid': LM_GROUP_A_UUID})
+    assert_eq(resp.status_code, 403,
+              f"magic/send must 403 when the group disables magic, got {resp.status_code}: {resp.response}")
+    resp = opts.client.post('/api/auth/magic/send', {'email': f'{LM_USER}@test.com'})
+    assert_eq(resp.status_code, 200,
+              f"magic/send without group_uuid must give the uniform answer, got {resp.status_code}: {resp.response}")
+    assert_eq(resp.response.message, "If account is in our system a login link was sent.",
+              "magic/send without group_uuid must keep its uniform message")

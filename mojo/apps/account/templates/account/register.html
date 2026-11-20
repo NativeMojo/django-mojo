@@ -334,7 +334,7 @@ Already have an account? <a href="{{ auth_url|default:'/auth' }}">Log in</a>
         if (!phone) { m.showMessage("Enter your phone number.", "error"); return Promise.reject(); }
         var btn = $("btn-reg-continue");
         m.setLoading(btn, true); m.hideMessage();
-        return MojoAuth.startPhoneRegister(phone)
+        return MojoAuth.startPhoneRegister(phone, { group_uuid: cfg.groupUuid })
             .then(function (data) {
                 $("reg-phone-session-token").value = data.session_token;
                 $("reg-step2-help").textContent = "We sent {% if sms_code_length == 8 %}an{% else %}a{% endif %} {{ sms_code_length|default:6|escapejs }}-digit code to " + phone + ".";

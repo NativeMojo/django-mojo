@@ -48,6 +48,19 @@ vm.runInContext(fs.readFileSync(process.argv[2], 'utf8'), context);
         process.stdout.write(JSON.stringify(calls));
         return;
     }
+    // Link and code sends store no tokens: record the request bodies only.
+    const sends = {
+        'magic': () => auth.sendMagicLink('test-user@example.test', options),
+        'phone-register': () => auth.startPhoneRegister('+15555550100', options),
+        'forgot-code': () => auth.forgotPasswordCode('test-user@example.test', undefined, options),
+        'forgot-code-sms': () => auth.forgotPasswordCode('+15555550100', 'sms', options),
+        'forgot-link': () => auth.forgotPasswordLink('test-user@example.test', options),
+    };
+    if (sends[process.argv[3]]) {
+        await sends[process.argv[3]]();
+        process.stdout.write(JSON.stringify(calls));
+        return;
+    }
     if (process.argv[3] === 'sms') await auth.verifySmsLogin('test-user', '123456', options);
     else if (process.argv[3] === 'named') await auth.loginWithPasskey('test-user', options);
     else await auth.loginWithPasskeyDiscoverable(options);

@@ -429,10 +429,15 @@
          * Send an SMS code to begin pre-registration phone verification.
          * @param {string} phone - Phone number in any common format; the
          *                         server normalizes to E.164.
+         * @param {object} [options]
+         * @param {string} [options.group_uuid] - The page's group, sent as the hosted pages'
+         *                                 other calls send it.
          * @returns {Promise<{session_token, expires_in}>}
          */
-        startPhoneRegister: function (phone) {
-            return protectedPost(ep('phoneRegisterStart'), { phone: phone }, 'registration')
+        startPhoneRegister: function (phone, options) {
+            var payload = { phone: phone };
+            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+            return protectedPost(ep('phoneRegisterStart'), payload, 'registration')
                 .then(function (resp) { return resp.data || resp; });
         },
 
@@ -461,9 +466,12 @@
          * identifier is a phone-only user with no email on file).
          * @param {string} identifier - Email or phone number.
          * @param {string} [channel]  - "email" (default) or "sms".
+         * @param {object} [options]
+         * @param {string} [options.group_uuid] - The page's group. The emailed link then uses
+         *                                 that group's own website when it may.
          * @returns {Promise<object>}
          */
-        forgotPasswordCode: function (identifier, channel) {
+        forgotPasswordCode: function (identifier, channel, options) {
             var ch = channel || (identifier && identifier.indexOf('@') === -1 ? 'sms' : 'email');
             var payload = { method: 'code' };
             if (ch === 'sms') {
@@ -472,6 +480,7 @@
             } else {
                 payload.email = identifier;
             }
+            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
             return post(ep('forgotPassword'), _withDevice(payload));
         },
 
@@ -499,10 +508,15 @@
         /**
          * Request a password reset link (pr: token) sent to the user's email.
          * @param {string} email
+         * @param {object} [options]
+         * @param {string} [options.group_uuid] - The page's group. The emailed link then uses
+         *                                 that group's own website when it may.
          * @returns {Promise<object>}
          */
-        forgotPasswordLink: function (email) {
-            return post(ep('forgotPassword'), _withDevice({ email: email, method: 'link' }));
+        forgotPasswordLink: function (email, options) {
+            var payload = { email: email, method: 'link' };
+            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+            return post(ep('forgotPassword'), _withDevice(payload));
         },
 
         /**
@@ -541,10 +555,15 @@
         /**
          * Send a magic login link (ml: token) to the user's email.
          * @param {string} email
+         * @param {object} [options]
+         * @param {string} [options.group_uuid] - The page's group. The emailed link then uses
+         *                                 that group's own website when it may.
          * @returns {Promise<object>}
          */
-        sendMagicLink: function (email) {
-            return post(ep('magicSend'), _withDevice({ email: email }));
+        sendMagicLink: function (email, options) {
+            var payload = { email: email };
+            if (options && options.group_uuid) payload.group_uuid = options.group_uuid;
+            return post(ep('magicSend'), _withDevice(payload));
         },
 
         /**
