@@ -845,9 +845,14 @@
          *                                 allowed by the backend (the ALLOWED_REDIRECT_URLS
          *                                 setting, or the resolved group's
          *                                 metadata["allowed_redirect_urls"]).
+         * @param {object} [options]
+         * @param {string} [options.group_uuid] - Group to begin under. The backend then
+         *                                 applies that group's registration rules to a
+         *                                 new account and adds it to the group. The
+         *                                 hosted auth pages pass their own GROUP_UUID.
          * @returns {Promise<void>}
          */
-        startOAuthLogin: function (provider, callbackUrl) {
+        startOAuthLogin: function (provider, callbackUrl, options) {
             sessionStorage.setItem('oauth_provider', provider);
             // Preserve the page's query string (e.g. ?redirect=) so the user
             // returns to the right place after the provider round-trip. Drop
@@ -859,6 +864,7 @@
             var redirectUri = callbackUrl ||
                 (window.location.origin + window.location.pathname + (qs ? '?' + qs : ''));
             var url = ep('oauthBegin', { provider: provider }) + '?redirect_uri=' + encodeURIComponent(redirectUri);
+            if (options && options.group_uuid) url += '&group_uuid=' + encodeURIComponent(options.group_uuid);
             return get(url)
                 .then(function (resp) {
                     var d = resp.data || resp;
@@ -867,20 +873,21 @@
                 });
         },
 
-        startGoogleLogin: function (callbackUrl) {
-            return MojoAuth.startOAuthLogin('google', callbackUrl);
+        /** Provider shortcuts for startOAuthLogin: (callbackUrl, options) are passed through. */
+        startGoogleLogin: function (callbackUrl, options) {
+            return MojoAuth.startOAuthLogin('google', callbackUrl, options);
         },
 
-        startAppleLogin: function (callbackUrl) {
-            return MojoAuth.startOAuthLogin('apple', callbackUrl);
+        startAppleLogin: function (callbackUrl, options) {
+            return MojoAuth.startOAuthLogin('apple', callbackUrl, options);
         },
 
-        startGitHubLogin: function (callbackUrl) {
-            return MojoAuth.startOAuthLogin('github', callbackUrl);
+        startGitHubLogin: function (callbackUrl, options) {
+            return MojoAuth.startOAuthLogin('github', callbackUrl, options);
         },
 
-        startMicrosoftLogin: function (callbackUrl) {
-            return MojoAuth.startOAuthLogin('microsoft', callbackUrl);
+        startMicrosoftLogin: function (callbackUrl, options) {
+            return MojoAuth.startOAuthLogin('microsoft', callbackUrl, options);
         },
 
         /**

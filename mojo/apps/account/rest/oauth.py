@@ -311,7 +311,10 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
     2. Matching email on User    -> create OAuthConnection, return (user, conn, False)
     3. Neither                   -> create User + OAuthConnection, return (user, conn, True)
 
-    Path 3 raises PermissionDeniedException if OAUTH_ALLOW_REGISTRATION is False.
+    Path 3 raises PermissionDeniedException if OAUTH_ALLOW_REGISTRATION is False,
+    or when state_data names a group whose auth config closes registration
+    (registration.enabled false) or leaves this provider out of
+    registration.methods.
 
     A profile carrying ``email_verified`` (Microsoft) trusts the email only
     when it is True. An unverified email that matches a User is refused before
@@ -355,15 +358,17 @@ def _find_or_create_user(provider_name, profile, state_data=None, request=None):
     if not user:
         if not settings.get("OAUTH_ALLOW_REGISTRATION", True):
             raise merrors.PermissionDeniedException("Account registration via OAuth is not permitted")
-        # Per-group registration method gate — a group can disable signup via
-        # a given OAuth provider in its auth config. Only applies to the
-        # toggleable providers (auth_config.REGISTRATION_METHODS) and when a
-        # group is resolved.
+        # Per-group registration gate — a group can close signup altogether
+        # (registration.enabled, as password signup honours) or disable signup
+        # via a given OAuth provider (registration.methods) in its auth config.
+        # Only applies to the toggleable providers
+        # (auth_config.REGISTRATION_METHODS) and when a group is resolved.
         if provider_name in auth_config.REGISTRATION_METHODS:
             _reg_group = _resolve_state_group(state_data)
             if _reg_group is not None:
                 _reg_cfg = auth_config.resolve_auth_config(group=_reg_group)
-                if provider_name not in (_reg_cfg.registration.methods or []):
+                if (not _reg_cfg.registration.enabled
+                        or provider_name not in (_reg_cfg.registration.methods or [])):
                     raise merrors.PermissionDeniedException(
                         "Account registration via this provider is not permitted")
         # A Microsoft profile with no email can never match an existing

@@ -127,7 +127,7 @@
     </div>
 
     {{ login_methods|json_script:"mat-login-methods" }}
-    <script nonce="{{ csp_nonce }}" src="{{ api_base }}/api/account/static/mojo-auth.js?v=5672b9db20"></script>
+    <script nonce="{{ csp_nonce }}" src="{{ api_base }}/api/account/static/mojo-auth.js?v=7b8439f286"></script>
     {% if hosted_bouncer %}
     {{ hosted_bouncer|json_script:"mat-hosted-bouncer" }}
     <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js?v=1f0934bf3d"></script>
@@ -602,7 +602,7 @@
                     if (!pending.retryProvider || retryBtn.disabled) return;
                     window._mat.setLoading(retryBtn, true);
                     var begun;
-                    try { begun = MojoAuth.startOAuthLogin(pending.retryProvider); }
+                    try { begun = MojoAuth.startOAuthLogin(pending.retryProvider, undefined, { group_uuid: GROUP_UUID }); }
                     catch (e) { begun = Promise.reject(e); }
                     Promise.resolve(begun).catch(function (err) {
                         window._mat.setLoading(retryBtn, false);
