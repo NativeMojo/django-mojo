@@ -267,7 +267,8 @@ Adding `"prompt_cache"` is an ordinary policy change: the hash rule, the
 emergency stop and activation are the same as for any other capability. The
 caller's marker and the Converse request it becomes are described in
 [Prompt caching on Bedrock](../helpers/llm.md#prompt-caching-on-bedrock).
-Nothing is cached without a marker: Converse has no automatic caching, so a
+Nothing is cached without a marker: the adapter never sends Converse's
+automatic-caching field (`additionalModelRequestFields.cache_control`), so a
 caching route sends the same request as before until a caller marks one.
 
 - Only Claude routes may declare it; Nova with `"prompt_cache"` is
