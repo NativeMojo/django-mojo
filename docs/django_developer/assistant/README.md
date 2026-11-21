@@ -1825,7 +1825,7 @@ The assistant uses Anthropic's automatic prompt caching to cut the cost and late
 
 `mojo.helpers.llm.call()` adds `cache_control={"type": "ephemeral"}` at the top level of every Anthropic request. Anthropic walks back from the last cacheable block looking for a previously written cache entry; on hit it reuses the cached prefix (system + tools + prior messages), on miss it writes a new entry. The cache breakpoint advances automatically as the conversation grows — no manual breakpoint management.
 
-Enable / disable via the `LLM_ADMIN_PROMPT_CACHE_ENABLED` setting (default `True`).
+Enable / disable via the `LLM_ADMIN_PROMPT_CACHE_ENABLED` setting (default `True`). The setting covers Anthropic routes only; Bedrock caching is a route capability, see [Prompt caching on Claude routes](../security/llm_safety.md#prompt-caching-on-claude-routes).
 
 ### What Invalidates the Cache
 

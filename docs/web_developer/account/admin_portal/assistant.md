@@ -25,9 +25,12 @@ AWS role/profile chain. Each Claude model is enabled once in the AWS account
 by an administrator; see
 [Enabling Anthropic models](../../../django_developer/security/llm_safety.md#enabling-anthropic-models-in-the-aws-account). There are no AWS-key fields, provider-options input, or Bedrock
 credential probe in these endpoints, and no default Bedrock enablement. A
-Bedrock route may allow server-side tool calls and streamed answers for the
-host app's own features, but the Admin Assistant still needs an Anthropic
-route: its loop relies on prompt caching and images.
+Bedrock route may allow server-side tool calls, streamed answers and, on a
+Claude model, prompt caching the caller marks
+([Prompt caching on Claude routes](../../../django_developer/security/llm_safety.md#prompt-caching-on-claude-routes))
+for the host app's own features, but the Admin Assistant still needs an
+Anthropic route: its loop relies on Anthropic's automatic prompt caching and
+images.
 
 ---
 

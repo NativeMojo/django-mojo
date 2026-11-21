@@ -27,6 +27,8 @@ REASONING_EFFORTS = frozenset({"off", "low", "medium"})
 BEDROCK_CREDENTIAL_IDENTITY = "installation-aws-chain"
 BEDROCK_CAPABILITIES = ({"text"}, {"text", "tools"}, {"text", "images"},
                         {"text", "tools", "images"})
+# A Claude route may add "prompt_cache" to any of those; Nova may not.
+BEDROCK_CACHE_CAPABILITY = "prompt_cache"
 # A Bedrock tool loop may answer this many tool rounds unless the caller
 # passes its own max_tool_rounds (1-32).
 BEDROCK_MAX_TOOL_ROUNDS = 8
@@ -207,9 +209,12 @@ def parse_policy(raw=None):
             _deny("policy_invalid")
         if provider == "bedrock":
             efforts = route["reasoning_efforts"]
+            cached = BEDROCK_CACHE_CAPABILITY in capabilities
             if route["credential"] != "aws" \
-                    or set(capabilities) not in BEDROCK_CAPABILITIES \
+                    or set(capabilities) - {BEDROCK_CACHE_CAPABILITY} \
+                    not in BEDROCK_CAPABILITIES \
                     or route["model"] not in BEDROCK_MODELS \
+                    or (cached and model_family(route["model"]) != "claude") \
                     or not isinstance(route["region"], str) \
                     or not AWS_REGION_PATTERN.fullmatch(route["region"]) \
                     or not isinstance(efforts, list) or not efforts \
@@ -857,8 +862,14 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
             adapter = factory(provider_name, api_key=credential)
         if adapter is None:
             _deny("provider_unsupported")
-        cache_enabled = provider_name != "bedrock" and bool(settings.get(
-            "LLM_ADMIN_PROMPT_CACHE_ENABLED", True, kind="bool"))
+        if provider_name == "bedrock":
+            # Bedrock caches only on a route that declares prompt_cache, and
+            # only where the caller marks it; the Anthropic setting below
+            # does not reach Bedrock.
+            cache_enabled = BEDROCK_CACHE_CAPABILITY in route["capabilities"]
+        else:
+            cache_enabled = bool(settings.get(
+                "LLM_ADMIN_PROMPT_CACHE_ENABLED", True, kind="bool"))
         required = _required_capabilities(messages, tools, cache_enabled)
         if not required.issubset(set(route["capabilities"])) \
                 or any(not adapter.supports(item) for item in required):
@@ -886,7 +897,8 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
                     messages=messages, model=route["model"], max_tokens=max_tokens,
                     system=system, tools=tools, reasoning_effort=reasoning_effort,
                     timeout=min(policy["shared"]["timeout_seconds"],
-                                limits["timeout_seconds"]))
+                                limits["timeout_seconds"]),
+                    cache_enabled=cache_enabled)
             except ProviderError:
                 _deny("provider_rejected")
         redis = redis or get_connection()

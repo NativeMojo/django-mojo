@@ -86,8 +86,10 @@ def test_registry_adds_bedrock_without_constructing_any_sdk(opts):
         and anthropic.api_key == "test-only-placeholder" and anthropic.client is None, \
         "the Anthropic constructor contract must remain unchanged and lazy"
     assert get_provider("unknown") is None, "unknown provider names must remain unsupported"
-    assert bedrock.capabilities == frozenset({"text", "images", "tools", "stream"}), \
-        f"Bedrock adapter must advertise text, images, tools and stream, got {bedrock.capabilities}"
+    assert bedrock.capabilities == frozenset({"text", "images", "tools", "stream",
+                                              "prompt_cache"}), \
+        f"Bedrock adapter must advertise text, images, tools, stream and prompt_cache, " \
+        f"got {bedrock.capabilities}"
 
 
 @th.django_unit_test()
