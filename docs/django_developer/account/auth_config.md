@@ -260,6 +260,15 @@ Endpoints that enforce this:
 - `POST /api/auth/login` (password, SMS, passkey, magic, Google, Apple, GitHub)
 - `POST /api/auth/register` (password, Google, Apple, GitHub)
 
+Sign-up is stricter. `POST /api/auth/register` is the `password` registration
+method, and it refuses a **new** account when the resolved config leaves
+`password` out of `registration.methods` — with or without a group, using the
+deployment's `AUTH_CONFIG` when no group is named, exactly like
+`registration.enabled`. Both refusals are the same 403 ("Registration is not
+enabled"). A returning phone that proves its number still signs in. Invites,
+admin-created accounts and OAuth sign-up do not use this endpoint (OAuth has its
+own check when the group is named).
+
 ---
 
 ## Passkey Enrollment Page
