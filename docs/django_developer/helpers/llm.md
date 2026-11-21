@@ -212,8 +212,9 @@ from `llm.image_block()`, in `llm.call()`, `llm.stream()` and tool loops alike;
 see [Image input](../security/llm_safety.md#image-input).
 System content accepts the same text forms. Tool turns are covered in
 [Tool use on Bedrock](#tool-use-on-bedrock) and streaming in
-[Streaming](#streaming). Documents (PDF), arbitrary model fields, and explicit
-cache controls are unsupported. The adapter sends no Bedrock guardrail
+[Streaming](#streaming), and cache markers on a Claude caching route in
+[Prompt caching on Bedrock](#prompt-caching-on-bedrock). Documents (PDF) and
+arbitrary model fields are unsupported. The adapter sends no Bedrock guardrail
 configuration or application content filter.
 
 The response has `provider="bedrock"`, the pinned `model`, AWS request `id`,
@@ -223,8 +224,8 @@ request), and these usage classes:
 | Field | Meaning |
 |---|---|
 | `input_tokens` | Input outside the cache classes |
-| `cache_read_input_tokens` | Implicit cache reads |
-| `cache_creation_input_tokens` | Implicit cache writes |
+| `cache_read_input_tokens` | Input read from the cache (Bedrock's `cacheReadInputTokens`) |
+| `cache_creation_input_tokens` | Input written to the cache (Bedrock's `cacheWriteInputTokens`) |
 | `output_tokens` | All billed output, including reasoning |
 
 Total input is the sum of the three input classes. Reasoning/redacted blocks
@@ -233,8 +234,8 @@ to add to output. `end_turn` is complete; a text-bearing `max_tokens` result
 is partial; `tool_use` asks the caller to run tools. Whitespace-only text
 blocks are dropped from `content`. Empty, reasoning-only, filtered,
 malformed, over-cap, or over-1-MiB final output raises a safe provider error,
-retaining any validated billed usage in the ledger. No explicit cache checkpoints are sent, but implicit
-cache usage is still accounted for.
+retaining any validated billed usage in the ledger. Cache reads and writes are
+recorded on the ledger row and charged to the token budgets like other input.
 
 An application-owned handler published with the existing `jobs.publish` can
 make this call; keep AWS credentials out of browser input, job payloads, and
@@ -365,6 +366,55 @@ Nova 2 reports reasoning only as `[REDACTED]`, and Claude's thinking blocks
 carry a signature; the facade never returns reasoning blocks on either
 family, so they are not echoed into tool turns. Bedrock accepts a Claude tool
 transcript with its thinking blocks removed.
+
+### Prompt caching on Bedrock
+
+On a Claude route whose policy lists `"prompt_cache"` (see
+[Prompt caching on Claude routes](../security/llm_safety.md#prompt-caching-on-claude-routes)),
+a caller marks where the cacheable part of its prompt ends with Anthropic's own
+block-level marker, `cache_control`, on a text block of the system prompt or of
+a message:
+
+```python
+system = [{"type": "text", "text": CALL_INSTRUCTIONS}]
+messages = [{"role": "user", "content": [
+    {"type": "text", "text": transcript_so_far,
+     "cache_control": {"type": "ephemeral", "ttl": "1h"}},
+    {"type": "text", "text": question},
+]}]
+response = llm.call(messages, system=system, feature="my_maestro_call",
+                    operation="answer", max_tokens=1024)
+usage = response["usage"]  # cache_read_input_tokens, cache_creation_input_tokens
+```
+
+Each marker becomes a Converse `cachePoint` block right after its text block:
+
+| Marker | Sent to Bedrock |
+|---|---|
+| `{"type": "ephemeral"}` | `{"cachePoint": {"type": "default"}}` (Bedrock's default 5-minute TTL) |
+| `{"type": "ephemeral", "ttl": "5m"}` | `{"cachePoint": {"type": "default", "ttl": "5m"}}` |
+| `{"type": "ephemeral", "ttl": "1h"}` | `{"cachePoint": {"type": "default", "ttl": "1h"}}` |
+
+The marker itself is not sent, and the caller's messages are not changed. Each
+cache hit resets the TTL. Everything up to a checkpoint is cached, read in the
+order system prompt, then messages.
+
+Refused with `provider_rejected` before any reservation, ledger row or AWS call:
+
+- more than four markers in one request;
+- a longer TTL after a shorter one (a `1h` marker after a `5m` or default one,
+  counting the system prompt first);
+- any other marker shape, key or TTL;
+- a marker anywhere but a text block of the system prompt or a message: on a
+  message, a tool, an image, a `tool_use` or `tool_result` block, or inside a
+  tool result's content;
+- a `cachePoint` block written by the caller;
+- any marker on a route that does not list `"prompt_cache"`.
+
+A prefix shorter than the model's minimum (512 tokens or more, depending on
+the model) is not an error: the call succeeds and nothing is cached, so both
+cache counts are 0. Requests with no marker are sent exactly as before.
+Streaming takes the same markers.
 
 ## `model_choices()` — picker suggestions
 

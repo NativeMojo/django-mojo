@@ -162,7 +162,10 @@ Bedrock requires exactly these six route keys, `credential="aws"`, and
 `capabilities` of `["text"]`, optionally plus `"tools"`, `"images"`, or both,
 in any order. Adding `"tools"` lets
 callers declare tools (see [Tool use on Bedrock](../helpers/llm.md#tool-use-on-bedrock));
-adding `"images"` admits image input (see [Image input](#image-input)). Either
+adding `"images"` admits image input (see [Image input](#image-input)). A
+Claude route may also add `"prompt_cache"` (see
+[Prompt caching on Claude routes](#prompt-caching-on-claude-routes)); on a Nova
+route it is `policy_invalid`. Each of these
 changes the policy hash, so activate the deployed policy again. A tool
 loop of N rounds makes N + 1 calls under one operation id, so give the
 feature envelope a `max_loop_calls` of at least that. `model` must be one of
@@ -243,6 +246,42 @@ Claude image limits: an image over 3,750,000 raw bytes (Bedrock's 5 MB base64
 limit for Claude) is `provider_rejected` before any reservation, and each
 image reserves 4800 tokens instead of Nova's 1600.
 
+### Prompt caching on Claude routes
+
+A Claude route that lists `"prompt_cache"` lets callers mark where the cacheable
+part of a prompt ends, so a repeated question reads that part from Bedrock's
+cache instead of paying for it again:
+
+```python
+LLM_SAFETY_POLICY["routes"]["my_maestro_call"] = {
+    "provider": "bedrock",
+    "model": "us.anthropic.claude-sonnet-5-5",
+    "credential": "aws",
+    "capabilities": ["text", "prompt_cache"],
+    "region": "us-east-1",
+    "reasoning_efforts": ["off", "low"],
+}
+```
+
+Adding `"prompt_cache"` is an ordinary policy change: the hash rule, the
+emergency stop and activation are the same as for any other capability. The
+caller's marker and the Converse request it becomes are described in
+[Prompt caching on Bedrock](../helpers/llm.md#prompt-caching-on-bedrock).
+Nothing is cached without a marker: Converse has no automatic caching, so a
+caching route sends the same request as before until a caller marks one.
+
+- Only Claude routes may declare it; Nova with `"prompt_cache"` is
+  `policy_invalid`.
+- On a route that does not declare it, a marker is `provider_rejected` before
+  any reservation, exactly as before, and the request is unchanged.
+- `LLM_ADMIN_PROMPT_CACHE_ENABLED` governs Anthropic's automatic caching only.
+  It never turns Bedrock caching on or off; remove `"prompt_cache"` from the
+  route to stop it.
+- Cache reads and writes still count against every `tokens_*` budget (see
+  [How token budgets are charged](#how-token-budgets-are-charged)). Budgets
+  count tokens, not price: a 1-hour cache write costs more per token on the
+  AWS bill than a 5-minute one, and a cache read costs less.
+
 ### Enabling Anthropic models in the AWS account
 
 Each Anthropic model is enabled once per AWS account, by an administrator:
@@ -295,8 +334,9 @@ See [the call and response contract](../helpers/llm.md#bedrock-reasoning).
 The adapter supports text, image blocks in user messages on an image route,
 caller-declared tools, and streamed answers. It
 suppresses reasoning content from the final answer and from the stream, and
-retains billed reasoning within `usage.output_tokens`. It sends no explicit
-cache controls, guardrail configuration, or application content filter.
+retains billed reasoning within `usage.output_tokens`. It sends cache
+checkpoints only where a caller marks them on a `"prompt_cache"` Claude route,
+and never a guardrail configuration or application content filter.
 Streaming needs no extra policy capability, but `ConverseStream` needs the
 IAM action `bedrock:InvokeModelWithResponseStream` on the same inference
 profile and destination model resources that `bedrock:InvokeModel` covers.
