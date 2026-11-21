@@ -206,13 +206,14 @@ def _auth_context(request, group=None, include_registration_extras=False):
     login_methods = list(cfg.login.methods or [])
     registration_methods = list(cfg.registration.methods or [])
     registration_enabled = bool(cfg.registration.enabled)
-    # The register page follows /api/auth/register (#11790): the form is the
-    # `password` method. Provider buttons follow registration.methods, as
-    # before; with registration closed there are none.
+    # The register page follows /api/auth/register and OAuth begin (#11790):
+    # the form is the `password` method, and a provider button needs the
+    # provider in both lists, because begin is gated by login.methods once the
+    # page names its group. With registration closed there are none.
     register_form_enabled = registration_enabled and 'password' in registration_methods
     register_providers = [
         p for p in ('google', 'apple', 'github', 'microsoft')
-        if p in registration_methods
+        if p in registration_methods and p in login_methods
     ] if registration_enabled else []
     registration_open = register_form_enabled or bool(register_providers)
     request_data = request.DATA if hasattr(request, 'DATA') else request.GET

@@ -229,15 +229,25 @@ def test_register_microsoft_button(opts):
         'id="btn-microsoft"' not in html,
         "microsoft is not a default registration method, so the default "
         "register page must not render the Microsoft button")
+    # Sign-up only: begin is gated by login.methods, so no button (#11790).
     opts.group.metadata = {"auth_config": {
         "registration": {"methods": ["password", "microsoft"]}}}
     opts.group.save(update_fields=["metadata"])
     try:
         html = _render('account/register.html', group=opts.group)
         assert_true(
+            'id="btn-microsoft"' not in html,
+            "a group with microsoft in registration.methods but not login.methods "
+            "must not render a Microsoft button that can only fail at OAuth begin")
+        opts.group.metadata = {"auth_config": {
+            "login": {"methods": ["password", "microsoft"]},
+            "registration": {"methods": ["password", "microsoft"]}}}
+        opts.group.save(update_fields=["metadata"])
+        html = _render('account/register.html', group=opts.group)
+        assert_true(
             'id="btn-microsoft"' in html,
-            "a group whose registration.methods include microsoft must render "
-            "the Microsoft button on the register page")
+            "a group with microsoft in both registration.methods and login.methods "
+            "must render the Microsoft button on the register page")
         assert_true(
             'startMicrosoftLogin' in html,
             "the register page must wire the Microsoft button to MojoAuth.startMicrosoftLogin")

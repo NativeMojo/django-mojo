@@ -716,6 +716,8 @@ to the inline "Completing sign-in…" message.
 
 - Fields and identity field driven by `registration.fields` / `registration.identity_field`
 - Methods rendered from `registration.methods`: `password`, `google`, `apple`, `github`, `microsoft`.
+  A provider's sign-up button also needs the provider in `login.methods`,
+  because OAuth `begin` is gated by `login.methods` once the page names its group.
   The form is the `password` method (email + password, SMS-verified phone and
   passwordless schemas alike): without `password` the page shows no form, and
   `POST /api/auth/register` refuses a new account. A returning phone still
