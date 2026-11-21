@@ -108,3 +108,43 @@ def test_hosted_oauth_templates_forward_group(opts):
             found += 1
             assert "group_uuid:" in match.group(2), f"{name}: {match.group(0)} must pass the page's group_uuid"
     assert found >= 9, f"expected the four buttons on login and register plus the retry, found {found}"
+
+
+# Today's bodies for the link and code sends, with no options (#11789).
+_DEVICE = {"bouncer_token": "test-bouncer", "duid": "test-device"}
+_SEND_BODIES = {
+    "magic": ("/api/auth/magic/send", {"email": "test-user@example.test"}),
+    "phone-register": ("/api/auth/phone/register/start", {"phone": "+15555550100"}),
+    "forgot-code": ("/api/auth/forgot", {"method": "code", "email": "test-user@example.test"}),
+    "forgot-code-sms": ("/api/auth/forgot", {"method": "code", "phone_number": "+15555550100", "channel": "sms"}),
+    "forgot-link": ("/api/auth/forgot", {"email": "test-user@example.test", "method": "link"}),
+}
+
+
+@th.django_unit_test("hosted magic link, phone sign-up start and forgot password carry the group")
+def test_hosted_sends_group(opts):
+    for method, (path, body) in _SEND_BODIES.items():
+        calls = _payloads(method, True)
+        assert len(calls) == 1 and calls[0]["url"].endswith(path), (method, calls)
+        assert calls[0]["body"] == {**body, "group_uuid": "test-brand-4622", **_DEVICE}, (method, calls[0])
+
+
+@th.django_unit_test("magic link, phone sign-up start and forgot password without options send today's body")
+def test_hosted_sends_legacy(opts):
+    for method, (path, body) in _SEND_BODIES.items():
+        calls = _payloads(method, False)
+        assert len(calls) == 1 and calls[0]["url"].endswith(path), (method, calls)
+        assert calls[0]["body"] == {**body, **_DEVICE}, (method, calls[0])
+
+
+@th.django_unit_test("hosted pages pass their group on every link and code send")
+def test_hosted_send_templates_forward_group(opts):
+    import re
+    sends = re.compile(r"MojoAuth\.(sendMagicLink|startPhoneRegister|forgotPasswordCode|forgotPasswordLink)\(([^)]*)\)")
+    found = 0
+    for name in ("login.html", "register.html"):
+        source = (ROOT / "mojo/apps/account/templates/account" / name).read_text()
+        for match in sends.finditer(source):
+            found += 1
+            assert "group_uuid:" in match.group(2), f"{name}: {match.group(0)} must pass the page's group_uuid"
+    assert found >= 5, f"expected magic link, two forgot-code, forgot-link and phone start, found {found}"

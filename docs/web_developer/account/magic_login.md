@@ -28,6 +28,12 @@ Send an origin only (`https://app.example.com`) — a path in `webapp_base_url`
 is dropped. If your frontend's links land on the wrong site, ask the operator
 to add your origin to `WEBAPP_ALLOWED_ORIGINS`.
 
+The hosted `/auth` page sends its own `group_uuid`, so its emailed links land
+on that group's own website when the group is in the account's tenant (or its
+site is on the operator's list), and a group whose `login.methods` leaves out
+`magic` gets a 403 before any lookup. With `mojo-auth.js`, pass it as
+`MojoAuth.sendMagicLink(email, { group_uuid })`.
+
 **Email (default):**
 
 ```json
