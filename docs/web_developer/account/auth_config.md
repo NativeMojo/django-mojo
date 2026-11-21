@@ -84,6 +84,11 @@ render. Available login tokens: `password`, `sms`, `passkey`, `magic`,
 `google`, `apple`, `github`; registration tokens: `password`, `google`,
 `apple`, `github`. Use `theme` to apply branding.
 
+The `password` registration token covers every `POST /api/auth/register`
+sign-up: the email + password form, phone sign-up and passwordless schemas.
+Without it the server refuses a new account (the same 403 as registration
+closed), so hide your sign-up form too.
+
 Hosted pages offer four layout presets: `minimal`, `compact`,
 `branded-panel`, and `editorial`. Appearance is independent: `light`, `dark`,
 or `system` (the default). Legacy stored values remain compatible: `card`

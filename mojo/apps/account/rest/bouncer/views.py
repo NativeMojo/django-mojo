@@ -205,6 +205,17 @@ def _auth_context(request, group=None, include_registration_extras=False):
     theme = cfg.theme
     login_methods = list(cfg.login.methods or [])
     registration_methods = list(cfg.registration.methods or [])
+    registration_enabled = bool(cfg.registration.enabled)
+    # The register page follows /api/auth/register and OAuth begin (#11790):
+    # the form is the `password` method, and a provider button needs the
+    # provider in both lists, because begin is gated by login.methods once the
+    # page names its group. With registration closed there are none.
+    register_form_enabled = registration_enabled and 'password' in registration_methods
+    register_providers = [
+        p for p in ('google', 'apple', 'github', 'microsoft')
+        if p in registration_methods and p in login_methods
+    ] if registration_enabled else []
+    registration_open = register_form_enabled or bool(register_providers)
     request_data = request.DATA if hasattr(request, 'DATA') else request.GET
     configured_layout = auth_config.normalize_layout(theme.layout or 'minimal')
     configured_appearance = auth_config.normalize_appearance(
@@ -302,7 +313,12 @@ def _auth_context(request, group=None, include_registration_extras=False):
             'sms' if ('password' not in login_methods and 'sms' in login_methods)
             else 'signin'),
         'registration_methods': registration_methods,
-        'registration_enabled': bool(cfg.registration.enabled),
+        'registration_enabled': registration_enabled,
+        'register_form_enabled': register_form_enabled,
+        'register_providers': register_providers,
+        # Something to sign up with here; the login page shows its register
+        # links only then.
+        'registration_open': registration_open,
         'passkey_prompt': cfg.registration.passkey_prompt or 'off',
         'auth_url': f'/{login_path}{switcher_qs}',
         'register_url': f'/{register_path}{switcher_qs}',

@@ -715,7 +715,15 @@ to the inline "Completing sign-in…" message.
 ### Registration page (`/register`)
 
 - Fields and identity field driven by `registration.fields` / `registration.identity_field`
-- Methods rendered from `registration.methods`: `password`, `google`, `apple`, `github`
+- Methods rendered from `registration.methods`: `password`, `google`, `apple`, `github`, `microsoft`.
+  A provider's sign-up button also needs the provider in `login.methods`,
+  because OAuth `begin` is gated by `login.methods` once the page names its group.
+  The form is the `password` method (email + password, SMS-verified phone and
+  passwordless schemas alike): without `password` the page shows no form, and
+  `POST /api/auth/register` refuses a new account. A returning phone still
+  signs in through that endpoint.
+- When there is nothing to sign up with (no `password` and no provider, or
+  `registration.enabled` false) the page says "Sign-up isn't available here."
 - Terms & conditions checkbox (when `theme.terms_url` is set)
 - When `registration.passkey_prompt` is `"optional"` or `"required"`, redirects
   to `/passkey` after signup
@@ -781,8 +789,9 @@ Methods absent from `login.methods` / `registration.methods` are excluded from
 the rendered HTML server-side. When all OAuth providers and passkeys are
 absent, the "or continue with" divider is excluded entirely.
 
-When `registration.enabled` is `false`, the hosted login page also omits every
-registration link, including the main switcher and the SMS view's "Create an
+When there is nothing to sign up with (`registration.enabled` is `false`, or
+`registration.methods` has neither `password` nor a provider), the hosted login
+page also omits every registration link, including the main switcher and the SMS view's "Create an
 account" escape path. This keeps invite-only and externally provisioned groups
 from advertising a registration flow they do not allow.
 
