@@ -43,6 +43,10 @@ MAX_TEXT_BYTES = 1024 * 1024
 MAX_TOOLS = 64
 MAX_TOOL_INPUT_BYTES = 256 * 1024
 MAX_CONTENT_BLOCKS = 128
+# Claude on Bedrock takes at most four cache checkpoints per request, and a
+# longer TTL may not follow a shorter one. Longest first.
+MAX_CACHE_POINTS = 4
+CACHE_TTLS = ("1h", "5m")
 REGION_PATTERN = re.compile(r"^[a-z]{2}(?:-[a-z]+)+-[1-9][0-9]*$")
 REQUEST_ID_PATTERN = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._:-]{0,127}$")
 TOOL_NAME_PATTERN = re.compile(r"[a-zA-Z0-9_-]{1,64}")
@@ -104,19 +108,55 @@ def _usage(response):
     })
 
 
-def _text_blocks(content):
+def _cache_point(marker):
+    """The Converse checkpoint for one text block's ``cache_control`` marker.
+
+    The marker is Anthropic's own: ``{"type": "ephemeral"}``, optionally with
+    ``"ttl": "5m"`` or ``"1h"``. Bedrock's default TTL is 5 minutes.
+    """
+    if not isinstance(marker, dict) or marker.get("type") != "ephemeral" \
+            or set(marker) - {"type", "ttl"} \
+            or ("ttl" in marker and marker["ttl"] not in CACHE_TTLS):
+        raise ProviderError("provider_rejected")
+    point = {"type": "default"}
+    if "ttl" in marker:
+        point["ttl"] = marker["ttl"]
+    return {"cachePoint": point}
+
+
+def _text_blocks(content, cache=False):
+    """Text as Converse blocks. With ``cache``, a block's marker becomes a
+    checkpoint right after it; without, a marker is refused like any key."""
     if isinstance(content, str):
         content = [{"type": "text", "text": content}]
     if not isinstance(content, list) or not content:
         raise ProviderError("provider_rejected")
     result = []
     for block in content:
+        point = None
+        if cache and isinstance(block, dict) and "cache_control" in block:
+            point = _cache_point(block["cache_control"])
+            block = {key: value for key, value in block.items() if key != "cache_control"}
         if not isinstance(block, dict) or set(block) != {"type", "text"} \
                 or block.get("type") != "text" \
                 or not isinstance(block.get("text"), str) or not block["text"].strip():
             raise ProviderError("provider_rejected")
         result.append({"text": block["text"]})
+        if point is not None:
+            result.append(point)
     return result
+
+
+def _check_cache_points(request):
+    """At most MAX_CACHE_POINTS, and no longer TTL after a shorter one.
+
+    Bedrock reads the system prompt before the messages, in order.
+    """
+    blocks = list(request.get("system", []))
+    blocks += [block for message in request["messages"] for block in message["content"]]
+    ttls = [block["cachePoint"].get("ttl", "5m") for block in blocks if "cachePoint" in block]
+    if len(ttls) > MAX_CACHE_POINTS or ttls != sorted(ttls, key=CACHE_TTLS.index):
+        raise ProviderError("provider_rejected")
 
 
 def _image_block(block):
@@ -170,7 +210,7 @@ def _tool_config(tools):
     return {"tools": specs}, frozenset(names)
 
 
-def _message_blocks(role, content, tool_names):
+def _message_blocks(role, content, tool_names, cache=False):
     """Translate one message; returns (blocks, tool_use ids, tool_result ids)."""
     if isinstance(content, str):
         return _text_blocks(content), [], []
@@ -180,7 +220,7 @@ def _message_blocks(role, content, tool_names):
     for block in content:
         kind = block.get("type") if isinstance(block, dict) else None
         if kind == "text":
-            blocks.extend(_text_blocks([block]))
+            blocks.extend(_text_blocks([block], cache))
         elif kind == "image" and role == "user":
             blocks.append(_image_block(block))
         elif kind == "tool_use" and role == "assistant" and tool_names:
@@ -209,7 +249,7 @@ def _message_blocks(role, content, tool_names):
     return blocks, used, answered
 
 
-def _translate_messages(messages, tool_names):
+def _translate_messages(messages, tool_names, cache=False):
     """Every tool request is answered by exactly the next user message."""
     if not isinstance(messages, list) or not messages:
         raise ProviderError("provider_rejected")
@@ -220,7 +260,7 @@ def _translate_messages(messages, tool_names):
                 or message.get("role") not in ("user", "assistant"):
             raise ProviderError("provider_rejected")
         blocks, used, answered = _message_blocks(
-            message["role"], message["content"], tool_names)
+            message["role"], message["content"], tool_names, cache)
         if message["role"] == "user":
             if len(answered) != len(set(answered)) or set(answered) != set(pending):
                 raise ProviderError("provider_rejected")
@@ -523,7 +563,7 @@ class BedrockStream:
 
 class BedrockProvider(ProviderAdapter):
     name = "bedrock"
-    capabilities = frozenset({"text", "images", "tools", "stream"})
+    capabilities = frozenset({"text", "images", "tools", "stream", "prompt_cache"})
 
     def __init__(self, region=None, client=None, client_factory=None):
         # Construction precedes guard admission; credentials and SDK clients
@@ -612,17 +652,23 @@ class BedrockProvider(ProviderAdapter):
                             detail=detail) from None
 
     def _request(self, messages, model, max_tokens, system, tools, reasoning_effort,
-                 timeout):
-        """Validate one request before any SDK work; returns (request, names, timeout)."""
+                 timeout, cache_enabled=False):
+        """Validate one request before any SDK work; returns (request, names, timeout).
+
+        ``cache_enabled`` is the guard's word that the route declares
+        ``prompt_cache``. Only then, and only for Claude, does a text block's
+        ``cache_control`` marker become a checkpoint.
+        """
         if not isinstance(model, str) or model not in BEDROCK_MODELS \
                 or not isinstance(reasoning_effort, str) \
                 or reasoning_effort not in REASONING_EFFORTS \
                 or isinstance(max_tokens, bool) or not isinstance(max_tokens, int) \
                 or not 1 <= max_tokens <= MAX_OUTPUT_TOKENS:
             raise ProviderError("provider_rejected")
+        cache = cache_enabled is True and model_family(model) == "claude"
         tool_config, tool_names = _tool_config(tools)
         request = {"modelId": model,
-                   "messages": _translate_messages(messages, tool_names),
+                   "messages": _translate_messages(messages, tool_names, cache),
                    "inferenceConfig": {"maxTokens": max_tokens}}
         if model_family(model) == "claude" and any(
                 len(block["image"]["source"]["bytes"]) > CLAUDE_MAX_IMAGE_BYTES
@@ -630,7 +676,9 @@ class BedrockProvider(ProviderAdapter):
                 if "image" in block):
             raise ProviderError("provider_rejected")
         if system is not None and system != "":
-            request["system"] = _text_blocks(system)
+            request["system"] = _text_blocks(system, cache)
+        if cache:
+            _check_cache_points(request)
         if tool_config is not None:
             request["toolConfig"] = tool_config
         extra = reasoning_fields(model, reasoning_effort)
@@ -652,16 +700,17 @@ class BedrockProvider(ProviderAdapter):
         return request, tool_names, timeout
 
     def check_request(self, messages, model, max_tokens, system=None, tools=None,
-                      timeout=None, reasoning_effort="off"):
+                      timeout=None, reasoning_effort="off", cache_enabled=False):
         """Validate a request without any SDK work, so the guard can refuse it
         before reserving budget. Raises ProviderError("provider_rejected")."""
         self._request(messages, model, max_tokens, system, tools, reasoning_effort,
-                      timeout)
+                      timeout, cache_enabled)
 
     def call(self, messages, model, max_tokens, system=None, tools=None,
              cache_enabled=False, timeout=None, reasoning_effort="off"):
         request, tool_names, timeout = self._request(
-            messages, model, max_tokens, system, tools, reasoning_effort, timeout)
+            messages, model, max_tokens, system, tools, reasoning_effort, timeout,
+            cache_enabled)
         try:
             response = self._client(timeout).converse(**request)
         except Exception as err:
@@ -686,7 +735,8 @@ class BedrockProvider(ProviderAdapter):
                cache_enabled=False, timeout=None, reasoning_effort="off"):
         """Dispatch converse_stream; errors before the first event raise here."""
         request, tool_names, timeout = self._request(
-            messages, model, max_tokens, system, tools, reasoning_effort, timeout)
+            messages, model, max_tokens, system, tools, reasoning_effort, timeout,
+            cache_enabled)
         started = time.monotonic()
         try:
             response = self._client(timeout).converse_stream(**request)
