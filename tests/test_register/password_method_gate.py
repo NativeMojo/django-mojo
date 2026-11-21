@@ -315,3 +315,17 @@ def test_register_form_handler_guarded(opts):
     source = (ROOT / "mojo/apps/account/templates/account/register.html").read_text()
     assert_true('$("form-register").addEventListener' not in source,
                 "the form handler must be guarded so the provider buttons attach without the form")
+
+
+@th.django_unit_test("pages: a sign-up-only provider (not in login.methods) leaves nothing to sign up with")
+def test_signup_only_provider_is_unavailable(opts):
+    # Brenda's case on 5356a4cb: begin is gated by login.methods, so that
+    # provider can't sign anyone up; the page must say so, not show a blank.
+    config = {"registration": {"enabled": True, "methods": ["microsoft"]},
+              "login": {"methods": ["password"]}}
+    html = _render("account/register.html", config)
+    assert_true(UNAVAILABLE in html, "the page must say sign-up isn't available")
+    assert_true('id="btn-microsoft"' not in html, "no Microsoft button that can only fail at begin")
+    assert_true('id="form-register"' not in html, "no form")
+    login = _render("account/login.html", config)
+    assert_true('href="/register' not in login, "the login page must drop its register links")
