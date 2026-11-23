@@ -142,6 +142,8 @@ Set a specific thread count with `-j N`:
 ./bin/run_tests -j 6   # run up to 6 modules at once
 ```
 
+Before a parallel run starts its threads, the runner imports the project's URL conf once in the main thread, which loads every installed app's `rest` package the way the server does at start. Two threads can otherwise make the first import of two submodules of one `rest` package at the same moment and fail with "deadlock detected by _ModuleLock", because each package's `__init__` imports all of its submodules. If the URL conf cannot be imported, the runner prints one warning and the run carries on as before. Serial and `-v` runs skip this step.
+
 Modules marked `serial` in their `TESTIT` config always run sequentially after all parallel modules complete, regardless of `-j`.
 
 `@th.django_unit_setup` and `@th.django_unit_test` return the current worker

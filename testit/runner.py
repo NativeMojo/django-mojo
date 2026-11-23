@@ -2415,6 +2415,30 @@ def _dir_has_python(path):
     return any(entry.endswith(".py") for entry in os.listdir(path))
 
 
+def _warm_imports(opts, resolver=None):
+    """Import the URL conf in the main thread before the parallel pool (#11810).
+
+    Loading ROOT_URLCONF imports every installed app's ``rest`` package, as
+    the server does at start. Without it, two worker threads can make the
+    first import of two submodules of one ``rest`` package at once: each
+    holds its child's module lock while it imports the parent, the parent
+    star-imports the other child, and CPython raises ``_DeadlockError``.
+
+    ``resolver`` is a test-owned seam (defaults to ``django.urls.get_resolver``).
+    A failure only warns: the run carries on exactly as it did before.
+    """
+    try:
+        from django.apps import apps
+        if not apps.ready:
+            return
+        if resolver is None:
+            from django.urls import get_resolver as resolver
+        resolver().url_patterns
+    except Exception as err:
+        print(f"  warning: URL conf warm-up failed, parallel threads import "
+              f"lazily ({type(err).__name__}: {err})")
+
+
 def _previous_module_durations():
     """Per-module durations from the last run's report, or {} (maestro #2789).
 
@@ -2934,6 +2958,11 @@ def main(opts):
         prev_durations = _previous_module_durations()
         parallel_modules.sort(
             key=lambda r: -prev_durations.get(r.name, float("inf")))
+
+    # Concurrent first imports of one app's rest package can deadlock on
+    # CPython's module locks; import them once here, before any thread (#11810).
+    if use_parallel and parallel_modules:
+        _warm_imports(opts)
 
     # --- Execute ---
     # Slow-test stack-dump watchdog (maestro #2790). Off with -s/-v (serial
