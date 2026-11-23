@@ -241,8 +241,9 @@ def _tool_config(tools):
 
     ``name``, ``description`` and ``input_schema`` are required; any other
     key is dropped, never sent. A ``type`` other than ``custom`` names a tool
-    the provider would run itself, and ``cache_control`` changes the cost:
-    both are refused.
+    the provider would run itself, ``cache_control`` changes the cost and
+    ``strict`` promises input that matches the schema, which this adapter
+    does not send: all three are refused.
     """
     if tools is None or tools == []:
         return None, frozenset()
@@ -258,6 +259,9 @@ def _tool_config(tools):
         _no_cache_marker(tool, "a tool spec")
         if tool.get("type", "custom") != "custom":
             _refuse("only custom tools can be declared")
+        if tool.get("strict") not in (None, False):
+            # Dropping it would silently lose the schema guarantee.
+            _refuse("strict tool schemas are not supported")
         name = tool.get("name")
         description = tool.get("description")
         schema = tool.get("input_schema")
@@ -315,6 +319,9 @@ def _message_blocks(role, content, tool_names, cache=False):
                 _refuse("a tool_result is_error must be a boolean")
             if "content" not in block:
                 _refuse("a tool_result needs content")
+            if isinstance(block["content"], list):
+                for part in block["content"]:
+                    _no_cache_marker(part, "a tool_result's content")
             result = {"toolUseId": tool_use_id, "content": _text_blocks(block["content"])}
             if is_error:
                 result["status"] = "error"
@@ -323,7 +330,7 @@ def _message_blocks(role, content, tool_names, cache=False):
         elif kind in ("tool_use", "tool_result") and not tool_names:
             _refuse("a tool block needs declared tools")
         else:
-            _refuse(f"a {detail_word(kind)} block is not allowed in a {role} message")
+            _refuse(f"{detail_word(kind)} blocks are not allowed in {role} messages")
     return blocks, used, answered
 
 
@@ -823,6 +830,8 @@ class BedrockProvider(ProviderAdapter):
                     retry_after = min(3600, max(1, int(value)))
         else:
             code = "provider_failed"
+            # The class only: an SDK message can quote request parameters.
+            detail = f"unexpected {type(err).__name__}"
         raise ProviderError(code, request_id, retry_after=retry_after,
                             detail=detail) from None
 

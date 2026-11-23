@@ -260,11 +260,110 @@ def test_a_provider_run_tool_alone_is_not_a_tool_request(opts):
 
 
 @th.django_unit_test()
+def test_a_skipped_block_hides_its_later_deltas_and_proves_nothing(opts):
+    """A provider-run tool's block stays skipped whatever deltas arrive for it,
+    and its result block (an unknown start) forwards nothing either."""
+    usage = {"metadata": {"usage": {"inputTokens": 1, "outputTokens": 1}}}
+    server = {"contentBlockStart": {"start": {"toolUse": {
+        "toolUseId": "srvtoolu_1", "name": "workspace_queue", "type": "server_tool_use"}},
+        "contentBlockIndex": 1}}
+    events = [
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockDelta": {"delta": {"text": "Here it is."}, "contentBlockIndex": 0}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        server,
+        {"contentBlockDelta": {"delta": {"text": FUTURE}, "contentBlockIndex": 1}},
+        {"contentBlockDelta": {"delta": {"toolUse": {"input": "not json"}},
+                               "contentBlockIndex": 1}},
+        {"contentBlockDelta": {"delta": {"reasoningContent": {"text": FUTURE}},
+                               "contentBlockIndex": 1}},
+        {"contentBlockStop": {"contentBlockIndex": 1}},
+        {"contentBlockDelta": {"delta": {"text": FUTURE}, "contentBlockIndex": 1}},
+        {"contentBlockStart": {"start": {"toolResult": {
+            "toolUseId": "srvtoolu_1", "status": "success"}}, "contentBlockIndex": 2}},
+        {"contentBlockDelta": {"delta": {"toolResult": [{"text": FUTURE}]},
+                               "contentBlockIndex": 2}},
+        {"contentBlockStop": {"contentBlockIndex": 2}},
+        {"messageStop": {"stopReason": "end_turn"}},
+        usage,
+    ]
+    streamed = list(_bedrock(events=events).stream(MESSAGES, SONNET, 64, tools=QUEUE_TOOLS))
+    assert FUTURE not in repr(streamed) and streamed[-1]["response"]["content"] == [
+        {"type": "text", "text": "Here it is."}], \
+        f"nothing of a provider-run tool may reach the caller: {streamed}"
+
+    # Alone, a skipped block is no answer: the stop reason still needs content.
+    for stop, detail in (("end_turn", "end_turn without answer text"),
+                         ("tool_use", "a tool_use stop without a tool request")):
+        bare = [events[0], server, {"contentBlockStop": {"contentBlockIndex": 1}},
+                {"messageStop": {"stopReason": stop}}, usage]
+        err = _rejected(lambda: _bedrock(events=bare).stream(
+            MESSAGES, SONNET, 64, tools=QUEUE_TOOLS))
+        assert err.detail == detail, f"a skipped block must not satisfy {stop}: {err.detail!r}"
+
+    answer = _bedrock(response=_tool_answer([
+        {"text": "Here it is."},
+        {"toolUse": {"toolUseId": "srvtoolu_1", "name": "workspace_queue",
+                     "input": {"q": FUTURE}, "type": "server_tool_use"}},
+        {"toolResult": {"toolUseId": "srvtoolu_1", "content": [{"text": FUTURE}]}}],
+        stop="end_turn")).call(MESSAGES, SONNET, 64, tools=QUEUE_TOOLS)
+    assert answer["content"] == [{"type": "text", "text": "Here it is."}] \
+        and FUTURE not in repr(answer), \
+        f"an unstreamed provider-run tool and its result must be skipped: {answer}"
+
+
+@th.django_unit_test()
+def test_unclassified_sdk_failures_name_only_their_class(opts):
+    from mojo.helpers.llm_providers.anthropic import AnthropicProvider
+    from mojo.helpers.llm_providers.base import ProviderError
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    class _Failing:
+        def converse(self, **kwargs):
+            raise RuntimeError(f"secret {FUTURE}")
+
+    class _FailingMessages:
+        def create(self, **kwargs):
+            raise RuntimeError(f"secret {FUTURE}")
+
+    class _FailingAnthropic:
+        messages = _FailingMessages()
+
+    for run in (lambda: BedrockProvider(client=_Failing()).call(MESSAGES, NOVA, 64),
+                lambda: AnthropicProvider(client=_FailingAnthropic()).call(
+                    MESSAGES, "claude-sonnet-5-5", 64)):
+        try:
+            run()
+            assert False, "an SDK failure must raise a ProviderError"
+        except ProviderError as err:
+            assert err.code == "provider_failed" and err.detail == "unexpected RuntimeError", \
+                f"an unclassified failure keeps its class only, got {err.code}/{err.detail!r}"
+
+
+@th.django_unit_test()
+def test_cache_control_inside_a_tool_result_is_refused_by_name(opts):
+    from mojo.helpers.llm_providers.bedrock import BedrockProvider
+
+    use = {"type": "tool_use", "id": "tooluse_1", "name": "workspace_queue", "input": {}}
+    messages = [{"role": "user", "content": "Hi"},
+                {"role": "assistant", "content": [use]},
+                {"role": "user", "content": [{"type": "tool_result", "tool_use_id": "tooluse_1",
+                                              "content": [{"type": "text", "text": "two",
+                                                           "cache_control": {"type": "ephemeral"}}]}]}]
+    client = _Client(response=_production_response())
+    err = _rejected(lambda: BedrockProvider(client=client).check_request(
+        messages, SONNET, 64, tools=QUEUE_TOOLS, cache_enabled=True) or {})
+    assert err.detail == "cache_control is not allowed on a tool_result's content" \
+        and client.calls == [], \
+        f"a marker Converse cannot place must be refused by name, even on a caching route: {err.detail!r}"
+
+
+@th.django_unit_test()
 def test_unknown_keys_in_our_requests_are_dropped_not_sent(opts):
     from mojo.helpers.llm_providers.bedrock import BedrockProvider
 
     client = _Client(response=_production_response())
-    tools = [dict(QUEUE_TOOLS[0], type="custom", strict=True, future=FUTURE)]
+    tools = [dict(QUEUE_TOOLS[0], type="custom", strict=False, future=FUTURE)]
     use = {"type": "tool_use", "id": "tooluse_1", "name": "workspace_queue",
            "input": {"slim": "true"}, "caller": None, "future": FUTURE}
     messages = [
@@ -304,6 +403,10 @@ def test_unknown_keys_in_our_requests_are_dropped_not_sent(opts):
              "only custom tools can be declared"),
             ({"tools": [dict(QUEUE_TOOLS[0], cache_control={"type": "ephemeral"})]},
              "cache_control is not allowed on a tool spec"),
+            # Dropping it would silently lose the promise that input matches
+            # the schema.
+            ({"tools": [dict(QUEUE_TOOLS[0], strict=True)]},
+             "strict tool schemas are not supported"),
             ({"messages": [{"role": "user", "content": [
                 {"type": "text", "text": "Hi", "cache_control": {"type": "ephemeral"}}]}]},
              "cache_control is not allowed where caching is off")):

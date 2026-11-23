@@ -411,7 +411,7 @@ def call(messages, system=None, tools=None, model=None, max_tokens=4096, *,
     """
     Call the installation's exact policy route.
 
-    Returns the response as a dict (via model_dump()) including ``usage``.
+    Returns the adapter's normalized response dict, including ``usage``.
     Raises on API errors — callers handle their own error logic.
 
     Prompt caching is enabled by default — adds ``cache_control`` at the

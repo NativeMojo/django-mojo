@@ -345,8 +345,8 @@ while True:
 - **Declaration:** `name` (1–64 of `a-z A-Z 0-9 _ -`, unique),
   nonblank `description`, and `input_schema` (a JSON-schema object whose
   `type` is `"object"`); at most 64 tools. Any other key is dropped, never
-  sent, except `cache_control` and a `type` other than `"custom"`, which are
-  refused.
+  sent, except `cache_control`, a `type` other than `"custom"` and
+  `strict: true`, which are refused.
 - **Request:** a `tool_use` block `{"type": "tool_use", "id", "name",
   "input"}` with `stop_reason == "tool_use"`. `input` is always a JSON
   object; a tool with no input gets `{}`. Only declared names are accepted.

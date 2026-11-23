@@ -167,6 +167,9 @@ class AnthropicProvider(ProviderAdapter):
         detail = ""
         if isinstance(err, anthropic.APIStatusError):
             detail = self._error_detail(err)
+        elif code == "provider_failed":
+            # The class only: an SDK message can quote the request.
+            detail = f"unexpected {type(err).__name__}"
         retry_after = None
         if code == "provider_rate_limited":
             try:

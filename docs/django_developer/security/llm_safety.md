@@ -744,15 +744,27 @@ What the adapters read (#11908): the fields an answer needs are read and
 checked, and everything else is ignored. Extra keys at any level, unknown
 stream event kinds, unknown delta kinds and unknown content block kinds are
 skipped and never forwarded to the caller; a tool the provider runs itself
-(a Bedrock `toolUse` whose `type` is not `tool_use`) is skipped too. On our
-own requests a key the adapter does not know is dropped, never sent, except
-keys that change meaning or cost (`cache_control` where caching is off, a
-tool `type` other than `custom`), which are still refused. The safety checks
-stand: a tool request must name a declared tool, its input must be a JSON
-object without NaN or Infinity, ids match their patterns, every tool request
-is answered by exactly the next user message, usage stays within the caps,
-the stop reason must match the content, and image and cache-checkpoint
-limits are unchanged. Image blocks stay exact: an extra key on one is refused.
+(a Bedrock `toolUse` whose `type` is not `tool_use`) is skipped with all of
+its deltas. A Bedrock stream block whose start kind is unknown is read by
+its deltas: text deltas are answer text, any other kind is skipped. An
+Anthropic answer is normalized like a Bedrock one: `id`, `model`, `role`,
+`stop_reason`, `stop_sequence`, the four usage counters, and `text`,
+`tool_use`, `thinking` and `redacted_thinking` blocks with their own fields
+only.
+
+On our own requests a key the adapter does not know is dropped, never sent.
+On Bedrock, keys that change meaning or cost are still refused:
+`cache_control` anywhere but a text block on a caching route, a tool `type`
+other than `custom`, and a tool's `strict`. On Anthropic, a block kind or
+tool `type` the adapter does not know passes unchanged for the provider to
+judge, and on the blocks and tools it knows `cache_control` is kept only
+while prompt caching is on. The
+safety checks stand: a tool request must name a declared tool, its input
+must be a JSON object without NaN or Infinity, ids match their patterns,
+every tool request is answered by exactly the next user message, usage stays
+within the caps, the stop reason must match the content, and image and
+cache-checkpoint limits are unchanged. Image blocks stay exact: an extra key
+on one is refused.
 
 The rule for this text:
 
