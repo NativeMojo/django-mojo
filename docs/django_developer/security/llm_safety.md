@@ -729,7 +729,30 @@ message would render the whole response body). For Bedrock it is the AWS error c
 with the ledger id, provider, code and provider request id. Callers still see
 only the safe code, and `str()` of the provider error is still the code.
 Failures with no provider answer (timeouts, connection and credential errors,
-local refusals) leave `error_detail` blank.
+guard refusals such as budgets and breakers) leave `error_detail` blank.
+
+When the framework's own checks refuse an answer the provider did return,
+`error_detail` names the check in the framework's own words, for example
+`the answer asks for a tool that was not declared`,
+`unexpected stop reason content_filtered`, `output tokens exceed max_tokens`
+or `the stream ended without a stop reason`. An unclassified failure after
+dispatch records only the exception's class, `unexpected <ClassName>`. A
+request the adapter refuses before dispatch has no ledger row; its check is
+logged once to `llm.log` instead.
+
+What the adapters read (#11908): the fields an answer needs are read and
+checked, and everything else is ignored. Extra keys at any level, unknown
+stream event kinds, unknown delta kinds and unknown content block kinds are
+skipped and never forwarded to the caller; a tool the provider runs itself
+(a Bedrock `toolUse` whose `type` is not `tool_use`) is skipped too. On our
+own requests a key the adapter does not know is dropped, never sent, except
+keys that change meaning or cost (`cache_control` where caching is off, a
+tool `type` other than `custom`), which are still refused. The safety checks
+stand: a tool request must name a declared tool, its input must be a JSON
+object without NaN or Infinity, ids match their patterns, every tool request
+is answered by exactly the next user message, usage stays within the caps,
+the stop reason must match the content, and image and cache-checkpoint
+limits are unchanged. Image blocks stay exact: an extra key on one is refused.
 
 The rule for this text:
 

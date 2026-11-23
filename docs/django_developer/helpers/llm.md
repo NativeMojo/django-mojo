@@ -204,9 +204,11 @@ so size it for the thinking as well as the answer: a Claude reply that hits
 charged, and the ledger's `error_detail` reads
 `max_tokens reached before any answer text`.
 
-Messages have exactly `role` (`user` or `assistant`) and `content`; content is
+Messages have `role` (`user` or `assistant`) and `content`; content is
 a nonblank string or a nonempty list of `{"type": "text", "text": "..."}`
-blocks with nonblank text.
+blocks with nonblank text. Any other key on a message or a text block is
+dropped, never sent; a `cache_control` marker outside a caching route is
+refused.
 On a route that admits `images`, a user message may also carry image blocks
 from `llm.image_block()`, in `llm.call()`, `llm.stream()` and tool loops alike;
 see [Image input](../security/llm_safety.md#image-input).
@@ -234,7 +236,10 @@ to add to output. `end_turn` is complete; a text-bearing `max_tokens` result
 is partial; `tool_use` asks the caller to run tools. Whitespace-only text
 blocks are dropped from `content`. Empty, reasoning-only, filtered,
 malformed, over-cap, or over-1-MiB final output raises a safe provider error,
-retaining any validated billed usage in the ledger. Cache reads and writes are
+retaining any validated billed usage in the ledger, and the ledger's
+`error_detail` names the check that refused it. Fields a provider adds that
+the adapter does not read (extra keys, new stream event, delta or block kinds)
+are ignored and never returned, so they never break a valid answer. Cache reads and writes are
 recorded on the ledger row and charged to the token budgets like other input.
 
 An application-owned handler published with the existing `jobs.publish` can
@@ -337,13 +342,16 @@ while True:
     messages.append({"role": "user", "content": results})
 ```
 
-- **Declaration:** exactly `name` (1–64 of `a-z A-Z 0-9 _ -`, unique),
+- **Declaration:** `name` (1–64 of `a-z A-Z 0-9 _ -`, unique),
   nonblank `description`, and `input_schema` (a JSON-schema object whose
-  `type` is `"object"`); at most 64 tools. Any other key, such as
-  `cache_control`, is refused.
+  `type` is `"object"`); at most 64 tools. Any other key is dropped, never
+  sent, except `cache_control` and a `type` other than `"custom"`, which are
+  refused.
 - **Request:** a `tool_use` block `{"type": "tool_use", "id", "name",
   "input"}` with `stop_reason == "tool_use"`. `input` is always a JSON
   object; a tool with no input gets `{}`. Only declared names are accepted.
+  A tool Bedrock runs itself (a `toolUse` whose `type` is not `tool_use`) is
+  never handed to the caller.
 - **Result:** the next user message answers every `tool_use` id of the
   assistant message before it, with `{"type": "tool_result", "tool_use_id",
   "content", "is_error"}`. `content` is a nonblank string or a list of text

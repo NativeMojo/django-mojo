@@ -60,7 +60,9 @@ def test_provider_error_usage_is_complete_bounded_and_copied(opts):
     assert error.usage == USAGE, "error usage must be copied instead of borrowing mutable evidence"
     zero = {key: 0 for key in USAGE}
     assert validated_usage(zero) == zero, "complete zero usage is valid evidence, distinct from unknown"
-    malformed = [None, [], {}, dict(USAGE, unexpected=1)]
+    assert validated_usage(dict(USAGE, unexpected=1, totalTokens=26)) == USAGE, \
+        "counters a provider adds beside the four must be ignored, never copied (#11908)"
+    malformed = [None, [], {}]
     malformed.extend(dict(USAGE, input_tokens=value) for value in (
         True, -1, 1.0, "7", 2147483648))
     incomplete = dict(USAGE)
@@ -228,13 +230,6 @@ def test_invalid_answers_keep_billed_usage_and_provider_error_codes(opts):
         cases.append(response)
     for content in ([], [{"text": " "}],
                     [{"reasoningContent": {"redactedContent": b"hidden"}}],
-                    [{"reasoningContent": {"reasoningText": {}}}, {"text": "Visible"}],
-                    [{"reasoningContent": {"reasoningText": {
-                        "text": "hidden", "unexpected": "private"}}}, {"text": "Visible"}],
-                    [{"reasoningContent": {"reasoningText": {
-                        "text": "hidden", "signature": 4}}}, {"text": "Visible"}],
-                    [{"reasoningContent": {"redactedContent": b"hidden", "unknown": True}},
-                     {"text": "Visible"}],
                     [{"text": "Visible"}, {"toolUse": {"name": "not-allowed"}}],
                     [{"text": "x" * (1024 * 1024 + 1)}],
                     [{"text": "\ud800"}]):

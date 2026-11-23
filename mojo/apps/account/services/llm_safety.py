@@ -899,7 +899,12 @@ def _admit(messages, system, tools, model, max_tokens, feature, operation,
                     timeout=min(policy["shared"]["timeout_seconds"],
                                 limits["timeout_seconds"]),
                     cache_enabled=cache_enabled)
-            except ProviderError:
+            except ProviderError as err:
+                # No ledger row exists yet; the log keeps which check refused.
+                if err.detail:
+                    logger.warning(
+                        f"LLM request refused before dispatch {provider_name} "
+                        f"{feature}: {err.detail}")
                 _deny("provider_rejected")
         redis = redis or get_connection()
         resolved_model = route["model"]
@@ -979,6 +984,11 @@ def _elapsed_ms(admission):
     return int((time.monotonic() - admission["started"]) * 1000)
 
 
+def _unexpected_detail(err):
+    """An unclassified failure's class name only: never its message."""
+    return f"unexpected {type(err).__name__}"[:512]
+
+
 def _log_rejection(ledger_id, provider, code, request_id, detail):
     """One warning carrying the provider's own reason; nothing without one."""
     if detail:
@@ -1031,13 +1041,15 @@ def _bedrock_failed(admission, code, request_id="", usage=None, retry_after=None
     _deny(code, retry_after=retry_after)
 
 
-def _bedrock_unexpected(admission):
+def _bedrock_unexpected(admission, detail=""):
     """An unclassified post-dispatch failure: unknown spend, not a health signal."""
     from mojo.apps.account.models import LLMRequest
 
+    detail = detail[:512] if isinstance(detail, str) else ""
     try:
         LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
-            status="failed", error_code="provider_failed", finished_at=timezone.now())
+            status="failed", error_code="provider_failed", error_detail=detail,
+            finished_at=timezone.now())
         _breaker_success(admission["provider"], admission["circuit"],
                          admission["generation"], admission["breaker_owner"])
     except Exception:
@@ -1045,6 +1057,8 @@ def _bedrock_unexpected(admission):
     finally:
         release_permit(admission["redis"], admission["permit"],
                        actual_tokens=admission["reserved_tokens"])
+    _log_rejection(admission["ledger"].pk, admission["provider"], "provider_failed",
+                   "", detail)
     _record_metrics(admission["provider"], admission["feature"], "failed")
     _deny("provider_failed")
 
@@ -1139,7 +1153,8 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         if provider_name == "bedrock" and (
                 not isinstance(response, dict) or
                 validated_usage(response.get("usage")) is None):
-            raise ProviderError("provider_rejected")
+            raise ProviderError("provider_rejected",
+                                detail="the answer carries no valid usage")
     except ProviderError as err:
         if provider_name == "bedrock":
             _bedrock_failed(admission, err.code, err.request_id,
@@ -1159,11 +1174,15 @@ def _execute(messages, system, tools, model, max_tokens, feature, operation,
         release_permit(admission["redis"], admission["permit"])
         _record_metrics(provider_name, feature, "failed")
         _deny(err.code, retry_after=getattr(err, "retry_after", None))
-    except Exception:
+    except Exception as err:
+        detail = _unexpected_detail(err)
         if provider_name == "bedrock":
-            _bedrock_unexpected(admission)
+            _bedrock_unexpected(admission, detail)
         LLMRequest.objects.filter(pk=admission["ledger"].pk).update(
-            status="failed", error_code="provider_failed", finished_at=timezone.now())
+            status="failed", error_code="provider_failed", error_detail=detail,
+            finished_at=timezone.now())
+        _log_rejection(admission["ledger"].pk, provider_name, "provider_failed", "",
+                       detail)
         release_permit(admission["redis"], admission["permit"])
         _breaker_failure(
             provider_name, admission["circuit"], admission["generation"],
@@ -1250,7 +1269,8 @@ class GuardedStream:
         if isinstance(error, StopIteration):
             # A provider stream ends only through its final event.
             _bedrock_failed(self._admission, "provider_rejected", request_id,
-                            getattr(self._stream, "usage", None))
+                            getattr(self._stream, "usage", None),
+                            detail="the stream ended without a final answer")
         if isinstance(error, ProviderError):
             breaker = "health"
             if getattr(error, "caller_stalled", False):
@@ -1266,11 +1286,12 @@ class GuardedStream:
                 self._stream.close()
             except Exception:
                 pass
-            _bedrock_unexpected(self._admission)
+            _bedrock_unexpected(self._admission, _unexpected_detail(error))
         response = event.get("response")
         if not isinstance(response, dict) or \
                 validated_usage(response.get("usage")) is None:
-            _bedrock_failed(self._admission, "provider_rejected", request_id)
+            _bedrock_failed(self._admission, "provider_rejected", request_id,
+                            detail="the final answer carries no valid usage")
         self.response = _settle_success(self._admission, response)
         return {"type": "final", "response": self.response}
 
@@ -1318,8 +1339,8 @@ def _execute_stream(messages, system, tools, model, max_tokens, feature, operati
         _bedrock_failed(admission, err.code, err.request_id,
                         getattr(err, "usage", None), getattr(err, "retry_after", None),
                         detail=getattr(err, "detail", ""))
-    except Exception:
-        _bedrock_unexpected(admission)
+    except Exception as err:
+        _bedrock_unexpected(admission, _unexpected_detail(err))
     return GuardedStream(admission, provider_stream)
 
 
@@ -1455,12 +1476,13 @@ def _fixed_configuration_probe_core(actor, credential, identity, operation):
                        getattr(err, "detail", ""))
         release_permit(redis, permit)
         _deny(err.code, retry_after=getattr(err, "retry_after", None))
-    except Exception:
+    except Exception as err:
         _breaker_failure(
             provider, fingerprint, generation, breaker_owner,
             "provider_failed", policy)
         LLMRequest.objects.filter(pk=ledger.pk).update(
-            status="failed", error_code="provider_failed", finished_at=timezone.now())
+            status="failed", error_code="provider_failed",
+            error_detail=_unexpected_detail(err), finished_at=timezone.now())
         release_permit(redis, permit)
         _deny("provider_failed")
     usage = response.get("usage") or {}
@@ -1607,11 +1629,12 @@ def _discover_models_page(*, after_id, operation_id, deadline,
                        getattr(err, "detail", ""))
         release_permit(redis, permit)
         _deny(err.code, retry_after=getattr(err, "retry_after", None))
-    except Exception:
+    except Exception as err:
         _breaker_failure(
             provider, fingerprint, generation, owner, "provider_failed", policy)
         LLMRequest.objects.filter(pk=ledger.pk).update(
-            status="failed", error_code="provider_failed", finished_at=timezone.now())
+            status="failed", error_code="provider_failed",
+            error_detail=_unexpected_detail(err), finished_at=timezone.now())
         release_permit(redis, permit)
         _deny("provider_failed")
     release_permit(redis, permit)

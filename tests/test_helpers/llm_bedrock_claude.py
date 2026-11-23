@@ -437,8 +437,8 @@ def test_claude_answer_cut_at_max_tokens_names_the_reason(opts):
         f"a streamed answer cut before text must say why: {err.code}/{err.detail}"
     filtered = _rejected(lambda: BedrockProvider(client=_Client(
         _response(stop="content_filtered"))).call(MESSAGES, SONNET, 32))
-    assert filtered.detail == "", \
-        f"only the max_tokens case carries this detail, got {filtered.detail!r}"
+    assert filtered.detail == "unexpected stop reason content_filtered", \
+        f"a refused stop reason must be named on the error (#11908), got {filtered.detail!r}"
 
 
 @th.django_unit_test()

@@ -680,3 +680,91 @@ def test_stream_rejections_store_the_bounded_reason_and_log_once(opts):
         expected = ("ValidationException: " + long_reason)[:512]
         assert row.error_detail == expected and logger.warning.call_count == 1, \
             f"pre-stream: the bounded reason must be stored and logged once, got {len(row.error_detail)}/{logger.warning.call_count}"
+
+
+QUEUE_TOOLS = [{"name": "workspace_queue", "description": "The workspace queue",
+                "input_schema": {"type": "object",
+                                 "properties": {"slim": {"type": "string"}}}}]
+
+
+def _production_events(name="workspace_queue"):
+    """The ConverseStream seen on production on 2026-11-23 (#11908)."""
+    pieces = ("", '{"slim"', ': "true', '"}')
+    return [
+        {"messageStart": {"role": "assistant"}},
+        {"contentBlockDelta": {"delta": {"text": "Let me check."}, "contentBlockIndex": 0}},
+        {"contentBlockStop": {"contentBlockIndex": 0}},
+        {"contentBlockStart": {"start": {"toolUse": {
+            "toolUseId": "tooluse_sCBDdAcyMFuucZJeOfFOwY", "name": name,
+            "type": "tool_use"}}, "contentBlockIndex": 1}},
+    ] + [{"contentBlockDelta": {"delta": {"toolUse": {"input": piece}},
+                                "contentBlockIndex": 1}} for piece in pieces] + [
+        {"contentBlockStop": {"contentBlockIndex": 1}},
+        {"messageStop": {"stopReason": "tool_use"}},
+        {"metadata": {"usage": {"inputTokens": 38, "outputTokens": 57, "totalTokens": 12399,
+                                "cacheReadInputTokens": 12304, "cacheWriteInputTokens": 0},
+                      "metrics": {"latencyMs": 943}}},
+    ]
+
+
+@th.tier("bug")
+@th.django_unit_test()
+def test_production_tool_stream_settles_through_the_guard(opts):
+    """Regression #11908: a typed tool start is a succeeded call, not provider_rejected."""
+    from mojo.apps.account.models import LLMRequest
+
+    with _guard_case(_tool_policy()) as case:
+        client = _Client(streams=[_production_events()])
+        events = list(_guarded(case, client, tools=QUEUE_TOOLS, max_tokens=64))
+        final = events[-1]["response"]
+        assert final["stop_reason"] == "tool_use" and final["content"] == [
+            {"type": "text", "text": "Let me check."},
+            {"type": "tool_use", "id": "tooluse_sCBDdAcyMFuucZJeOfFOwY",
+             "name": "workspace_queue", "input": {"slim": "true"}}], \
+            f"the guard must hand back the tool request: {final}"
+        row = LLMRequest.objects.get(operation=case["marker"])
+        assert row.status == "succeeded" and row.error_detail == "" \
+            and (row.input_tokens, row.output_tokens, row.cache_read_input_tokens,
+                 row.cache_creation_input_tokens) == (38, 57, 12304, 0), \
+            f"the call must settle as succeeded with its usage, got {row.status}/{row.error_code}"
+
+
+@th.django_unit_test()
+def test_our_own_refusals_name_the_failed_check_on_the_ledger(opts):
+    """#11908: an answer the adapter's checks refuse says which check, on the ledger and log."""
+    from mojo.apps.account.models import LLMRequest
+    from mojo.apps.account.services import llm_safety
+
+    cases = (
+        ("streamed", True, _production_events(name="not_declared"),
+         "the answer asks for a tool that was not declared"),
+        ("unfinished", True, _production_events()[:-2] + _production_events()[-1:],
+         "the stream ended without a stop reason"),
+        ("plain", False, _bedrock_reply(stop="content_filtered"),
+         "unexpected stop reason content_filtered"),
+    )
+    for label, streamed, answer, expected in cases:
+        with _guard_case(_tool_policy()) as case:
+            client = _Client(streams=[answer]) if streamed else _Client(replies=[answer])
+            with mock.patch.object(llm_safety, "logger") as logger:
+                _assert_denied("provider_rejected", lambda: list(_guarded(
+                    case, client, stream=streamed, tools=QUEUE_TOOLS, max_tokens=64)))
+            row = LLMRequest.objects.get(operation=case["marker"])
+            assert row.status == "failed" and row.error_code == "provider_rejected" \
+                and row.error_detail == expected, \
+                f"{label}: the ledger must name the failed check, got {row.error_detail!r}"
+            assert logger.warning.call_count == 1 \
+                and expected in str(logger.warning.call_args.args), \
+                f"{label}: one warning must carry the check, got {logger.warning.call_args_list}"
+
+    with _guard_case(_tool_policy()) as case:
+        client = _Client()
+        with mock.patch.object(llm_safety, "logger") as logger:
+            _assert_denied("provider_rejected", lambda: _guarded(
+                case, client, tools=[{"name": "workspace_queue"}]))
+        assert client.calls == [] and not LLMRequest.objects.filter(
+            operation=case["marker"]).exists(), \
+            "a request refused by check_request must reach neither Bedrock nor the ledger"
+        assert logger.warning.call_count == 1 \
+            and "a tool needs a non-blank description" in str(logger.warning.call_args.args), \
+            f"a pre-dispatch refusal must log which check failed, got {logger.warning.call_args_list}"
