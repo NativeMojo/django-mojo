@@ -8,289 +8,289 @@
     "src": "../../node_modules/bootstrap-icons/font/fonts/bootstrap-icons.woff2"
   },
   "../../packages/portal-mojo/src/account/index.ts": {
-    "file": "assets/index-0cVFAOU_.js",
+    "file": "assets/index-d2qnTdFn.js",
     "name": "index",
     "src": "../../packages/portal-mojo/src/account/index.ts",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_ui-dw-llgkr.js",
-      "_FormView-Bgrwi41Q.js",
-      "_NotificationPreferences-BQv233UV.js",
-      "_secret-dialog-BrUdP3AC.js",
-      "_password-Dig7hGKH.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_Tabs-DizQjZ4C.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_DetailView-DStbEA6b.js",
-      "_safe-node-DCWR3iMC.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_ui-CJ60VOat.js",
+      "_FormView-eQg1J243.js",
+      "_NotificationPreferences-B_hKJ0Ct.js",
+      "_secret-dialog-BqKuXLNV.js",
+      "_password-Df7pMyN7.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_Tabs-C385fe7r.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_DetailView-KII3WZjA.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/assistant/AssistantPanel.tsx": {
-    "file": "assets/AssistantPanel-BeUds8J3.js",
+    "file": "assets/AssistantPanel-CFfEuks0.js",
     "name": "AssistantPanel",
     "src": "../../packages/portal-mojo/src/admin/assistant/AssistantPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_streaming-D9EjnoHr.js",
-      "_api-C8MOxuZc.js",
-      "_models-BhsfkEAR.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_streaming-Cih0mVn7.js",
+      "_api-BxOkiGSj.js",
+      "_models-CTTS00bM.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/assistant/AssistantSetupPage.tsx": {
-    "file": "assets/AssistantSetupPage-B2vjCxoY.js",
+    "file": "assets/AssistantSetupPage-D3z7dkSE.js",
     "name": "AssistantSetupPage",
     "src": "../../packages/portal-mojo/src/admin/assistant/AssistantSetupPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
-      "_secret-dialog-BrUdP3AC.js"
+      "_Tabs-C385fe7r.js",
+      "_secret-dialog-BqKuXLNV.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/assistant/pages.tsx": {
-    "file": "assets/pages-BYNFEeNm.js",
+    "file": "assets/pages-DZyfkyH6.js",
     "name": "pages",
     "src": "../../packages/portal-mojo/src/admin/assistant/pages.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_Tabs-DizQjZ4C.js",
-      "_streaming-D9EjnoHr.js",
-      "_api-C8MOxuZc.js",
-      "_models-BhsfkEAR.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_ui-CJ60VOat.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_Tabs-C385fe7r.js",
+      "_streaming-Cih0mVn7.js",
+      "_api-BxOkiGSj.js",
+      "_models-CTTS00bM.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/bouncer/devices.tsx": {
-    "file": "assets/devices-DBMGlOp0.js",
+    "file": "assets/devices-C-FsJ5Y1.js",
     "name": "devices",
     "src": "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_models-DWMcKSfu.js",
+      "_models-BAmM2vSL.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "_countryCentroids-CiPWDXva.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_DataView-7-mB9i5Q.js",
-      "_grouping-CSpA5VNh.js"
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_DataView-BWhOe5d2.js",
+      "_grouping-DpMiZd1w.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/bouncer/signals.tsx": {
-    "file": "assets/signals-COeDcFH6.js",
+    "file": "assets/signals-B0lSgrpM.js",
     "name": "signals",
     "src": "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DataView-7-mB9i5Q.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_grouping-CSpA5VNh.js",
-      "_safe-node-DCWR3iMC.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_DataView-BWhOe5d2.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_grouping-DpMiZd1w.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/bouncer/signatures.tsx": {
-    "file": "assets/signatures-BZy49kV4.js",
+    "file": "assets/signatures-psOWOTpi.js",
     "name": "signatures",
     "src": "../../packages/portal-mojo/src/admin/bouncer/signatures.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/cloudwatch/CloudWatchResourceDetail.tsx": {
-    "file": "assets/CloudWatchResourceDetail-CaSC61al.js",
+    "file": "assets/CloudWatchResourceDetail-CDPu2-UY.js",
     "name": "CloudWatchResourceDetail",
     "src": "../../packages/portal-mojo/src/admin/cloudwatch/CloudWatchResourceDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_CloudWatchDashboardPage-wXxjiPOv.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_ui-dw-llgkr.js",
-      "_MetricsChart-Dr0Bazno.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_CloudWatchDashboardPage-WeojbyRi.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_ui-CJ60VOat.js",
+      "_MetricsChart-CvLUJWhJ.js",
       "_countryCentroids-CiPWDXva.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/credentials/AcmeConsumerKeyDialog.tsx": {
-    "file": "assets/AcmeConsumerKeyDialog-DjKfw0ev.js",
+    "file": "assets/AcmeConsumerKeyDialog-xbZIzezN.js",
     "name": "AcmeConsumerKeyDialog",
     "src": "../../packages/portal-mojo/src/admin/credentials/AcmeConsumerKeyDialog.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_CollectionSelect-BIayPFs7.js",
-      "_secret-dialog-BrUdP3AC.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_shared-validation-data-tzMrqzrW.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_secret-dialog-BqKuXLNV.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_shared-validation-data-C_irDK2w.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx": {
-    "file": "assets/group-api-keys-BXaPN3N7.js",
+    "file": "assets/group-api-keys-BT_qhCKV.js",
     "name": "group-api-keys",
     "src": "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_guardrail-ESQ_taOi.js",
-      "_ui-dw-llgkr.js",
-      "_secret-dialog-BrUdP3AC.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_guardrail-C13Kqskf.js",
+      "_ui-CJ60VOat.js",
+      "_secret-dialog-BqKuXLNV.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/credentials/AcmeConsumerKeyDialog.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/credentials/webhook-subscriptions.tsx": {
-    "file": "assets/webhook-subscriptions-CEGVYS9t.js",
+    "file": "assets/webhook-subscriptions-DHyfRUK6.js",
     "name": "webhook-subscriptions",
     "src": "../../packages/portal-mojo/src/admin/credentials/webhook-subscriptions.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_guardrail-ESQ_taOi.js",
-      "_ui-dw-llgkr.js",
-      "_secret-dialog-BrUdP3AC.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_guardrail-C13Kqskf.js",
+      "_ui-CJ60VOat.js",
+      "_secret-dialog-BqKuXLNV.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dashboard/AdminDashboardPage.tsx": {
-    "file": "assets/AdminDashboardPage-6IlUHD_r.js",
+    "file": "assets/AdminDashboardPage-DtLs04w_.js",
     "name": "AdminDashboardPage",
     "src": "../../packages/portal-mojo/src/admin/dashboard/AdminDashboardPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_MetricsChart-Dr0Bazno.js",
+      "_MetricsChart-CvLUJWhJ.js",
       "_countryCentroids-CiPWDXva.js",
-      "_field-registry-Begqql-S.js",
-      "_LoginLocationMap-D-6dEPlE.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_use-world-land-D1yrMMHS.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_LoginLocationMap-U974vc3h.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_use-world-land-BRQlDErV.js"
     ],
     "dynamicImports": [
-      "_UserDetail-BKvrGynm.js",
+      "_UserDetail-BU88XXCh.js",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/deployments/ApiDeploymentDetail.tsx": {
-    "file": "assets/ApiDeploymentDetail-BEyQ-8-3.js",
+    "file": "assets/ApiDeploymentDetail-iZGLkYWT.js",
     "name": "ApiDeploymentDetail",
     "src": "../../packages/portal-mojo/src/admin/deployments/ApiDeploymentDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
-      "_DeploymentsPage-CMZOKpRE.js",
-      "_FleetHelp-B8a84Fo6.js",
+      "_Tabs-C385fe7r.js",
+      "_DeploymentsPage-YxkD5XPc.js",
+      "_FleetHelp-BT_wgvGm.js",
       "_access-PXF--cFa.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/deployments/WebAppDeploySetup.tsx": {
-    "file": "assets/WebAppDeploySetup-BBIFjCEn.js",
+    "file": "assets/WebAppDeploySetup-B6FEVTF1.js",
     "name": "WebAppDeploySetup",
     "src": "../../packages/portal-mojo/src/admin/deployments/WebAppDeploySetup.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DeploymentsPage-CMZOKpRE.js",
-      "_Tabs-DizQjZ4C.js",
+      "_DeploymentsPage-YxkD5XPc.js",
+      "_Tabs-C385fe7r.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js"
+      "_FleetHelp-BT_wgvGm.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/deployments/WebAppUploadPanel.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/deployments/WebAppDeploymentDetail.tsx": {
-    "file": "assets/WebAppDeploymentDetail-CuWMMJwk.js",
+    "file": "assets/WebAppDeploymentDetail-dueucu3U.js",
     "name": "WebAppDeploymentDetail",
     "src": "../../packages/portal-mojo/src/admin/deployments/WebAppDeploymentDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
-      "_DeploymentsPage-CMZOKpRE.js",
-      "_FleetHelp-B8a84Fo6.js",
+      "_Tabs-C385fe7r.js",
+      "_DeploymentsPage-YxkD5XPc.js",
+      "_FleetHelp-BT_wgvGm.js",
       "_access-PXF--cFa.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/deployments/WebAppDetail.tsx": {
-    "file": "assets/WebAppDetail-CKMUZS3T.js",
+    "file": "assets/WebAppDetail-Zmsvv7bh.js",
     "name": "WebAppDetail",
     "src": "../../packages/portal-mojo/src/admin/deployments/WebAppDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
-      "_ModelTable-CRInQb6e.js",
+      "_Tabs-C385fe7r.js",
+      "_ModelTable-BRlPRgrF.js",
       "_access-PXF--cFa.js",
-      "_DeploymentsPage-CMZOKpRE.js",
-      "_FleetHelp-B8a84Fo6.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_safe-node-DCWR3iMC.js"
+      "_DeploymentsPage-YxkD5XPc.js",
+      "_FleetHelp-BT_wgvGm.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_safe-node-Itn8a5Ge.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/deployments/WebAppDeploySetup.tsx",
@@ -302,365 +302,365 @@
     ]
   },
   "../../packages/portal-mojo/src/admin/deployments/WebAppEditDialog.tsx": {
-    "file": "assets/WebAppEditDialog-Bu2gLVpu.js",
+    "file": "assets/WebAppEditDialog-Byx_ajvL.js",
     "name": "WebAppEditDialog",
     "src": "../../packages/portal-mojo/src/admin/deployments/WebAppEditDialog.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DeploymentsPage-CMZOKpRE.js",
-      "_FleetHelp-B8a84Fo6.js",
-      "_Tabs-DizQjZ4C.js",
+      "_DeploymentsPage-YxkD5XPc.js",
+      "_FleetHelp-BT_wgvGm.js",
+      "_Tabs-C385fe7r.js",
       "_access-PXF--cFa.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/deployments/WebAppKeyDialog.tsx": {
-    "file": "assets/WebAppKeyDialog--lT78JP0.js",
+    "file": "assets/WebAppKeyDialog-CUqsmPVF.js",
     "name": "WebAppKeyDialog",
     "src": "../../packages/portal-mojo/src/admin/deployments/WebAppKeyDialog.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DeploymentsPage-CMZOKpRE.js",
-      "_Tabs-DizQjZ4C.js",
+      "_DeploymentsPage-YxkD5XPc.js",
+      "_Tabs-C385fe7r.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js"
+      "_FleetHelp-BT_wgvGm.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/deployments/WebAppOnboardingDialog.tsx": {
-    "file": "assets/WebAppOnboardingDialog-CmQ6ZhHp.js",
+    "file": "assets/WebAppOnboardingDialog-PzDCTdFt.js",
     "name": "WebAppOnboardingDialog",
     "src": "../../packages/portal-mojo/src/admin/deployments/WebAppOnboardingDialog.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
-      "_DeploymentsPage-CMZOKpRE.js",
+      "_Tabs-C385fe7r.js",
+      "_DeploymentsPage-YxkD5XPc.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js"
+      "_FleetHelp-BT_wgvGm.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/deployments/WebAppRollbackDialog.tsx": {
-    "file": "assets/WebAppRollbackDialog-DLAsqkft.js",
+    "file": "assets/WebAppRollbackDialog-It_lyCV6.js",
     "name": "WebAppRollbackDialog",
     "src": "../../packages/portal-mojo/src/admin/deployments/WebAppRollbackDialog.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DeploymentsPage-CMZOKpRE.js",
-      "_Tabs-DizQjZ4C.js",
+      "_DeploymentsPage-YxkD5XPc.js",
+      "_Tabs-C385fe7r.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js"
+      "_FleetHelp-BT_wgvGm.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/deployments/WebAppUploadPanel.tsx": {
-    "file": "assets/WebAppUploadPanel-Dv8IRslz.js",
+    "file": "assets/WebAppUploadPanel-DNLgGhwb.js",
     "name": "WebAppUploadPanel",
     "src": "../../packages/portal-mojo/src/admin/deployments/WebAppUploadPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DeploymentsPage-CMZOKpRE.js",
-      "_FleetHelp-B8a84Fo6.js",
-      "_Tabs-DizQjZ4C.js",
+      "_DeploymentsPage-YxkD5XPc.js",
+      "_FleetHelp-BT_wgvGm.js",
+      "_Tabs-C385fe7r.js",
       "_access-PXF--cFa.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/CertificatesPage.tsx": {
-    "file": "assets/CertificatesPage-4WFZYCCE.js",
+    "file": "assets/CertificatesPage-BD_s8Jn2.js",
     "name": "CertificatesPage",
     "src": "../../packages/portal-mojo/src/admin/dns/CertificatesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_api-BrovzYlC.js",
-      "_CertificateRequestDialog-E0occ7P-.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_DetailView-DStbEA6b.js",
-      "_operator-destinations-BuP0Semq.js",
-      "_shared-validation-data-tzMrqzrW.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_api-BIFjb0oM.js",
+      "_CertificateRequestDialog-DMEmVm-w.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_DetailView-KII3WZjA.js",
+      "_operator-destinations-C_cUyiix.js",
+      "_shared-validation-data-C_irDK2w.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/DnsRecordsPage.tsx": {
-    "file": "assets/DnsRecordsPage-ChjRbWTA.js",
+    "file": "assets/DnsRecordsPage-DF3I6D_r.js",
     "name": "DnsRecordsPage",
     "src": "../../packages/portal-mojo/src/admin/dns/DnsRecordsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_CollectionSelect-BIayPFs7.js",
-      "_field-registry-Begqql-S.js",
-      "_DnsRecordsPanel-PHTCPy_y.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_OperationsHelp-DogWYynb.js",
-      "_api-BrovzYlC.js",
-      "_domain-authority-B9BoZ1N6.js"
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DnsRecordsPanel-Bep36iZo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_OperationsHelp-CzjPmDjF.js",
+      "_api-BIFjb0oM.js",
+      "_domain-authority-CoI0j489.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/DomainDetail.tsx": {
-    "file": "assets/DomainDetail-DotDfsPN.js",
+    "file": "assets/DomainDetail-B-ByxCQf.js",
     "name": "DomainDetail",
     "src": "../../packages/portal-mojo/src/admin/dns/DomainDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_Tabs-DizQjZ4C.js",
-      "_DetailView-DStbEA6b.js",
-      "_OperationsHelp-DogWYynb.js",
-      "_api-BrovzYlC.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_Tabs-C385fe7r.js",
+      "_DetailView-KII3WZjA.js",
+      "_OperationsHelp-CzjPmDjF.js",
+      "_api-BIFjb0oM.js",
       "_data-Bl3FzE6B.js",
-      "_DnsRecordsPanel-PHTCPy_y.js",
-      "_CertificateRequestDialog-E0occ7P-.js",
+      "_DnsRecordsPanel-Bep36iZo.js",
+      "_CertificateRequestDialog-DMEmVm-w.js",
       "_domain-navigation-DAEfrDF3.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_domain-authority-B9BoZ1N6.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_operator-destinations-BuP0Semq.js",
-      "_shared-validation-data-tzMrqzrW.js"
+      "_FleetHelp-BT_wgvGm.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_domain-authority-CoI0j489.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_operator-destinations-C_cUyiix.js",
+      "_shared-validation-data-C_irDK2w.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/DomainPurchasesPage.tsx": {
-    "file": "assets/DomainPurchasesPage-47o-Pg5r.js",
+    "file": "assets/DomainPurchasesPage-CK3SEIFw.js",
     "name": "DomainPurchasesPage",
     "src": "../../packages/portal-mojo/src/admin/dns/DomainPurchasesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_DomainOnboardingDialog-C7_riQDI.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_api-BrovzYlC.js",
-      "_FormWizard-vPeX4B4O.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_Tabs-DizQjZ4C.js",
-      "_OperationsHelp-DogWYynb.js",
-      "_DetailView-DStbEA6b.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_DomainOnboardingDialog-CtWBv74o.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_api-BIFjb0oM.js",
+      "_FormWizard-CYOK8mpR.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_Tabs-C385fe7r.js",
+      "_OperationsHelp-CzjPmDjF.js",
+      "_DetailView-KII3WZjA.js",
       "_domain-navigation-DAEfrDF3.js",
       "../../packages/portal-mojo/src/admin/dns/RegistrantContactPage.tsx",
-      "_domain-authority-B9BoZ1N6.js"
+      "_domain-authority-CoI0j489.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/DomainsPage.tsx": {
-    "file": "assets/DomainsPage-x2cK_00z.js",
+    "file": "assets/DomainsPage-Dl38JruE.js",
     "name": "DomainsPage",
     "src": "../../packages/portal-mojo/src/admin/dns/DomainsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
       "../../packages/portal-mojo/src/admin/dns/DomainDetail.tsx",
       "_data-Bl3FzE6B.js",
       "_domain-navigation-DAEfrDF3.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_Tabs-DizQjZ4C.js",
-      "_DetailView-DStbEA6b.js",
-      "_OperationsHelp-DogWYynb.js",
-      "_api-BrovzYlC.js",
-      "_DnsRecordsPanel-PHTCPy_y.js",
-      "_domain-authority-B9BoZ1N6.js",
-      "_CertificateRequestDialog-E0occ7P-.js",
-      "_operator-destinations-BuP0Semq.js",
-      "_shared-validation-data-tzMrqzrW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_Tabs-C385fe7r.js",
+      "_DetailView-KII3WZjA.js",
+      "_OperationsHelp-CzjPmDjF.js",
+      "_api-BIFjb0oM.js",
+      "_DnsRecordsPanel-Bep36iZo.js",
+      "_domain-authority-CoI0j489.js",
+      "_CertificateRequestDialog-DMEmVm-w.js",
+      "_operator-destinations-C_cUyiix.js",
+      "_shared-validation-data-C_irDK2w.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js"
+      "_FleetHelp-BT_wgvGm.js"
     ],
     "dynamicImports": [
-      "_DomainOnboardingDialog-C7_riQDI.js",
-      "_CertificateRequestDialog-E0occ7P-.js"
+      "_DomainOnboardingDialog-CtWBv74o.js",
+      "_CertificateRequestDialog-DMEmVm-w.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/ProviderCredentialsPage.tsx": {
-    "file": "assets/ProviderCredentialsPage-DPwRtdH6.js",
+    "file": "assets/ProviderCredentialsPage-CRxFLvoq.js",
     "name": "ProviderCredentialsPage",
     "src": "../../packages/portal-mojo/src/admin/dns/ProviderCredentialsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_CollectionSelect-BIayPFs7.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_api-BrovzYlC.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_api-BIFjb0oM.js",
       "_data-Bl3FzE6B.js",
-      "_domain-authority-B9BoZ1N6.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_domain-authority-CoI0j489.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/dns/RegistrantContactPage.tsx": {
-    "file": "assets/RegistrantContactPage-9wEchqKJ.js",
+    "file": "assets/RegistrantContactPage-D34O_7Vt.js",
     "name": "RegistrantContactPage",
     "src": "../../packages/portal-mojo/src/admin/dns/RegistrantContactPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_CollectionSelect-BIayPFs7.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_Tabs-DizQjZ4C.js",
-      "_OperationsHelp-DogWYynb.js",
-      "_api-BrovzYlC.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_Tabs-C385fe7r.js",
+      "_OperationsHelp-CzjPmDjF.js",
+      "_api-BIFjb0oM.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/edge/BlocklistPage.tsx": {
-    "file": "assets/BlocklistPage-CRefIkkp.js",
+    "file": "assets/BlocklistPage-BChFjpGI.js",
     "name": "BlocklistPage",
     "src": "../../packages/portal-mojo/src/admin/edge/BlocklistPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_armed-button-BTdJkliB.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_models-MWsFVLH5.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_armed-button-Cpb7n_0m.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_models-Dw8frxv7.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/edge/UpstreamsPage.tsx": {
-    "file": "assets/UpstreamsPage-rYI418_I.js",
+    "file": "assets/UpstreamsPage-CXCoOlTp.js",
     "name": "UpstreamsPage",
     "src": "../../packages/portal-mojo/src/admin/edge/UpstreamsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_armed-button-BTdJkliB.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_api-DWTfEN6O.js",
-      "_models-MWsFVLH5.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_armed-button-Cpb7n_0m.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_api-fT9A7zz6.js",
+      "_models-Dw8frxv7.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/edge/VhostsPage.tsx": {
-    "file": "assets/VhostsPage-CkqkKopa.js",
+    "file": "assets/VhostsPage-Njjb_BnD.js",
     "name": "VhostsPage",
     "src": "../../packages/portal-mojo/src/admin/edge/VhostsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_CollectionSelect-BIayPFs7.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_models-MWsFVLH5.js",
-      "_Tabs-DizQjZ4C.js",
-      "_DetailView-DStbEA6b.js",
-      "_api-DWTfEN6O.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_models-Dw8frxv7.js",
+      "_Tabs-C385fe7r.js",
+      "_DetailView-KII3WZjA.js",
+      "_api-fT9A7zz6.js",
       "_access-PXF--cFa.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/fleet-configuration/FleetConfigurationPage.tsx": {
-    "file": "assets/FleetConfigurationPage-DPLQxzcf.js",
+    "file": "assets/FleetConfigurationPage-CScuPK8u.js",
     "name": "FleetConfigurationPage",
     "src": "../../packages/portal-mojo/src/admin/fleet-configuration/FleetConfigurationPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/fleet-configuration/SharedValidationConnectionPanel.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/fleet-configuration/SharedValidationConnectionPanel.tsx": {
-    "file": "assets/SharedValidationConnectionPanel-BWiC3FJD.js",
+    "file": "assets/SharedValidationConnectionPanel-r1nPHPKD.js",
     "name": "SharedValidationConnectionPanel",
     "src": "../../packages/portal-mojo/src/admin/fleet-configuration/SharedValidationConnectionPanel.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_shared-validation-data-tzMrqzrW.js",
-      "_operator-destinations-BuP0Semq.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_shared-validation-data-C_irDK2w.js",
+      "_operator-destinations-C_cUyiix.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/fleet/CapacityEditor.tsx": {
-    "file": "assets/CapacityEditor-DK8AmwgF.js",
+    "file": "assets/CapacityEditor-DaC4WmLg.js",
     "name": "CapacityEditor",
     "src": "../../packages/portal-mojo/src/admin/fleet/CapacityEditor.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
-      "_FleetWorkspace-BdcCZQCl.js",
+      "_Tabs-C385fe7r.js",
+      "_FleetWorkspace-C2UmQNcP.js",
       "_standalone-data-BxW4NNvp.js",
-      "_FleetHelp-B8a84Fo6.js",
+      "_FleetHelp-BT_wgvGm.js",
       "_access-PXF--cFa.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/fleet/CapacityInspector.tsx": {
-    "file": "assets/CapacityInspector-D0evt7pP.js",
+    "file": "assets/CapacityInspector-BkS28uTk.js",
     "name": "CapacityInspector",
     "src": "../../packages/portal-mojo/src/admin/fleet/CapacityInspector.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
-      "_FleetHelp-B8a84Fo6.js",
+      "_Tabs-C385fe7r.js",
+      "_FleetHelp-BT_wgvGm.js",
       "_standalone-data-BxW4NNvp.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/fleet/CapacityProgress.tsx": {
-    "file": "assets/CapacityProgress-DILoJwKJ.js",
+    "file": "assets/CapacityProgress-CULknxK3.js",
     "name": "CapacityProgress",
     "src": "../../packages/portal-mojo/src/admin/fleet/CapacityProgress.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_FleetWorkspace-BdcCZQCl.js",
-      "_Tabs-DizQjZ4C.js",
+      "_FleetWorkspace-C2UmQNcP.js",
+      "_Tabs-C385fe7r.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js"
+      "_FleetHelp-BT_wgvGm.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/fleet/FleetPage.tsx": {
-    "file": "assets/FleetPage-CUwptsW5.js",
+    "file": "assets/FleetPage-BqDlaCFm.js",
     "name": "FleetPage",
     "src": "../../packages/portal-mojo/src/admin/fleet/FleetPage.tsx",
     "isDynamicEntry": true,
@@ -669,1005 +669,1005 @@
       "_access-PXF--cFa.js"
     ],
     "dynamicImports": [
-      "_FleetWorkspace-BdcCZQCl.js"
+      "_FleetWorkspace-C2UmQNcP.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/geolocation/GeoLocationPage.tsx": {
-    "file": "assets/GeoLocationPage-BIp7GLRI.js",
+    "file": "assets/GeoLocationPage-Bj-obuw1.js",
     "name": "GeoLocationPage",
     "src": "../../packages/portal-mojo/src/admin/geolocation/GeoLocationPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_shared-validation-data-tzMrqzrW.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_shared-validation-data-C_irDK2w.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/identity/groups/GroupsPage.tsx": {
-    "file": "assets/GroupsPage-Bwq7KOf9.js",
+    "file": "assets/GroupsPage-CEqaGyhm.js",
     "name": "GroupsPage",
     "src": "../../packages/portal-mojo/src/admin/identity/groups/GroupsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
       "_countryCentroids-CiPWDXva.js",
-      "_UserDetail-BKvrGynm.js",
-      "_DetailView-DStbEA6b.js",
+      "_UserDetail-BU88XXCh.js",
+      "_DetailView-KII3WZjA.js",
       "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx",
       "../../packages/portal-mojo/src/admin/credentials/webhook-subscriptions.tsx",
-      "_MemberDetail-HA_Ys2_v.js",
+      "_MemberDetail-Cbzf8xQG.js",
       "../../packages/portal-mojo/src/admin/security/tickets.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/LoginLocationsPage.tsx",
-      "_models-DWMcKSfu.js",
+      "_models-BAmM2vSL.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
-      "_HandlerChainBuilder-U9YhCpwp.js",
+      "_HandlerChainBuilder-B8lO5h6x.js",
       "../../packages/portal-mojo/src/admin/bouncer/signatures.tsx",
-      "_models-B4X2sXqA.js",
+      "_models-Bih62Fi5.js",
       "../../packages/portal-mojo/src/admin/network/BlockedIPsPage.tsx",
       "../../packages/portal-mojo/src/admin/network/FirewallLogPage.tsx",
-      "_IPSetEditor-m_3n5VPU.js",
-      "_BlocksTab-BxGRevJR.js",
-      "_Timeline-CV3g0IC_.js",
-      "_FormView-Bgrwi41Q.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_secret-dialog-BrUdP3AC.js",
-      "_password-Dig7hGKH.js",
-      "_NotificationPreferences-BQv233UV.js",
+      "_IPSetEditor-2FNSUm3W.js",
+      "_BlocksTab-Pb9a0bl4.js",
+      "_Timeline-CLqLBRC4.js",
+      "_FormView-eQg1J243.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_secret-dialog-BqKuXLNV.js",
+      "_password-Df7pMyN7.js",
+      "_NotificationPreferences-B_hKJ0Ct.js",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_KnownFieldsCard-Z1GMFkmP.js",
+      "_KnownFieldsCard-drwBENTb.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-7-mB9i5Q.js",
-      "_grouping-CSpA5VNh.js",
-      "_GeoIpDossier-CxHUEsS_.js",
-      "_armed-button-BTdJkliB.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_use-world-land-D1yrMMHS.js",
+      "_DataView-BWhOe5d2.js",
+      "_grouping-DpMiZd1w.js",
+      "_GeoIpDossier-DUbzbCcn.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_use-world-land-BRQlDErV.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
-      "_LoginLocationMap-D-6dEPlE.js",
-      "_guardrail-ESQ_taOi.js",
-      "_api-C8MOxuZc.js",
-      "_launchers-ChjahuGD.js",
+      "_LoginLocationMap-U974vc3h.js",
+      "_guardrail-C13Kqskf.js",
+      "_api-BxOkiGSj.js",
+      "_launchers-DejINADU.js",
       "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx",
-      "_MetricsChart-Dr0Bazno.js",
-      "_MetricsMiniWidget-CwGu_KAI.js",
-      "_MiniChart-zmXU4RBx.js",
-      "_Tabs-DizQjZ4C.js"
+      "_MetricsChart-CvLUJWhJ.js",
+      "_MetricsMiniWidget-BUvs3Vdy.js",
+      "_MiniChart-DsjZMC4x.js",
+      "_Tabs-C385fe7r.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/identity/members/MembersPage.tsx": {
-    "file": "assets/MembersPage-CQ2u8cyw.js",
+    "file": "assets/MembersPage-CCEEwwca.js",
     "name": "MembersPage",
     "src": "../../packages/portal-mojo/src/admin/identity/members/MembersPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_MemberDetail-HA_Ys2_v.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_guardrail-ESQ_taOi.js",
-      "_DataView-7-mB9i5Q.js",
-      "_FormView-Bgrwi41Q.js",
-      "_Tabs-DizQjZ4C.js",
-      "_DetailView-DStbEA6b.js",
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_MemberDetail-Cbzf8xQG.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_guardrail-C13Kqskf.js",
+      "_DataView-BWhOe5d2.js",
+      "_FormView-eQg1J243.js",
+      "_Tabs-C385fe7r.js",
+      "_DetailView-KII3WZjA.js",
       "_countryCentroids-CiPWDXva.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/identity/users/PersonalApiKeysPage.tsx": {
-    "file": "assets/PersonalApiKeysPage-DybFTuO1.js",
+    "file": "assets/PersonalApiKeysPage-D27g4-nQ.js",
     "name": "PersonalApiKeysPage",
     "src": "../../packages/portal-mojo/src/admin/identity/users/PersonalApiKeysPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_armed-button-BTdJkliB.js",
-      "_ui-dw-llgkr.js",
-      "_secret-dialog-BrUdP3AC.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_ui-CJ60VOat.js",
+      "_secret-dialog-BqKuXLNV.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
       "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_guardrail-ESQ_taOi.js"
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_guardrail-C13Kqskf.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/identity/users/UsersPage.tsx": {
-    "file": "assets/UsersPage-D3gbQLM4.js",
+    "file": "assets/UsersPage-C2OULYNx.js",
     "name": "UsersPage",
     "src": "../../packages/portal-mojo/src/admin/identity/users/UsersPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_grouping-CSpA5VNh.js",
-      "_UserDetail-BKvrGynm.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_FormView-Bgrwi41Q.js",
-      "_Tabs-DizQjZ4C.js",
-      "_DetailView-DStbEA6b.js",
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_grouping-DpMiZd1w.js",
+      "_UserDetail-BU88XXCh.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_FormView-eQg1J243.js",
+      "_Tabs-C385fe7r.js",
+      "_DetailView-KII3WZjA.js",
       "_countryCentroids-CiPWDXva.js",
-      "_secret-dialog-BrUdP3AC.js",
-      "_password-Dig7hGKH.js",
-      "_NotificationPreferences-BQv233UV.js",
-      "_models-DWMcKSfu.js",
+      "_secret-dialog-BqKuXLNV.js",
+      "_password-Df7pMyN7.js",
+      "_NotificationPreferences-B_hKJ0Ct.js",
+      "_models-BAmM2vSL.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_Timeline-CV3g0IC_.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
+      "_Timeline-CLqLBRC4.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-7-mB9i5Q.js",
-      "_GeoIpDossier-CxHUEsS_.js",
-      "_armed-button-BTdJkliB.js",
-      "_use-world-land-D1yrMMHS.js",
+      "_DataView-BWhOe5d2.js",
+      "_GeoIpDossier-DUbzbCcn.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_use-world-land-BRQlDErV.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
-      "_LoginLocationMap-D-6dEPlE.js",
-      "_guardrail-ESQ_taOi.js"
+      "_LoginLocationMap-U974vc3h.js",
+      "_guardrail-C13Kqskf.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/incidents/EventDetail.tsx": {
-    "file": "assets/EventDetail-DEE21CVG.js",
+    "file": "assets/EventDetail-5oDF2ZZN.js",
     "name": "EventDetail",
     "src": "../../packages/portal-mojo/src/admin/incidents/EventDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_DataView-7-mB9i5Q.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_forensics-DjHcbxVk.js",
-      "_models-DWMcKSfu.js",
-      "_safe-node-DCWR3iMC.js",
-      "_ui-dw-llgkr.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_DataView-BWhOe5d2.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_forensics-oCr_zobz.js",
+      "_models-BAmM2vSL.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_ui-CJ60VOat.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx": {
-    "file": "assets/EventsPage-AwXGP_O6.js",
+    "file": "assets/EventsPage-Bx5lPXUJ.js",
     "name": "EventsPage",
     "src": "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_grouping-CSpA5VNh.js",
-      "_models-DWMcKSfu.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_grouping-DpMiZd1w.js",
+      "_models-BAmM2vSL.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/incidents/IncidentDetail.tsx": {
-    "file": "assets/IncidentDetail-DNdeK8AL.js",
+    "file": "assets/IncidentDetail-ChbirGfC.js",
     "name": "IncidentDetail",
     "src": "../../packages/portal-mojo/src/admin/incidents/IncidentDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_api-C8MOxuZc.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_DataView-7-mB9i5Q.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_launchers-ChjahuGD.js",
-      "_GeoIpDossier-CxHUEsS_.js",
-      "_forensics-DjHcbxVk.js",
-      "_models-DWMcKSfu.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_armed-button-BTdJkliB.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_use-world-land-D1yrMMHS.js",
+      "_api-BxOkiGSj.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_DataView-BWhOe5d2.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_launchers-DejINADU.js",
+      "_GeoIpDossier-DUbzbCcn.js",
+      "_forensics-oCr_zobz.js",
+      "_models-BAmM2vSL.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_use-world-land-BRQlDErV.js",
       "_countryCentroids-CiPWDXva.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx": {
-    "file": "assets/IncidentsPage-BeFdEivl.js",
+    "file": "assets/IncidentsPage-DXG_Qiie.js",
     "name": "IncidentsPage",
     "src": "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_models-DWMcKSfu.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_models-BAmM2vSL.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/jobs/JobDashboardPage.tsx": {
-    "file": "assets/JobDashboardPage-DXAniaDu.js",
+    "file": "assets/JobDashboardPage-DlBlLSbR.js",
     "name": "JobDashboardPage",
     "src": "../../packages/portal-mojo/src/admin/jobs/JobDashboardPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_KPITile-Ccxx6h18.js",
+      "_KPITile-Hepd5EEN.js",
       "_countryCentroids-CiPWDXva.js",
-      "_armed-button-BTdJkliB.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_queries-Z8LKsU4p.js",
-      "_DataView-7-mB9i5Q.js",
-      "_RunnerDetail-CFk4NGAU.js",
-      "_MetricsChart-Dr0Bazno.js",
-      "_MetricsMiniWidget-CwGu_KAI.js",
-      "_MiniChart-zmXU4RBx.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_DetailView-DStbEA6b.js"
+      "_armed-button-Cpb7n_0m.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_queries-DbNSHruI.js",
+      "_DataView-BWhOe5d2.js",
+      "_RunnerDetail-BCbKW5dS.js",
+      "_MetricsChart-CvLUJWhJ.js",
+      "_MetricsMiniWidget-BUvs3Vdy.js",
+      "_MiniChart-DsjZMC4x.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_DetailView-KII3WZjA.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/jobs/JobRunnersPage.tsx": {
-    "file": "assets/JobRunnersPage-WXxbavQp.js",
+    "file": "assets/JobRunnersPage-UOz7lSkU.js",
     "name": "JobRunnersPage",
     "src": "../../packages/portal-mojo/src/admin/jobs/JobRunnersPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_RunnerDetail-CFk4NGAU.js",
-      "_queries-Z8LKsU4p.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_armed-button-BTdJkliB.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_DataView-7-mB9i5Q.js",
-      "_DetailView-DStbEA6b.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_RunnerDetail-BCbKW5dS.js",
+      "_queries-DbNSHruI.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_DataView-BWhOe5d2.js",
+      "_DetailView-KII3WZjA.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/jobs/JobsTablePage.tsx": {
-    "file": "assets/JobsTablePage-CiS6Zc9H.js",
+    "file": "assets/JobsTablePage-DLUSBz0N.js",
     "name": "JobsTablePage",
     "src": "../../packages/portal-mojo/src/admin/jobs/JobsTablePage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_ui-dw-llgkr.js",
-      "_armed-button-BTdJkliB.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_Timeline-CV3g0IC_.js",
-      "_DataView-7-mB9i5Q.js",
-      "_DetailView-DStbEA6b.js",
-      "_queries-Z8LKsU4p.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_ui-CJ60VOat.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_Timeline-CLqLBRC4.js",
+      "_DataView-BWhOe5d2.js",
+      "_DetailView-KII3WZjA.js",
+      "_queries-DbNSHruI.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/jobs/ScheduledTasksPage.tsx": {
-    "file": "assets/ScheduledTasksPage-CCKqxjxj.js",
+    "file": "assets/ScheduledTasksPage-ObOPZZ8D.js",
     "name": "ScheduledTasksPage",
     "src": "../../packages/portal-mojo/src/admin/jobs/ScheduledTasksPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_DataView-7-mB9i5Q.js",
-      "_DetailView-DStbEA6b.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_DataView-BWhOe5d2.js",
+      "_DetailView-KII3WZjA.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/maintenance/MaintenancePage.tsx": {
-    "file": "assets/MaintenancePage-D65Oxf0q.js",
+    "file": "assets/MaintenancePage-BI-P13ZG.js",
     "name": "MaintenancePage",
     "src": "../../packages/portal-mojo/src/admin/maintenance/MaintenancePage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
+      "_Tabs-C385fe7r.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js"
+      "_FleetHelp-BT_wgvGm.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/EmailDomainsPage.tsx": {
-    "file": "assets/EmailDomainsPage-OlYKiaq3.js",
+    "file": "assets/EmailDomainsPage-BSqcAV6i.js",
     "name": "EmailDomainsPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/EmailDomainsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_armed-button-BTdJkliB.js",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_api-Cnxk8P2e.js",
-      "_data-51CsY0iU.js",
-      "_FormWizard-vPeX4B4O.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_Tabs-DizQjZ4C.js"
+      "_armed-button-Cpb7n_0m.js",
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_api-BVFWkjgk.js",
+      "_data-BvGEDfKI.js",
+      "_FormWizard-CYOK8mpR.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_Tabs-C385fe7r.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/EmailTemplatesPage.tsx": {
-    "file": "assets/EmailTemplatesPage-3MK2XCyy.js",
+    "file": "assets/EmailTemplatesPage-Cts7gl_q.js",
     "name": "EmailTemplatesPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/EmailTemplatesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_Tabs-DizQjZ4C.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_data-51CsY0iU.js",
-      "_SandboxedEmailPreview-xNdOMBqb.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_Tabs-C385fe7r.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_data-BvGEDfKI.js",
+      "_SandboxedEmailPreview-DsnJ8VNc.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/MailboxesPage.tsx": {
-    "file": "assets/MailboxesPage-Dv4lR9Za.js",
+    "file": "assets/MailboxesPage-Dyrb_Wa8.js",
     "name": "MailboxesPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/MailboxesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_api-Cnxk8P2e.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_api-BVFWkjgk.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/PublicMessagesPage.tsx": {
-    "file": "assets/PublicMessagesPage-CkfsbBSJ.js",
+    "file": "assets/PublicMessagesPage-TXo4YCZx.js",
     "name": "PublicMessagesPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/PublicMessagesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_grouping-CSpA5VNh.js",
-      "_data-51CsY0iU.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_grouping-DpMiZd1w.js",
+      "_data-BvGEDfKI.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/SentMessagesPage.tsx": {
-    "file": "assets/SentMessagesPage-DNG0UELm.js",
+    "file": "assets/SentMessagesPage-B8YXtxEt.js",
     "name": "SentMessagesPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/SentMessagesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_grouping-CSpA5VNh.js",
-      "_data-51CsY0iU.js",
-      "_SandboxedEmailPreview-xNdOMBqb.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_grouping-DpMiZd1w.js",
+      "_data-BvGEDfKI.js",
+      "_SandboxedEmailPreview-DsnJ8VNc.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/messaging/push/PushPage.tsx": {
-    "file": "assets/PushPage-BVPYcPzC.js",
+    "file": "assets/PushPage-BLwvlMCH.js",
     "name": "PushPage",
     "src": "../../packages/portal-mojo/src/admin/messaging/push/PushPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_MetricsChart-Dr0Bazno.js",
-      "_KPITile-Ccxx6h18.js",
+      "_MetricsChart-CvLUJWhJ.js",
+      "_KPITile-Hepd5EEN.js",
       "_countryCentroids-CiPWDXva.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_Tabs-DizQjZ4C.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_MiniChart-zmXU4RBx.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_Tabs-C385fe7r.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_MiniChart-DsjZMC4x.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx": {
-    "file": "assets/LogsPage-BVb3qS9Y.js",
+    "file": "assets/LogsPage-VhmsQRYw.js",
     "name": "LogsPage",
     "src": "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_DataView-7-mB9i5Q.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_grouping-CSpA5VNh.js",
-      "_DetailView-DStbEA6b.js",
-      "_safe-node-DCWR3iMC.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_DataView-BWhOe5d2.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_grouping-DpMiZd1w.js",
+      "_DetailView-KII3WZjA.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/monitoring/MetricsExplorerPage.tsx": {
-    "file": "assets/MetricsExplorerPage--6C2M-EC.js",
+    "file": "assets/MetricsExplorerPage-CNbg5-sy.js",
     "name": "MetricsExplorerPage",
     "src": "../../packages/portal-mojo/src/admin/monitoring/MetricsExplorerPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_MetricsChart-Dr0Bazno.js",
-      "_KPITile-Ccxx6h18.js",
+      "_MetricsChart-CvLUJWhJ.js",
+      "_KPITile-Hepd5EEN.js",
       "_countryCentroids-CiPWDXva.js",
-      "_field-registry-Begqql-S.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_MiniChart-zmXU4RBx.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_MiniChart-DsjZMC4x.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/monitoring/MetricsPermissionsPage.tsx": {
-    "file": "assets/MetricsPermissionsPage-DuxG13Td.js",
+    "file": "assets/MetricsPermissionsPage-DOPRVHf9.js",
     "name": "MetricsPermissionsPage",
     "src": "../../packages/portal-mojo/src/admin/monitoring/MetricsPermissionsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/network/BlockedIPsPage.tsx": {
-    "file": "assets/BlockedIPsPage-DfVjRDVh.js",
+    "file": "assets/BlockedIPsPage-20xLZUam.js",
     "name": "BlockedIPsPage",
     "src": "../../packages/portal-mojo/src/admin/network/BlockedIPsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
       "_countryCentroids-CiPWDXva.js",
-      "_GeoIpDossier-CxHUEsS_.js",
-      "_models-DWMcKSfu.js",
+      "_GeoIpDossier-DUbzbCcn.js",
+      "_models-BAmM2vSL.js",
       "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
-      "_armed-button-BTdJkliB.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_DetailView-DStbEA6b.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_use-world-land-D1yrMMHS.js"
+      "_armed-button-Cpb7n_0m.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_use-world-land-BRQlDErV.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/network/FirewallLogPage.tsx": {
-    "file": "assets/FirewallLogPage-DBbNzFc7.js",
+    "file": "assets/FirewallLogPage-NXJ2tACn.js",
     "name": "FirewallLogPage",
     "src": "../../packages/portal-mojo/src/admin/network/FirewallLogPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_grouping-CSpA5VNh.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_grouping-DpMiZd1w.js",
       "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx",
       "_countryCentroids-CiPWDXva.js",
-      "_models-B4X2sXqA.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_DataView-7-mB9i5Q.js",
-      "_DetailView-DStbEA6b.js"
+      "_models-Bih62Fi5.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_DataView-BWhOe5d2.js",
+      "_DetailView-KII3WZjA.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/network/IPSetsPage.tsx": {
-    "file": "assets/IPSetsPage-C56di0kq.js",
+    "file": "assets/IPSetsPage-C8TXE7r1.js",
     "name": "IPSetsPage",
     "src": "../../packages/portal-mojo/src/admin/network/IPSetsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_models-B4X2sXqA.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_DetailView-DStbEA6b.js",
-      "_IPSetEditor-m_3n5VPU.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_models-Bih62Fi5.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_IPSetEditor-2FNSUm3W.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
       "_countryCentroids-CiPWDXva.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_schema-form-core-DVI8blzO.js"
+      "_FormFields-D2Yp3fOw.js",
+      "_schema-form-core-T-e16mwN.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/network/geofence/GeofencingPage.tsx": {
-    "file": "assets/GeofencingPage-D51amN9M.js",
+    "file": "assets/GeofencingPage-AY6tIscu.js",
     "name": "GeofencingPage",
     "src": "../../packages/portal-mojo/src/admin/network/geofence/GeofencingPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_models-B4X2sXqA.js",
-      "_field-registry-Begqql-S.js",
-      "_armed-button-BTdJkliB.js",
-      "_ui-dw-llgkr.js",
-      "_BlocksTab-BxGRevJR.js",
-      "_CollectionSelect-BIayPFs7.js",
+      "_models-Bih62Fi5.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_ui-CJ60VOat.js",
+      "_BlocksTab-Pb9a0bl4.js",
+      "_CollectionSelect-BKxA9Zeo.js",
       "_countryCentroids-CiPWDXva.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_models-DWMcKSfu.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_models-BAmM2vSL.js",
       "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_ModelTable-CRInQb6e.js",
-      "_safe-node-DCWR3iMC.js",
-      "_grouping-CSpA5VNh.js",
-      "_MetricsChart-Dr0Bazno.js",
-      "_MetricsMiniWidget-CwGu_KAI.js",
-      "_MiniChart-zmXU4RBx.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_grouping-DpMiZd1w.js",
+      "_MetricsChart-CvLUJWhJ.js",
+      "_MetricsMiniWidget-BUvs3Vdy.js",
+      "_MiniChart-DsjZMC4x.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
-      "_schema-form-core-DVI8blzO.js",
-      "_GeoIpDossier-CxHUEsS_.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_DetailView-DStbEA6b.js",
-      "_use-world-land-D1yrMMHS.js"
+      "_schema-form-core-T-e16mwN.js",
+      "_GeoIpDossier-DUbzbCcn.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_DetailView-KII3WZjA.js",
+      "_use-world-land-BRQlDErV.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/phonehub/PhoneHubPage.tsx": {
-    "file": "assets/PhoneHubPage-DpOIfTQI.js",
+    "file": "assets/PhoneHubPage-B4nIWrI9.js",
     "name": "PhoneHubPage",
     "src": "../../packages/portal-mojo/src/admin/phonehub/PhoneHubPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_Tabs-DizQjZ4C.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_Tabs-C385fe7r.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/rules/RuleSetsPage.tsx": {
-    "file": "assets/RuleSetsPage-COKbWTHP.js",
+    "file": "assets/RuleSetsPage-BvlOPPrA.js",
     "name": "RuleSetsPage",
     "src": "../../packages/portal-mojo/src/admin/rules/RuleSetsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_HandlerChainBuilder-U9YhCpwp.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_DataView-7-mB9i5Q.js",
-      "_DetailView-DStbEA6b.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_schema-form-core-DVI8blzO.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_HandlerChainBuilder-B8lO5h6x.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_DataView-BWhOe5d2.js",
+      "_DetailView-KII3WZjA.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_schema-form-core-T-e16mwN.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx": {
-    "file": "assets/LoginEventDetail-BpBz60u5.js",
+    "file": "assets/LoginEventDetail-BJCg9gVo.js",
     "name": "LoginEventDetail",
     "src": "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_GeoIpDossier-CxHUEsS_.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_armed-button-BTdJkliB.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_use-world-land-D1yrMMHS.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_GeoIpDossier-DUbzbCcn.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_use-world-land-BRQlDErV.js",
       "_countryCentroids-CiPWDXva.js",
-      "_models-DWMcKSfu.js"
+      "_models-BAmM2vSL.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/devices/LoginLocationsPage.tsx": {
-    "file": "assets/LoginLocationsPage-DqUmmz4x.js",
+    "file": "assets/LoginLocationsPage-BU6fDsz2.js",
     "name": "LoginLocationsPage",
     "src": "../../packages/portal-mojo/src/admin/security/devices/LoginLocationsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_grouping-CSpA5VNh.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_grouping-DpMiZd1w.js",
       "_countryCentroids-CiPWDXva.js",
-      "_LoginLocationMap-D-6dEPlE.js",
+      "_LoginLocationMap-U974vc3h.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_use-world-land-D1yrMMHS.js",
-      "_DetailView-DStbEA6b.js",
-      "_GeoIpDossier-CxHUEsS_.js",
-      "_armed-button-BTdJkliB.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_models-DWMcKSfu.js",
-      "_Timeline-CV3g0IC_.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_use-world-land-BRQlDErV.js",
+      "_DetailView-KII3WZjA.js",
+      "_GeoIpDossier-DUbzbCcn.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_models-BAmM2vSL.js",
+      "_Timeline-CLqLBRC4.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-7-mB9i5Q.js",
+      "_DataView-BWhOe5d2.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx": {
-    "file": "assets/UserDeviceDetail-BngCvact.js",
+    "file": "assets/UserDeviceDetail-CJGRGsTH.js",
     "name": "UserDeviceDetail",
     "src": "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Timeline-CV3g0IC_.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
+      "_Timeline-CLqLBRC4.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
-      "_GeoIpDossier-CxHUEsS_.js",
+      "_GeoIpDossier-DUbzbCcn.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
-      "_models-DWMcKSfu.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_safe-node-DCWR3iMC.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_ModelTable-CRInQb6e.js",
+      "_models-BAmM2vSL.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_ModelTable-BRlPRgrF.js",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-7-mB9i5Q.js",
-      "_grouping-CSpA5VNh.js",
+      "_DataView-BWhOe5d2.js",
+      "_grouping-DpMiZd1w.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "_countryCentroids-CiPWDXva.js",
-      "_armed-button-BTdJkliB.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_use-world-land-D1yrMMHS.js"
+      "_armed-button-Cpb7n_0m.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_use-world-land-BRQlDErV.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/devices/UserDevicesPage.tsx": {
-    "file": "assets/UserDevicesPage-Br1qaGPr.js",
+    "file": "assets/UserDevicesPage-B1q-_G96.js",
     "name": "UserDevicesPage",
     "src": "../../packages/portal-mojo/src/admin/security/devices/UserDevicesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_Timeline-CV3g0IC_.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_ui-dw-llgkr.js",
-      "_DetailView-DStbEA6b.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_Timeline-CLqLBRC4.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_ui-CJ60VOat.js",
+      "_DetailView-KII3WZjA.js",
       "../../packages/portal-mojo/src/admin/bouncer/devices.tsx",
       "../../packages/portal-mojo/src/admin/bouncer/signals.tsx",
-      "_DataView-7-mB9i5Q.js",
-      "_grouping-CSpA5VNh.js",
-      "_models-DWMcKSfu.js",
+      "_DataView-BWhOe5d2.js",
+      "_grouping-DpMiZd1w.js",
+      "_models-BAmM2vSL.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "_countryCentroids-CiPWDXva.js",
-      "_GeoIpDossier-CxHUEsS_.js",
-      "_armed-button-BTdJkliB.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_use-world-land-D1yrMMHS.js",
+      "_GeoIpDossier-DUbzbCcn.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_use-world-land-BRQlDErV.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx": {
-    "file": "assets/GeoIpCachePage-DbqFsVJK.js",
+    "file": "assets/GeoIpCachePage-CcmkmUIj.js",
     "name": "GeoIpCachePage",
     "src": "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
       "_countryCentroids-CiPWDXva.js",
-      "_GeoIpDossier-CxHUEsS_.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_armed-button-BTdJkliB.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_DetailView-DStbEA6b.js",
-      "_use-world-land-D1yrMMHS.js",
-      "_models-DWMcKSfu.js"
+      "_GeoIpDossier-DUbzbCcn.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_DetailView-KII3WZjA.js",
+      "_use-world-land-BRQlDErV.js",
+      "_models-BAmM2vSL.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/security/tickets.tsx": {
-    "file": "assets/tickets-CJ47ntnP.js",
+    "file": "assets/tickets-B4yGIXXq.js",
     "name": "tickets",
     "src": "../../packages/portal-mojo/src/admin/security/tickets.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_CollectionSelect-BIayPFs7.js",
-      "_api-C8MOxuZc.js",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
-      "_launchers-ChjahuGD.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_safe-node-DCWR3iMC.js"
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_api-BxOkiGSj.js",
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_launchers-DejINADU.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/settings/SettingsPage.tsx": {
-    "file": "assets/SettingsPage-DUrgHYm4.js",
+    "file": "assets/SettingsPage-CApyBSXs.js",
     "name": "SettingsPage",
     "src": "../../packages/portal-mojo/src/admin/settings/SettingsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_DetailView-DStbEA6b.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_DetailView-KII3WZjA.js",
       "_access-PXF--cFa.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DataView-7-mB9i5Q.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DataView-BWhOe5d2.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/shortlinks/ShortlinkHistoryPage.tsx": {
-    "file": "assets/ShortlinkHistoryPage-DcCl7og4.js",
+    "file": "assets/ShortlinkHistoryPage-DdtXdhCo.js",
     "name": "ShortlinkHistoryPage",
     "src": "../../packages/portal-mojo/src/admin/shortlinks/ShortlinkHistoryPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/shortlinks/ShortlinksPage.tsx": {
-    "file": "assets/ShortlinksPage-BNEnMgpl.js",
+    "file": "assets/ShortlinksPage-q6j7v7DK.js",
     "name": "ShortlinksPage",
     "src": "../../packages/portal-mojo/src/admin/shortlinks/ShortlinksPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_DetailView-DStbEA6b.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_DetailView-KII3WZjA.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/signin/SigninPage.tsx": {
-    "file": "assets/SigninPage-GFWE15eL.js",
+    "file": "assets/SigninPage-hkieOcB4.js",
     "name": "SigninPage",
     "src": "../../packages/portal-mojo/src/admin/signin/SigninPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_ui-dw-llgkr.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_ui-CJ60VOat.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/storage/BackendsPage.tsx": {
-    "file": "assets/BackendsPage-Dw4qLxFA.js",
+    "file": "assets/BackendsPage-DK_u_nHK.js",
     "name": "BackendsPage",
     "src": "../../packages/portal-mojo/src/admin/storage/BackendsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_DetailView-DStbEA6b.js",
-      "_FileView-rBv78lfB.js",
-      "_models-BhsfkEAR.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_safe-node-DCWR3iMC.js",
-      "_DataView-7-mB9i5Q.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_schema-form-core-DVI8blzO.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_DetailView-KII3WZjA.js",
+      "_FileView-CQMKgs5B.js",
+      "_models-CTTS00bM.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_DataView-BWhOe5d2.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_schema-form-core-T-e16mwN.js",
       "_file-renditions-BBuFZJ24.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/storage/BucketsPage.tsx": {
-    "file": "assets/BucketsPage-Drc3CU80.js",
+    "file": "assets/BucketsPage-gMCWvQLU.js",
     "name": "BucketsPage",
     "src": "../../packages/portal-mojo/src/admin/storage/BucketsPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_armed-button-BTdJkliB.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_DetailView-DStbEA6b.js",
-      "_models-BhsfkEAR.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_safe-node-DCWR3iMC.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_DetailView-KII3WZjA.js",
+      "_models-CTTS00bM.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/storage/FilesPage.tsx": {
-    "file": "assets/FilesPage-iubGtU4W.js",
+    "file": "assets/FilesPage-BBI9zO8Q.js",
     "name": "FilesPage",
     "src": "../../packages/portal-mojo/src/admin/storage/FilesPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_CollectionSelect-BIayPFs7.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_ModelTable-CRInQb6e.js",
-      "_UploadQueue-JcfTokA-.js",
-      "_models-BhsfkEAR.js",
-      "_FileView-rBv78lfB.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_safe-node-DCWR3iMC.js",
-      "_DataView-7-mB9i5Q.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_schema-form-core-DVI8blzO.js",
-      "_DetailView-DStbEA6b.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_UploadQueue-BzemwSRM.js",
+      "_models-CTTS00bM.js",
+      "_FileView-CQMKgs5B.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_safe-node-Itn8a5Ge.js",
+      "_DataView-BWhOe5d2.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_schema-form-core-T-e16mwN.js",
+      "_DetailView-KII3WZjA.js",
       "_file-renditions-BBuFZJ24.js"
     ]
   },
   "../../packages/portal-mojo/src/admin/storage/MediaRenderingPage.tsx": {
-    "file": "assets/MediaRenderingPage-CecyAg47.js",
+    "file": "assets/MediaRenderingPage-zVwKz8zq.js",
     "name": "MediaRenderingPage",
     "src": "../../packages/portal-mojo/src/admin/storage/MediaRenderingPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_Tabs-DizQjZ4C.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_Tabs-C385fe7r.js",
       "_file-renditions-BBuFZJ24.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "../../packages/portal-mojo/src/charts/worldmap/world-land.ts": {
@@ -1676,86 +1676,86 @@
     "src": "../../packages/portal-mojo/src/charts/worldmap/world-land.ts",
     "isDynamicEntry": true
   },
-  "_BlocksTab-BxGRevJR.js": {
-    "file": "assets/BlocksTab-BxGRevJR.js",
+  "_BlocksTab-Pb9a0bl4.js": {
+    "file": "assets/BlocksTab-Pb9a0bl4.js",
     "name": "BlocksTab",
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_models-B4X2sXqA.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_models-Bih62Fi5.js",
       "_countryCentroids-CiPWDXva.js",
-      "_ui-dw-llgkr.js",
-      "_ModelTable-CRInQb6e.js",
-      "_grouping-CSpA5VNh.js",
-      "_MetricsChart-Dr0Bazno.js",
-      "_MetricsMiniWidget-CwGu_KAI.js",
-      "_models-DWMcKSfu.js",
+      "_ui-CJ60VOat.js",
+      "_ModelTable-BRlPRgrF.js",
+      "_grouping-DpMiZd1w.js",
+      "_MetricsChart-CvLUJWhJ.js",
+      "_MetricsMiniWidget-BUvs3Vdy.js",
+      "_models-BAmM2vSL.js",
       "../../packages/portal-mojo/src/admin/security/geoip/GeoIpCachePage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx"
     ]
   },
-  "_CertificateRequestDialog-E0occ7P-.js": {
-    "file": "assets/CertificateRequestDialog-E0occ7P-.js",
+  "_CertificateRequestDialog-DMEmVm-w.js": {
+    "file": "assets/CertificateRequestDialog-DMEmVm-w.js",
     "name": "CertificateRequestDialog",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_api-BrovzYlC.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_operator-destinations-BuP0Semq.js"
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_api-BIFjb0oM.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_operator-destinations-C_cUyiix.js"
     ]
   },
-  "_CloudWatchDashboardPage-wXxjiPOv.js": {
-    "file": "assets/CloudWatchDashboardPage-wXxjiPOv.js",
+  "_CloudWatchDashboardPage-WeojbyRi.js": {
+    "file": "assets/CloudWatchDashboardPage-WeojbyRi.js",
     "name": "CloudWatchDashboardPage",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_MetricsChart-Dr0Bazno.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_MetricsChart-CvLUJWhJ.js",
       "_countryCentroids-CiPWDXva.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/cloudwatch/CloudWatchResourceDetail.tsx"
     ]
   },
-  "_CollectionSelect-BIayPFs7.js": {
-    "file": "assets/CollectionSelect-BIayPFs7.js",
+  "_CollectionSelect-BKxA9Zeo.js": {
+    "file": "assets/CollectionSelect-BKxA9Zeo.js",
     "name": "CollectionSelect",
     "imports": [
       "index.html"
     ]
   },
-  "_DataView-7-mB9i5Q.js": {
-    "file": "assets/DataView-7-mB9i5Q.js",
+  "_DataView-BWhOe5d2.js": {
+    "file": "assets/DataView-BWhOe5d2.js",
     "name": "DataView",
     "imports": [
       "index.html",
-      "_safe-node-DCWR3iMC.js",
-      "_ui-dw-llgkr.js"
+      "_safe-node-Itn8a5Ge.js",
+      "_ui-CJ60VOat.js"
     ]
   },
-  "_DateRangePicker-WT8G5QFn.js": {
-    "file": "assets/DateRangePicker-WT8G5QFn.js",
+  "_DateRangePicker-C1qKU0gW.js": {
+    "file": "assets/DateRangePicker-C1qKU0gW.js",
     "name": "DateRangePicker",
     "imports": [
       "index.html"
     ]
   },
-  "_DeploymentsPage-CMZOKpRE.js": {
-    "file": "assets/DeploymentsPage-CMZOKpRE.js",
+  "_DeploymentsPage-YxkD5XPc.js": {
+    "file": "assets/DeploymentsPage-YxkD5XPc.js",
     "name": "DeploymentsPage",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
+      "_Tabs-C385fe7r.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js"
+      "_FleetHelp-BT_wgvGm.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/deployments/WebAppOnboardingDialog.tsx",
@@ -1763,80 +1763,80 @@
       "../../packages/portal-mojo/src/admin/deployments/WebAppDetail.tsx"
     ]
   },
-  "_DetailView-DStbEA6b.js": {
-    "file": "assets/DetailView-DStbEA6b.js",
+  "_DetailView-KII3WZjA.js": {
+    "file": "assets/DetailView-KII3WZjA.js",
     "name": "DetailView",
     "imports": [
       "index.html",
-      "_safe-node-DCWR3iMC.js"
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
-  "_DnsRecordsPanel-PHTCPy_y.js": {
-    "file": "assets/DnsRecordsPanel-PHTCPy_y.js",
+  "_DnsRecordsPanel-Bep36iZo.js": {
+    "file": "assets/DnsRecordsPanel-Bep36iZo.js",
     "name": "DnsRecordsPanel",
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_OperationsHelp-DogWYynb.js",
-      "_api-BrovzYlC.js",
-      "_domain-authority-B9BoZ1N6.js"
+      "_field-registry-CQ1uF9vQ.js",
+      "_OperationsHelp-CzjPmDjF.js",
+      "_api-BIFjb0oM.js",
+      "_domain-authority-CoI0j489.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/dns/ProviderCredentialsPage.tsx"
     ]
   },
-  "_DomainOnboardingDialog-C7_riQDI.js": {
-    "file": "assets/DomainOnboardingDialog-C7_riQDI.js",
+  "_DomainOnboardingDialog-CtWBv74o.js": {
+    "file": "assets/DomainOnboardingDialog-CtWBv74o.js",
     "name": "DomainOnboardingDialog",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_api-BrovzYlC.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_ui-dw-llgkr.js",
-      "_FormWizard-vPeX4B4O.js",
-      "_OperationsHelp-DogWYynb.js",
-      "_DetailView-DStbEA6b.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_api-BIFjb0oM.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_ui-CJ60VOat.js",
+      "_FormWizard-CYOK8mpR.js",
+      "_OperationsHelp-CzjPmDjF.js",
+      "_DetailView-KII3WZjA.js",
       "_domain-navigation-DAEfrDF3.js",
       "../../packages/portal-mojo/src/admin/dns/RegistrantContactPage.tsx",
-      "_domain-authority-B9BoZ1N6.js"
+      "_domain-authority-CoI0j489.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/dns/DomainDetail.tsx",
       "../../packages/portal-mojo/src/admin/dns/ProviderCredentialsPage.tsx"
     ]
   },
-  "_FileView-rBv78lfB.js": {
-    "file": "assets/FileView-rBv78lfB.js",
+  "_FileView-CQMKgs5B.js": {
+    "file": "assets/FileView-CQMKgs5B.js",
     "name": "FileView",
     "imports": [
       "index.html",
-      "_DataView-7-mB9i5Q.js",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_models-BhsfkEAR.js",
+      "_DataView-BWhOe5d2.js",
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_models-CTTS00bM.js",
       "_file-renditions-BBuFZJ24.js"
     ]
   },
-  "_FleetHelp-B8a84Fo6.js": {
-    "file": "assets/FleetHelp-B8a84Fo6.js",
+  "_FleetHelp-BT_wgvGm.js": {
+    "file": "assets/FleetHelp-BT_wgvGm.js",
     "name": "FleetHelp",
     "imports": [
       "index.html"
     ]
   },
-  "_FleetWorkspace-BdcCZQCl.js": {
-    "file": "assets/FleetWorkspace-BdcCZQCl.js",
+  "_FleetWorkspace-C2UmQNcP.js": {
+    "file": "assets/FleetWorkspace-C2UmQNcP.js",
     "name": "FleetWorkspace",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_Tabs-DizQjZ4C.js",
+      "_Tabs-C385fe7r.js",
       "_access-PXF--cFa.js",
-      "_FleetHelp-B8a84Fo6.js"
+      "_FleetHelp-BT_wgvGm.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/fleet/CapacityEditor.tsx",
@@ -1844,282 +1844,282 @@
       "../../packages/portal-mojo/src/admin/fleet/CapacityProgress.tsx"
     ]
   },
-  "_FormFields-B3pxlXkZ.js": {
-    "file": "assets/FormFields-B3pxlXkZ.js",
+  "_FormFields-D2Yp3fOw.js": {
+    "file": "assets/FormFields-D2Yp3fOw.js",
     "name": "FormFields",
     "imports": [
       "index.html",
-      "_schema-form-core-DVI8blzO.js"
+      "_schema-form-core-T-e16mwN.js"
     ]
   },
-  "_FormView-Bgrwi41Q.js": {
-    "file": "assets/FormView-Bgrwi41Q.js",
+  "_FormView-eQg1J243.js": {
+    "file": "assets/FormView-eQg1J243.js",
     "name": "FormView",
     "imports": [
       "index.html",
-      "_schema-form-core-DVI8blzO.js",
-      "_Tabs-DizQjZ4C.js",
-      "_field-registry-Begqql-S.js"
+      "_schema-form-core-T-e16mwN.js",
+      "_Tabs-C385fe7r.js",
+      "_field-registry-CQ1uF9vQ.js"
     ]
   },
-  "_FormWizard-vPeX4B4O.js": {
-    "file": "assets/FormWizard-vPeX4B4O.js",
+  "_FormWizard-CYOK8mpR.js": {
+    "file": "assets/FormWizard-CYOK8mpR.js",
     "name": "FormWizard",
     "imports": [
       "index.html",
-      "_schema-form-core-DVI8blzO.js",
-      "_Tabs-DizQjZ4C.js"
+      "_schema-form-core-T-e16mwN.js",
+      "_Tabs-C385fe7r.js"
     ]
   },
-  "_GeoIpDossier-CxHUEsS_.js": {
-    "file": "assets/GeoIpDossier-CxHUEsS_.js",
+  "_GeoIpDossier-DUbzbCcn.js": {
+    "file": "assets/GeoIpDossier-DUbzbCcn.js",
     "name": "GeoIpDossier",
     "imports": [
       "index.html",
-      "_armed-button-BTdJkliB.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_use-world-land-D1yrMMHS.js",
+      "_armed-button-Cpb7n_0m.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_use-world-land-BRQlDErV.js",
       "_countryCentroids-CiPWDXva.js",
-      "_models-DWMcKSfu.js"
+      "_models-BAmM2vSL.js"
     ]
   },
-  "_HandlerChainBuilder-U9YhCpwp.js": {
-    "file": "assets/HandlerChainBuilder-U9YhCpwp.js",
+  "_HandlerChainBuilder-B8lO5h6x.js": {
+    "file": "assets/HandlerChainBuilder-B8lO5h6x.js",
     "name": "HandlerChainBuilder",
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js"
+      "_field-registry-CQ1uF9vQ.js"
     ]
   },
-  "_IPSetEditor-m_3n5VPU.js": {
-    "file": "assets/IPSetEditor-m_3n5VPU.js",
+  "_IPSetEditor-2FNSUm3W.js": {
+    "file": "assets/IPSetEditor-2FNSUm3W.js",
     "name": "IPSetEditor",
     "imports": [
       "index.html",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
       "_countryCentroids-CiPWDXva.js",
-      "_models-B4X2sXqA.js"
+      "_models-Bih62Fi5.js"
     ]
   },
-  "_KPITile-Ccxx6h18.js": {
-    "file": "assets/KPITile-Ccxx6h18.js",
+  "_KPITile-Hepd5EEN.js": {
+    "file": "assets/KPITile-Hepd5EEN.js",
     "name": "KPITile",
     "imports": [
       "index.html",
-      "_MiniChart-zmXU4RBx.js",
-      "_MetricsChart-Dr0Bazno.js"
+      "_MiniChart-DsjZMC4x.js",
+      "_MetricsChart-CvLUJWhJ.js"
     ]
   },
-  "_KnownFieldsCard-Z1GMFkmP.js": {
-    "file": "assets/KnownFieldsCard-Z1GMFkmP.js",
+  "_KnownFieldsCard-drwBENTb.js": {
+    "file": "assets/KnownFieldsCard-drwBENTb.js",
     "name": "KnownFieldsCard",
     "imports": [
       "index.html",
-      "_safe-node-DCWR3iMC.js"
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
-  "_LoginLocationMap-D-6dEPlE.js": {
-    "file": "assets/LoginLocationMap-D-6dEPlE.js",
+  "_LoginLocationMap-U974vc3h.js": {
+    "file": "assets/LoginLocationMap-U974vc3h.js",
     "name": "LoginLocationMap",
     "imports": [
       "index.html",
-      "_use-world-land-D1yrMMHS.js",
+      "_use-world-land-BRQlDErV.js",
       "_countryCentroids-CiPWDXva.js",
-      "_field-registry-Begqql-S.js"
+      "_field-registry-CQ1uF9vQ.js"
     ]
   },
-  "_MemberDetail-HA_Ys2_v.js": {
-    "file": "assets/MemberDetail-HA_Ys2_v.js",
+  "_MemberDetail-Cbzf8xQG.js": {
+    "file": "assets/MemberDetail-Cbzf8xQG.js",
     "name": "MemberDetail",
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_guardrail-ESQ_taOi.js",
-      "_DataView-7-mB9i5Q.js",
-      "_ui-dw-llgkr.js",
-      "_FormView-Bgrwi41Q.js",
-      "_DetailView-DStbEA6b.js",
-      "_ModelTable-CRInQb6e.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_guardrail-C13Kqskf.js",
+      "_DataView-BWhOe5d2.js",
+      "_ui-CJ60VOat.js",
+      "_FormView-eQg1J243.js",
+      "_DetailView-KII3WZjA.js",
+      "_ModelTable-BRlPRgrF.js",
       "_countryCentroids-CiPWDXva.js"
     ]
   },
-  "_MetricsChart-Dr0Bazno.js": {
-    "file": "assets/MetricsChart-Dr0Bazno.js",
+  "_MetricsChart-CvLUJWhJ.js": {
+    "file": "assets/MetricsChart-CvLUJWhJ.js",
     "name": "MetricsChart",
     "imports": [
       "index.html",
-      "_DateRangePicker-WT8G5QFn.js"
+      "_DateRangePicker-C1qKU0gW.js"
     ]
   },
-  "_MetricsMiniWidget-CwGu_KAI.js": {
-    "file": "assets/MetricsMiniWidget-CwGu_KAI.js",
+  "_MetricsMiniWidget-BUvs3Vdy.js": {
+    "file": "assets/MetricsMiniWidget-BUvs3Vdy.js",
     "name": "MetricsMiniWidget",
     "imports": [
       "index.html",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_CollectionSelect-BIayPFs7.js",
-      "_MetricsChart-Dr0Bazno.js",
-      "_MiniChart-zmXU4RBx.js"
+      "_DateRangePicker-C1qKU0gW.js",
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_MetricsChart-CvLUJWhJ.js",
+      "_MiniChart-DsjZMC4x.js"
     ]
   },
-  "_MiniChart-zmXU4RBx.js": {
-    "file": "assets/MiniChart-zmXU4RBx.js",
+  "_MiniChart-DsjZMC4x.js": {
+    "file": "assets/MiniChart-DsjZMC4x.js",
     "name": "MiniChart",
     "imports": [
       "index.html",
-      "_MetricsChart-Dr0Bazno.js"
+      "_MetricsChart-CvLUJWhJ.js"
     ]
   },
-  "_ModelTable-CRInQb6e.js": {
-    "file": "assets/ModelTable-CRInQb6e.js",
+  "_ModelTable-BRlPRgrF.js": {
+    "file": "assets/ModelTable-BRlPRgrF.js",
     "name": "ModelTable",
     "imports": [
       "index.html",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_safe-node-DCWR3iMC.js"
+      "_DateRangePicker-C1qKU0gW.js",
+      "_safe-node-Itn8a5Ge.js"
     ]
   },
-  "_NotificationPreferences-BQv233UV.js": {
-    "file": "assets/NotificationPreferences-BQv233UV.js",
+  "_NotificationPreferences-B_hKJ0Ct.js": {
+    "file": "assets/NotificationPreferences-B_hKJ0Ct.js",
     "name": "NotificationPreferences",
     "imports": [
       "index.html",
-      "_ui-dw-llgkr.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_field-registry-Begqql-S.js",
-      "_secret-dialog-BrUdP3AC.js",
-      "_DetailView-DStbEA6b.js"
+      "_ui-CJ60VOat.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_secret-dialog-BqKuXLNV.js",
+      "_DetailView-KII3WZjA.js"
     ]
   },
-  "_OperationsHelp-DogWYynb.js": {
-    "file": "assets/OperationsHelp-DogWYynb.js",
+  "_OperationsHelp-CzjPmDjF.js": {
+    "file": "assets/OperationsHelp-CzjPmDjF.js",
     "name": "OperationsHelp",
     "imports": [
       "index.html"
     ]
   },
-  "_RunnerDetail-CFk4NGAU.js": {
-    "file": "assets/RunnerDetail-CFk4NGAU.js",
+  "_RunnerDetail-BCbKW5dS.js": {
+    "file": "assets/RunnerDetail-BCbKW5dS.js",
     "name": "RunnerDetail",
     "imports": [
       "index.html",
-      "_armed-button-BTdJkliB.js",
-      "_StatusPanel-DLE-hGC4.js",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_DataView-7-mB9i5Q.js",
-      "_ui-dw-llgkr.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js",
-      "_queries-Z8LKsU4p.js"
+      "_armed-button-Cpb7n_0m.js",
+      "_StatusPanel-BRwMPPnQ.js",
+      "_KnownFieldsCard-drwBENTb.js",
+      "_DataView-BWhOe5d2.js",
+      "_ui-CJ60VOat.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js",
+      "_queries-DbNSHruI.js"
     ]
   },
-  "_SandboxedEmailPreview-xNdOMBqb.js": {
-    "file": "assets/SandboxedEmailPreview-xNdOMBqb.js",
+  "_SandboxedEmailPreview-DsnJ8VNc.js": {
+    "file": "assets/SandboxedEmailPreview-DsnJ8VNc.js",
     "name": "SandboxedEmailPreview",
     "imports": [
       "index.html"
     ]
   },
-  "_StatusPanel-DLE-hGC4.js": {
-    "file": "assets/StatusPanel-DLE-hGC4.js",
+  "_StatusPanel-BRwMPPnQ.js": {
+    "file": "assets/StatusPanel-BRwMPPnQ.js",
     "name": "StatusPanel",
     "imports": [
       "index.html"
     ]
   },
-  "_Tabs-DizQjZ4C.js": {
-    "file": "assets/Tabs-DizQjZ4C.js",
+  "_Tabs-C385fe7r.js": {
+    "file": "assets/Tabs-C385fe7r.js",
     "name": "Tabs",
     "imports": [
       "index.html"
     ]
   },
-  "_Timeline-CV3g0IC_.js": {
-    "file": "assets/Timeline-CV3g0IC_.js",
+  "_Timeline-CLqLBRC4.js": {
+    "file": "assets/Timeline-CLqLBRC4.js",
     "name": "Timeline",
     "imports": [
       "index.html",
-      "_StatusPanel-DLE-hGC4.js"
+      "_StatusPanel-BRwMPPnQ.js"
     ]
   },
-  "_UploadQueue-JcfTokA-.js": {
-    "file": "assets/UploadQueue-JcfTokA-.js",
+  "_UploadQueue-BzemwSRM.js": {
+    "file": "assets/UploadQueue-BzemwSRM.js",
     "name": "UploadQueue",
     "imports": [
       "index.html"
     ]
   },
-  "_UserDetail-BKvrGynm.js": {
-    "file": "assets/UserDetail-BKvrGynm.js",
+  "_UserDetail-BU88XXCh.js": {
+    "file": "assets/UserDetail-BU88XXCh.js",
     "name": "UserDetail",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_field-registry-Begqql-S.js",
-      "_FormView-Bgrwi41Q.js",
-      "_DetailView-DStbEA6b.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_FormView-eQg1J243.js",
+      "_DetailView-KII3WZjA.js",
       "_countryCentroids-CiPWDXva.js",
-      "_secret-dialog-BrUdP3AC.js",
-      "_password-Dig7hGKH.js",
-      "_FormFields-B3pxlXkZ.js",
-      "_NotificationPreferences-BQv233UV.js",
-      "_ui-dw-llgkr.js",
-      "_models-DWMcKSfu.js",
+      "_secret-dialog-BqKuXLNV.js",
+      "_password-Df7pMyN7.js",
+      "_FormFields-D2Yp3fOw.js",
+      "_NotificationPreferences-B_hKJ0Ct.js",
+      "_ui-CJ60VOat.js",
+      "_models-BAmM2vSL.js",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventsPage.tsx",
       "../../packages/portal-mojo/src/admin/security/devices/UserDeviceDetail.tsx",
-      "_LoginLocationMap-D-6dEPlE.js",
+      "_LoginLocationMap-U974vc3h.js",
       "../../packages/portal-mojo/src/admin/security/devices/LoginEventDetail.tsx",
-      "_DataView-7-mB9i5Q.js",
-      "_guardrail-ESQ_taOi.js",
-      "_Timeline-CV3g0IC_.js",
-      "_armed-button-BTdJkliB.js"
+      "_DataView-BWhOe5d2.js",
+      "_guardrail-C13Kqskf.js",
+      "_Timeline-CLqLBRC4.js",
+      "_armed-button-Cpb7n_0m.js"
     ]
   },
   "_access-PXF--cFa.js": {
     "file": "assets/access-PXF--cFa.js",
     "name": "access"
   },
-  "_api-BrovzYlC.js": {
-    "file": "assets/api-BrovzYlC.js",
+  "_api-BIFjb0oM.js": {
+    "file": "assets/api-BIFjb0oM.js",
     "name": "api",
     "isDynamicEntry": true,
     "imports": [
       "index.html"
     ]
   },
-  "_api-C8MOxuZc.js": {
-    "file": "assets/api-C8MOxuZc.js",
-    "name": "api",
-    "imports": [
-      "index.html",
-      "_UploadQueue-JcfTokA-.js"
-    ]
-  },
-  "_api-Cnxk8P2e.js": {
-    "file": "assets/api-Cnxk8P2e.js",
+  "_api-BVFWkjgk.js": {
+    "file": "assets/api-BVFWkjgk.js",
     "name": "api",
     "imports": [
       "index.html"
     ]
   },
-  "_api-DWTfEN6O.js": {
-    "file": "assets/api-DWTfEN6O.js",
+  "_api-BxOkiGSj.js": {
+    "file": "assets/api-BxOkiGSj.js",
     "name": "api",
     "imports": [
       "index.html",
-      "_models-MWsFVLH5.js"
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
-  "_armed-button-BTdJkliB.js": {
-    "file": "assets/armed-button-BTdJkliB.js",
+  "_api-fT9A7zz6.js": {
+    "file": "assets/api-fT9A7zz6.js",
+    "name": "api",
+    "imports": [
+      "index.html",
+      "_models-Dw8frxv7.js"
+    ]
+  },
+  "_armed-button-Cpb7n_0m.js": {
+    "file": "assets/armed-button-Cpb7n_0m.js",
     "name": "armed-button",
     "imports": [
       "index.html"
@@ -2129,19 +2129,19 @@
     "file": "assets/countryCentroids-CiPWDXva.js",
     "name": "countryCentroids"
   },
-  "_data-51CsY0iU.js": {
-    "file": "assets/data-51CsY0iU.js",
+  "_data-Bl3FzE6B.js": {
+    "file": "assets/data-Bl3FzE6B.js",
+    "name": "data"
+  },
+  "_data-BvGEDfKI.js": {
+    "file": "assets/data-BvGEDfKI.js",
     "name": "data",
     "imports": [
       "index.html"
     ]
   },
-  "_data-Bl3FzE6B.js": {
-    "file": "assets/data-Bl3FzE6B.js",
-    "name": "data"
-  },
-  "_domain-authority-B9BoZ1N6.js": {
-    "file": "assets/domain-authority-B9BoZ1N6.js",
+  "_domain-authority-CoI0j489.js": {
+    "file": "assets/domain-authority-CoI0j489.js",
     "name": "domain-authority",
     "imports": [
       "index.html"
@@ -2151,136 +2151,136 @@
     "file": "assets/domain-navigation-DAEfrDF3.js",
     "name": "domain-navigation"
   },
-  "_field-registry-Begqql-S.js": {
-    "file": "assets/field-registry-Begqql-S.js",
+  "_field-registry-CQ1uF9vQ.js": {
+    "file": "assets/field-registry-CQ1uF9vQ.js",
     "name": "field-registry",
     "imports": [
       "index.html",
-      "_CollectionSelect-BIayPFs7.js",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_UploadQueue-JcfTokA-.js"
+      "_CollectionSelect-BKxA9Zeo.js",
+      "_DateRangePicker-C1qKU0gW.js",
+      "_UploadQueue-BzemwSRM.js"
     ]
   },
   "_file-renditions-BBuFZJ24.js": {
     "file": "assets/file-renditions-BBuFZJ24.js",
     "name": "file-renditions"
   },
-  "_forensics-DjHcbxVk.js": {
-    "file": "assets/forensics-DjHcbxVk.js",
+  "_forensics-oCr_zobz.js": {
+    "file": "assets/forensics-oCr_zobz.js",
     "name": "forensics",
     "imports": [
       "index.html",
-      "_KnownFieldsCard-Z1GMFkmP.js",
-      "_field-registry-Begqql-S.js",
-      "_DetailView-DStbEA6b.js"
+      "_KnownFieldsCard-drwBENTb.js",
+      "_field-registry-CQ1uF9vQ.js",
+      "_DetailView-KII3WZjA.js"
     ]
   },
-  "_grouping-CSpA5VNh.js": {
-    "file": "assets/grouping-CSpA5VNh.js",
+  "_grouping-DpMiZd1w.js": {
+    "file": "assets/grouping-DpMiZd1w.js",
     "name": "grouping",
     "imports": [
       "index.html"
     ]
   },
-  "_guardrail-ESQ_taOi.js": {
-    "file": "assets/guardrail-ESQ_taOi.js",
+  "_guardrail-C13Kqskf.js": {
+    "file": "assets/guardrail-C13Kqskf.js",
     "name": "guardrail",
     "imports": [
       "index.html"
     ]
   },
-  "_launchers-ChjahuGD.js": {
-    "file": "assets/launchers-ChjahuGD.js",
+  "_launchers-DejINADU.js": {
+    "file": "assets/launchers-DejINADU.js",
     "name": "launchers",
     "imports": [
       "index.html",
-      "_api-C8MOxuZc.js"
+      "_api-BxOkiGSj.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/assistant/AssistantPanel.tsx"
     ]
   },
-  "_models-B4X2sXqA.js": {
-    "file": "assets/models-B4X2sXqA.js",
+  "_models-BAmM2vSL.js": {
+    "file": "assets/models-BAmM2vSL.js",
     "name": "models",
     "imports": [
       "index.html",
-      "_countryCentroids-CiPWDXva.js"
-    ]
-  },
-  "_models-BhsfkEAR.js": {
-    "file": "assets/models-BhsfkEAR.js",
-    "name": "models",
-    "imports": [
-      "index.html"
-    ]
-  },
-  "_models-DWMcKSfu.js": {
-    "file": "assets/models-DWMcKSfu.js",
-    "name": "models",
-    "imports": [
-      "index.html",
-      "_field-registry-Begqql-S.js"
+      "_field-registry-CQ1uF9vQ.js"
     ],
     "dynamicImports": [
       "../../packages/portal-mojo/src/admin/incidents/IncidentDetail.tsx",
       "../../packages/portal-mojo/src/admin/incidents/EventDetail.tsx"
     ]
   },
-  "_models-MWsFVLH5.js": {
-    "file": "assets/models-MWsFVLH5.js",
+  "_models-Bih62Fi5.js": {
+    "file": "assets/models-Bih62Fi5.js",
+    "name": "models",
+    "imports": [
+      "index.html",
+      "_countryCentroids-CiPWDXva.js"
+    ]
+  },
+  "_models-CTTS00bM.js": {
+    "file": "assets/models-CTTS00bM.js",
     "name": "models",
     "imports": [
       "index.html"
     ]
   },
-  "_operator-destinations-BuP0Semq.js": {
-    "file": "assets/operator-destinations-BuP0Semq.js",
+  "_models-Dw8frxv7.js": {
+    "file": "assets/models-Dw8frxv7.js",
+    "name": "models",
+    "imports": [
+      "index.html"
+    ]
+  },
+  "_operator-destinations-C_cUyiix.js": {
+    "file": "assets/operator-destinations-C_cUyiix.js",
     "name": "operator-destinations",
     "imports": [
       "index.html",
-      "_shared-validation-data-tzMrqzrW.js"
+      "_shared-validation-data-C_irDK2w.js"
     ]
   },
-  "_password-Dig7hGKH.js": {
-    "file": "assets/password-Dig7hGKH.js",
+  "_password-Df7pMyN7.js": {
+    "file": "assets/password-Df7pMyN7.js",
     "name": "password",
     "imports": [
       "index.html"
     ]
   },
-  "_queries-Z8LKsU4p.js": {
-    "file": "assets/queries-Z8LKsU4p.js",
+  "_queries-DbNSHruI.js": {
+    "file": "assets/queries-DbNSHruI.js",
     "name": "queries",
     "imports": [
       "index.html"
     ]
   },
-  "_safe-node-DCWR3iMC.js": {
-    "file": "assets/safe-node-DCWR3iMC.js",
+  "_safe-node-Itn8a5Ge.js": {
+    "file": "assets/safe-node-Itn8a5Ge.js",
     "name": "safe-node",
     "imports": [
       "index.html"
     ]
   },
-  "_schema-form-core-DVI8blzO.js": {
-    "file": "assets/schema-form-core-DVI8blzO.js",
+  "_schema-form-core-T-e16mwN.js": {
+    "file": "assets/schema-form-core-T-e16mwN.js",
     "name": "schema-form-core",
     "imports": [
       "index.html",
-      "_DateRangePicker-WT8G5QFn.js",
-      "_field-registry-Begqql-S.js"
+      "_DateRangePicker-C1qKU0gW.js",
+      "_field-registry-CQ1uF9vQ.js"
     ]
   },
-  "_secret-dialog-BrUdP3AC.js": {
-    "file": "assets/secret-dialog-BrUdP3AC.js",
+  "_secret-dialog-BqKuXLNV.js": {
+    "file": "assets/secret-dialog-BqKuXLNV.js",
     "name": "secret-dialog",
     "imports": [
       "index.html"
     ]
   },
-  "_shared-validation-data-tzMrqzrW.js": {
-    "file": "assets/shared-validation-data-tzMrqzrW.js",
+  "_shared-validation-data-C_irDK2w.js": {
+    "file": "assets/shared-validation-data-C_irDK2w.js",
     "name": "shared-validation-data",
     "imports": [
       "index.html"
@@ -2290,24 +2290,24 @@
     "file": "assets/standalone-data-BxW4NNvp.js",
     "name": "standalone-data"
   },
-  "_streaming-D9EjnoHr.js": {
-    "file": "assets/streaming-D9EjnoHr.js",
+  "_streaming-Cih0mVn7.js": {
+    "file": "assets/streaming-Cih0mVn7.js",
     "name": "streaming",
     "imports": [
       "index.html",
-      "_api-C8MOxuZc.js",
-      "_models-BhsfkEAR.js"
+      "_api-BxOkiGSj.js",
+      "_models-CTTS00bM.js"
     ]
   },
-  "_ui-dw-llgkr.js": {
-    "file": "assets/ui-dw-llgkr.js",
+  "_ui-CJ60VOat.js": {
+    "file": "assets/ui-CJ60VOat.js",
     "name": "ui",
     "imports": [
       "index.html"
     ]
   },
-  "_use-world-land-D1yrMMHS.js": {
-    "file": "assets/use-world-land-D1yrMMHS.js",
+  "_use-world-land-BRQlDErV.js": {
+    "file": "assets/use-world-land-BRQlDErV.js",
     "name": "use-world-land",
     "imports": [
       "index.html",
@@ -2318,17 +2318,17 @@
     ]
   },
   "index.html": {
-    "file": "assets/index-CS8a0nbN.js",
+    "file": "assets/index-CneonEJk.js",
     "name": "index",
     "src": "index.html",
     "isEntry": true,
     "dynamicImports": [
-      "_api-BrovzYlC.js",
+      "_api-BIFjb0oM.js",
       "../../packages/portal-mojo/src/admin/dashboard/AdminDashboardPage.tsx",
       "../../packages/portal-mojo/src/admin/monitoring/LogsPage.tsx",
       "../../packages/portal-mojo/src/admin/monitoring/MetricsExplorerPage.tsx",
       "../../packages/portal-mojo/src/admin/monitoring/MetricsPermissionsPage.tsx",
-      "_CloudWatchDashboardPage-wXxjiPOv.js",
+      "_CloudWatchDashboardPage-WeojbyRi.js",
       "../../packages/portal-mojo/src/admin/identity/users/UsersPage.tsx",
       "../../packages/portal-mojo/src/admin/identity/members/MembersPage.tsx",
       "../../packages/portal-mojo/src/admin/credentials/group-api-keys.tsx",
@@ -2342,7 +2342,7 @@
       "../../packages/portal-mojo/src/admin/jobs/JobRunnersPage.tsx",
       "../../packages/portal-mojo/src/admin/jobs/JobsTablePage.tsx",
       "../../packages/portal-mojo/src/admin/jobs/ScheduledTasksPage.tsx",
-      "_DeploymentsPage-CMZOKpRE.js",
+      "_DeploymentsPage-YxkD5XPc.js",
       "../../packages/portal-mojo/src/admin/maintenance/MaintenancePage.tsx",
       "../../packages/portal-mojo/src/admin/geolocation/GeoLocationPage.tsx",
       "../../packages/portal-mojo/src/admin/incidents/IncidentsPage.tsx",
@@ -2403,7 +2403,7 @@
     ]
   },
   "src/pages/auth/ForgotPage.tsx": {
-    "file": "assets/ForgotPage-D7mPibAU.js",
+    "file": "assets/ForgotPage-BD1RcjUy.js",
     "name": "ForgotPage",
     "src": "src/pages/auth/ForgotPage.tsx",
     "isDynamicEntry": true,
@@ -2412,7 +2412,7 @@
     ]
   },
   "src/pages/auth/FreshAuthDialog.tsx": {
-    "file": "assets/FreshAuthDialog-1MbVueCt.js",
+    "file": "assets/FreshAuthDialog-C29TJ4kk.js",
     "name": "FreshAuthDialog",
     "src": "src/pages/auth/FreshAuthDialog.tsx",
     "isDynamicEntry": true,
@@ -2424,7 +2424,7 @@
     ]
   },
   "src/pages/auth/LoginPage.tsx": {
-    "file": "assets/LoginPage-Bd4Tw5G-.js",
+    "file": "assets/LoginPage-DNP2ki3X.js",
     "name": "LoginPage",
     "src": "src/pages/auth/LoginPage.tsx",
     "isDynamicEntry": true,
@@ -2434,7 +2434,7 @@
     ]
   },
   "src/pages/auth/MagicPage.tsx": {
-    "file": "assets/MagicPage-BJIRnppU.js",
+    "file": "assets/MagicPage-BvSvxpTq.js",
     "name": "MagicPage",
     "src": "src/pages/auth/MagicPage.tsx",
     "isDynamicEntry": true,
@@ -2443,7 +2443,7 @@
     ]
   },
   "src/pages/auth/MfaPanel.tsx": {
-    "file": "assets/MfaPanel-D07AKmNY.js",
+    "file": "assets/MfaPanel-CaGQu0z9.js",
     "name": "MfaPanel",
     "src": "src/pages/auth/MfaPanel.tsx",
     "isDynamicEntry": true,
@@ -2452,13 +2452,13 @@
     ]
   },
   "src/pages/auth/ResetPage.tsx": {
-    "file": "assets/ResetPage-DE_9oYVd.js",
+    "file": "assets/ResetPage-BaM4uLqB.js",
     "name": "ResetPage",
     "src": "src/pages/auth/ResetPage.tsx",
     "isDynamicEntry": true,
     "imports": [
       "index.html",
-      "_password-Dig7hGKH.js"
+      "_password-Df7pMyN7.js"
     ]
   }
 }
