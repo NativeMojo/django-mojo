@@ -99,6 +99,11 @@
     var pending = null, resetFallback = false, failures = 0, retryAt = 0, modality = 'unknown', reportedFailure = '';
     var view = doc.getElementById('mbg-root'), restart = doc.getElementById('mbg-restart');
     var heading = doc.getElementById('mbg-heading'), buttonLabel = doc.getElementById('mbg-continue-label');
+    // The ready copy is what the server rendered: a product's own heading and
+    // sentence (#11759). Kept per mount; the shared COPY never changes.
+    var readyCopy = [
+      (heading && heading.textContent.trim()) || COPY.ready[0],
+      (status && status.textContent.trim()) || COPY.ready[1]];
     var reviewOpen = doc.getElementById('mbg-review-open'), help = doc.getElementById('mbg-help');
     var reference = doc.getElementById('mbg-reference'), referenceRow = doc.getElementById('mbg-reference-row');
     var form = doc.getElementById('mbg-review-form'), ticket = doc.getElementById('mbg-review-ticket');
@@ -125,7 +130,7 @@
     function currentState() { return view ? view.getAttribute('data-state') : ''; }
     function label(text) { if (buttonLabel) buttonLabel.textContent = text; else button.textContent = text; }
     function setCopy(key, sentence) {
-      var copy = COPY[key] || COPY.operator;
+      var copy = key === 'ready' ? readyCopy : (COPY[key] || COPY.operator);
       if (heading) heading.textContent = copy[0];
       status.textContent = sentence === undefined ? copy[1] : sentence;
     }

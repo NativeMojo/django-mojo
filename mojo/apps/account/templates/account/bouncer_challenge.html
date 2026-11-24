@@ -144,8 +144,8 @@
         <span class="mbg-disc mbg-disc-fail"><svg viewBox="0 0 24 24"><path d="M12 6.5v7"></path><path d="M12 17.5h.01"></path></svg></span>
       </div>
       <div id="mbg-live" class="mbg-live" role="status" aria-live="polite" aria-atomic="true">
-        <h1 id="mbg-heading" class="mbg-heading" tabindex="-1">One quick check</h1>
-        <p id="mbg-status" class="mbg-status">Select Continue to proceed securely.</p>
+        <h1 id="mbg-heading" class="mbg-heading" tabindex="-1">{{ challenge_heading }}</h1>
+        <p id="mbg-status" class="mbg-status">{{ challenge_text }}</p>
         <div class="mbg-bar" aria-hidden="true"><span></span></div>
       </div>
       <div class="mbg-hp" aria-hidden="true"><input id="mbg-hp-field" type="text" tabindex="-1" autocomplete="off"></div>
@@ -186,7 +186,7 @@
     </footer>
   </main>
   {{ hosted_bouncer|json_script:"mbg-config" }}
-  <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js?v=1f0934bf3d"></script>
+  <script nonce="{{ csp_nonce }}" src="/api/account/static/mojo-hosted-bouncer.js?v=8555b72122"></script>
   <script nonce="{{ csp_nonce }}">MojoHostedBouncer.mount(document, JSON.parse(document.getElementById('mbg-config').textContent));</script>
 </body>
 </html>

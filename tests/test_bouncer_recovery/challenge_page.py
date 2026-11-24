@@ -378,3 +378,88 @@ def test_challenge_brand_precedence(opts):
     finally:
         Setting.objects.filter(key='BOUNCER_CHALLENGE_BRAND', group__name=BRAND_GROUP).delete()
         Group.objects.filter(name=BRAND_GROUP).delete()
+
+
+COPY_GROUP = "test-11759-challenge-copy"
+DEFAULT_HEADING = "One quick check"
+DEFAULT_TEXT = "Select Continue to proceed securely."
+
+
+def _copy(tree):
+    return text(by_id(tree, 'mbg-heading')), text(by_id(tree, 'mbg-status'))
+
+
+@th.django_unit_test("challenge copy: with nothing set, today's heading and sentence render byte for byte")
+def test_challenge_copy_defaults_unchanged(opts):
+    html = render()
+    assert_true('id="mbg-heading" class="mbg-heading" tabindex="-1">One quick check</h1>' in html,
+                "the default heading must render exactly as before #11759")
+    assert_true('<p id="mbg-status" class="mbg-status">Select Continue to proceed securely.</p>' in html,
+                "the default sentence must render exactly as before #11759")
+
+
+@th.django_unit_test("challenge copy: a product's BOUNCER_CHALLENGE_HEADING/TEXT render escaped, unusable values fall back")
+def test_challenge_copy_from_group_setting(opts):
+    # Settings are written on a test-owned group only (no process-wide mutation).
+    from mojo.apps.account.models import Group
+    from mojo.apps.account.models.setting import Setting
+
+    keys = ('BOUNCER_CHALLENGE_HEADING', 'BOUNCER_CHALLENGE_TEXT')
+
+    def put(heading, sentence):
+        Setting.objects.filter(key__in=keys, group=group).delete()
+        for key, value in zip(keys, (heading, sentence)):
+            if value is not None:
+                Setting.objects.create(key=key, value=value, group=group)
+        try:
+            Setting.warm_cache(group_id=group.pk)
+        except Exception:
+            pass
+        return _copy(parse(render(group=group)))
+
+    Group.objects.filter(name=COPY_GROUP).delete()
+    group = Group.objects.create(name=COPY_GROUP, kind="organization", metadata={})
+    try:
+        assert_eq(put(None, None), (DEFAULT_HEADING, DEFAULT_TEXT),
+                  "a group with no copy settings keeps the default copy")
+
+        assert_eq(put('Welcome to Example', 'We check every visit to keep accounts safe.'),
+                  ('Welcome to Example', 'We check every visit to keep accounts safe.'),
+                  "a product's own heading and sentence must render")
+
+        Setting.objects.filter(key='BOUNCER_CHALLENGE_HEADING', group=group).update(value='<b>x</b> Example')
+        try:
+            Setting.warm_cache(group_id=group.pk)
+        except Exception:
+            pass
+        html = render(group=group)
+        assert_true('&lt;b&gt;x&lt;/b&gt; Example' in html and '<b>x</b>' not in html,
+                    "product copy must be autoescaped, never rendered as markup")
+
+        assert_eq(put('  Example \n  check  ', 'One\tline'), ('Example check', 'One line'),
+                  "whitespace is stripped and collapsed")
+        assert_eq(put('   ', 'Fine sentence'), (DEFAULT_HEADING, 'Fine sentence'),
+                  "a whitespace-only heading falls back on its own field")
+        assert_eq(put('H' * 81, 'S' * 241), (DEFAULT_HEADING, DEFAULT_TEXT),
+                  "copy over the 80/240 caps falls back")
+        assert_eq(put('H' * 80, 'S' * 240), ('H' * 80, 'S' * 240),
+                  "copy at the caps is kept")
+        assert_eq(put('Bad\x1bheading', 'Fine'), (DEFAULT_HEADING, 'Fine'),
+                  "a control character makes the field fall back")
+
+        assert_eq(_brand(parse(render(group=group))), 'DJANGO MOJO',
+                  "copy settings leave brand precedence unchanged")
+    finally:
+        Setting.objects.filter(key__in=keys, group__name=COPY_GROUP).delete()
+        Group.objects.filter(name=COPY_GROUP).delete()
+
+
+@th.unit_test("challenge copy: non-string or empty values fall back to the default")
+def test_challenge_copy_non_string_falls_back(opts):
+    from mojo.apps.account.rest.bouncer.views import _usable_copy
+
+    for value in (None, '', 5, ['Example'], {'a': 1}, True):
+        assert_eq(_usable_copy('BOUNCER_CHALLENGE_HEADING', value, 'Default', 80), 'Default',
+                  f"{value!r} is not usable copy")
+    assert_eq(_usable_copy('BOUNCER_CHALLENGE_HEADING', 'Example', 'Default', 80), 'Example',
+              "a plain string is used")
