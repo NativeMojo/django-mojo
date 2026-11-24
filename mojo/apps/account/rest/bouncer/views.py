@@ -11,6 +11,7 @@ Decoy pages (common bot paths: /login, /signin):
   POSTs to a dead endpoint that logs and returns a plausible error.
 """
 import secrets
+import unicodedata
 from urllib.parse import urlencode
 
 from django.shortcuts import render
@@ -35,6 +36,38 @@ DISABLE_LOGIN = settings.get_static('DISABLE_LOGIN', False)
 # and the sign-in page's default name (#9132).
 _DEFAULT_CHALLENGE_LOGO = ''
 _DEFAULT_CHALLENGE_BRAND = ''
+# The challenge page's ready heading and sentence (#11759). A product sets its
+# own with BOUNCER_CHALLENGE_HEADING / BOUNCER_CHALLENGE_TEXT; anything unusable
+# falls back to this copy, field by field.
+_DEFAULT_CHALLENGE_HEADING = 'One quick check'
+_DEFAULT_CHALLENGE_TEXT = 'Select Continue to proceed securely.'
+_CHALLENGE_HEADING_MAX = 80
+_CHALLENGE_TEXT_MAX = 240
+
+
+def _usable_copy(key, value, default, limit):
+    """`value` as one line of page copy, or `default` when it is unusable."""
+    if value is None or value == '':
+        return default
+    if isinstance(value, str):
+        text = ' '.join(value.split())
+        if (text and len(text) <= limit
+                and not any(unicodedata.category(ch) == 'Cc' for ch in text)):
+            return text
+    logger.warning(f"{key} is not usable challenge copy; using the default")
+    return default
+
+
+def _challenge_copy(group):
+    """The challenge page's ready heading and sentence for this product."""
+    return (
+        _usable_copy('BOUNCER_CHALLENGE_HEADING',
+                     settings.get('BOUNCER_CHALLENGE_HEADING', '', group=group),
+                     _DEFAULT_CHALLENGE_HEADING, _CHALLENGE_HEADING_MAX),
+        _usable_copy('BOUNCER_CHALLENGE_TEXT',
+                     settings.get('BOUNCER_CHALLENGE_TEXT', '', group=group),
+                     _DEFAULT_CHALLENGE_TEXT, _CHALLENGE_TEXT_MAX),
+    )
 
 
 def _resolve_group(request):
@@ -483,6 +516,7 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
         brand_name = challenge_brand
     else:
         brand_name = theme.app_title or 'DJANGO MOJO'
+    challenge_heading, challenge_text = _challenge_copy(group)
     # Appearance is resolved exactly as _auth_context does, so the check uses
     # the light/dark/system look the sign-in page would use.
     auth_appearance = auth_config.normalize_appearance(
@@ -506,6 +540,8 @@ def _serve_challenge(request, challenge_tier=1, page_type='login', group=None, h
         'page_type': page_type,
         'logo_url': logo_url,
         'brand_name': brand_name,
+        'challenge_heading': challenge_heading,
+        'challenge_text': challenge_text,
         'auth_provider_name': theme.auth_provider_name or 'DJANGO MOJO',
         'accent_color': auth_config.normalize_accent_color(theme.accent_color),
         'auth_appearance': auth_appearance,

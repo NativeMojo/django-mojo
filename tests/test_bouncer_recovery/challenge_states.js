@@ -401,6 +401,36 @@ function assertRestart(p, promoted, tag) {
     assert.ok(p.$('mbg-copy-status').textContent.startsWith('Reference selected'), '(m) with a hint');
   }
 
+  // (p) a product's own ready copy (#11759) is shown at mount and comes back
+  // whenever the check returns to ready; other states keep the script's copy.
+  const [customHeading, customText] = input.custom_copy;
+  let answers = [];
+  p = boot({ tree: input.tree_custom, respond: () => answers.shift() });
+  assert.equal(p.heading(), customHeading, '(p) custom heading after mount');
+  assert.equal(p.status(), customText, '(p) custom sentence after mount');
+  answers = ['hold'];
+  p.$('mbg-continue').click();
+  assert.equal(p.heading(), 'Checking…', '(p) checking keeps the script copy');
+  p.held.shift().resolve(ok({ decision: 'allow', next_action: 'check' }));
+  await flush();
+  assert.equal(p.state(), 'ready', '(p) a check answer returns to ready');
+  assert.equal(p.heading(), customHeading, '(p) custom heading after checking');
+  assert.equal(p.status(), customText, '(p) custom sentence after checking');
+  answers = [new Error('offline')];
+  p.$('mbg-continue').click();
+  await flush();
+  assert.equal(p.heading(), 'The connection was interrupted', '(p) a failure keeps the script copy');
+  answers = [ok({ decision: 'allow', next_action: 'check' })];
+  p.$('mbg-continue').click();
+  await flush();
+  assert.equal(p.heading(), customHeading, '(p) custom heading returns after a failure');
+  assert.equal(p.status(), customText, '(p) custom sentence returns after a failure');
+  p = boot({ tree: input.tree_custom, config: Object.assign({}, input.config, { next_action: 'recovery', reason: 'cookies' }) });
+  assert.equal(p.heading(), COPY.cookies[0], '(p) failure copy is unchanged on a product page');
+  p = boot();
+  assert.equal(p.heading(), 'One quick check', '(p) another page load still shows the default heading');
+  assert.equal(p.status(), 'Select Continue to proceed securely.', '(p) and the default sentence');
+
   // (n) Restart and Back to start each reload once
   p = boot({ config: Object.assign({}, input.config, { next_action: 'error', reason: 'invalid' }) });
   p.$('mbg-restart').click();

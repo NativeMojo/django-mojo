@@ -104,6 +104,11 @@ settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
 With neither the theme nor these settings, the challenge falls back exactly as
 the sign-in page does: no logo, and the name "DJANGO MOJO".
 
+The heading and the sentence under it ("One quick check" / "Select Continue to
+proceed securely.") can be replaced per group with `BOUNCER_CHALLENGE_HEADING`
+(up to 80 characters) and `BOUNCER_CHALLENGE_TEXT` (up to 240), as plain text.
+See [bouncer.md](bouncer.md#challenge-page-branding).
+
 ## RestMeta
 
 ```python
