@@ -368,7 +368,9 @@ footer. With no tenant logo or title it falls back as the sign-in page does
 (no logo, "DJANGO MOJO") unless the operator has explicitly set
 `BOUNCER_CHALLENGE_LOGO_URL` (fills an empty logo) or `BOUNCER_CHALLENGE_BRAND`
 (used when the tenant has not configured its own title; a tenant `app_title`
-always wins). This tells visitors both which destination they
+always wins). Its "One quick check" heading and the sentence under it are
+the defaults; an operator can replace them per product with
+`BOUNCER_CHALLENGE_HEADING` and `BOUNCER_CHALLENGE_TEXT`. This tells visitors both which destination they
 are entering and whose account credentials they should use before the login
 form appears.
 

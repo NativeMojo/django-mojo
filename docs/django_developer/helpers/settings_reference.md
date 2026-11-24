@@ -430,6 +430,8 @@ group-scoped rows. See [Admin Settings catalog](../account/admin_portal/settings
   Deliberately not readable from the DB/Redis settings plane, so a `Setting` row
   cannot change the origin policy at runtime.
 - `BOUNCER_CHALLENGE_BRAND` — default empty (unset); per-group readable. Brand name for the hosted bot check, used when the group's `theme.app_title` is not configured (still the `DEFAULT_AUTH_CONFIG` default, `"DJANGO MOJO"`); a configured tenant title wins over it. See [account/bouncer.md](../account/bouncer.md#challenge-page-branding).
+- `BOUNCER_CHALLENGE_HEADING` — default empty, meaning "One quick check"; per-group readable. Ready heading of the hosted bot check, plain text up to 80 characters; an unusable value falls back to the default. See [account/bouncer.md](../account/bouncer.md#challenge-page-branding).
+- `BOUNCER_CHALLENGE_TEXT` — default empty, meaning "Select Continue to proceed securely."; per-group readable. The sentence under that heading, plain text up to 240 characters; an unusable value falls back to the default. See [account/bouncer.md](../account/bouncer.md#challenge-page-branding).
 - `BOUNCER_CHALLENGE_LOGO_URL` — default empty (no logo); per-group readable. Logo for the hosted bot check, used whenever `theme.logo_url` is empty. See [account/bouncer.md](../account/bouncer.md#challenge-page-branding).
 - `BOUNCER_CONTACT_PATH`
 - `BOUNCER_LEARN_CAMPAIGN_THRESHOLD`

@@ -47,7 +47,10 @@ appearance as the sign-in page (including the `?auth_appearance=` override), and
 the tenant's custom CSS. Its brand sits at the top, a shield in a ring in the
 centre, the heading and one status line under it, **Continue** as the main
 button with a quiet "Having trouble? Get help" link, and "Secure sign-in via
-…" naming the tenant's auth provider at the bottom.
+…" naming the tenant's auth provider at the bottom. "One quick check" and
+"Select Continue to proceed securely." are the default heading and status line;
+a product can set its own plain-text pair (`BOUNCER_CHALLENGE_HEADING`,
+`BOUNCER_CHALLENGE_TEXT`), which stays on screen whenever the check is ready.
 
 Continue accepts touch, mouse, and keyboard activation, with visible focus and
 a live status region. A stationary touch-down and button activation count as interaction;

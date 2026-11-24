@@ -764,6 +764,26 @@ settings.set('BOUNCER_CHALLENGE_BRAND', 'CLIENT BRAND', group=group)
 With neither set, the challenge uses the sign-in page's own fallbacks: no logo,
 and the name "DJANGO MOJO". There is no built-in third-party branding.
 
+**Heading and sentence.** The ready heading and the one line under it can be
+set per product (group) or deployment-wide:
+
+```python
+settings.set('BOUNCER_CHALLENGE_HEADING', 'Welcome to Client', group=group)
+settings.set('BOUNCER_CHALLENGE_TEXT', 'We check every visit to keep your account safe.', group=group)
+```
+
+- Defaults: "One quick check" and "Select Continue to proceed securely."
+- Plain text only: the page autoescapes them and the page script writes them
+  with `textContent`, so markup shows as text.
+- Whitespace is stripped and collapsed. A value that is empty after that, longer
+  than 80 characters (heading) or 240 (sentence), not a string, or that holds a
+  control character falls back to its default, field by field, with one
+  warning in `bouncer.log` naming the key (never the value).
+- Only the ready state uses them. The checking, failure, review and verified
+  states keep the script's own copy. The script keeps whatever the page
+  rendered, so a product's own override of `account/bouncer_challenge.html`
+  also stays on screen.
+
 ### OAuth round-trip
 
 `group_uuid` is embedded in the OAuth state so branding survives the
@@ -805,7 +825,7 @@ See [group.md](group.md) for the full `auth_domain` field and `resolve_by_auth_d
 ## Templates
 
 - `account/login.html` — full mojo-auth webapp. Override in your project's templates dir.
-- `account/bouncer_challenge.html` — hosted Continue/recovery page ("One quick check"); themed by the hosted sign-in theme (`mojo-auth-theme.css` tokens, tenant accent/logo/brand/appearance/custom CSS); `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` (both default empty) fill in only when explicitly set and the theme has no logo / no configured title (an `app_title` equal to the code default counts as unconfigured).
+- `account/bouncer_challenge.html` — hosted Continue/recovery page ("One quick check"); themed by the hosted sign-in theme (`mojo-auth-theme.css` tokens, tenant accent/logo/brand/appearance/custom CSS); `BOUNCER_CHALLENGE_LOGO_URL` / `BOUNCER_CHALLENGE_BRAND` (both default empty) fill in only when explicitly set and the theme has no logo / no configured title (an `app_title` equal to the code default counts as unconfigured); `BOUNCER_CHALLENGE_HEADING` / `BOUNCER_CHALLENGE_TEXT` replace the ready heading and sentence.
 - `account/bouncer_decoy.html` — explicit scanner honeypot.
 - `account/bouncer_review_result.html` — no-JavaScript review receipt/error page.
 
