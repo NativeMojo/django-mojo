@@ -65,7 +65,7 @@ rather than appending to it.
 | `extra_fields` | list | `[]` | Per-group non-canonical fields (promo/ref/tracking). An entry may be a name string or `{"name", "label"?, "required"?, "capture_only"?, "help_text"?}`. Hosted-page normalization defaults `required` and `capture_only` to `false`, `help_text` to `""`, and a missing label to the title-cased name. Canonical and auth/navigation-reserved names are rejected. Safe declared values survive Bouncer and login/register switcher hops. Default empty — no extra inputs, no behavior change for other tenants. |
 | `identity_field` | string | `""` | `"email"` or `"phone"` (empty → auto-pick) |
 | `min_age` | int\|null | `null` | Minimum age gate (years) applied when `dob` is a field |
-| `methods` | list | `["password","google","apple","github"]` | Offered signup methods |
+| `methods` | list | `["password","google","apple","github"]` | Password and OAuth signup methods. Verified SMS signup uses the phone identity and field schema. |
 | `passkey_prompt` | string | `"off"` | `"off"`, `"optional"`, or `"required"` — passkey enrollment after signup |
 
 ### `login`
@@ -76,8 +76,8 @@ rather than appending to it.
 | `heading` | string | `"Sign In"` | Destination-aware page heading |
 | `supporting_copy` | string | `""` | Explanation below the heading, e.g. which account to use |
 
-Valid login method tokens: `password`, `sms`, `passkey`, `magic`, `google`, `apple`, `github`.
-Valid registration method tokens: `password`, `google`, `apple`, `github`.
+Valid login method tokens are `password`, `sms`, `passkey`, `magic`, `google`, `apple`, `github` and `microsoft`.
+Valid registration method tokens are `password`, `google`, `apple`, `github` and `microsoft`.
 
 ---
 
@@ -220,11 +220,12 @@ only — not honoured in production).
 
 ## Passwordless Registration
 
-A `registration.fields` schema may omit `password`. When it does:
-
-- `POST /api/auth/register` no longer requires a `password` body param.
-- The account is created with Django's `set_unusable_password()` — password-based login is impossible for that account.
-- The user logs in afterward via the SMS-code flow (`POST /api/auth/sms/login` → `POST /api/auth/sms/verify`) or an enrolled passkey.
+For SMS-only sign-up, use a phone identity, mark the phone field with
+`verify: "sms"` and set `registration.methods` to `[]`. The hosted form
+collects the phone number, SMS code and configured profile fields.
+`POST /api/auth/register` requires the single-use `verified_phone_token`
+for that number and calls Django's `set_unusable_password()` on the new
+account. Users can sign in later with SMS or an enrolled passkey.
 
 **Mandatory guard:** a schema that omits `password` MUST include a `phone` field with `verify: "sms"`. `validate_fields_config` rejects a no-password schema without an SMS-verified phone at config-write time. `on_register` also re-checks this defensively (the deployment-wide `AUTH_CONFIG` setting and the `X-Mojo-Test-Register-Fields` test header bypass `validate_auth_config`).
 
@@ -232,6 +233,7 @@ A `registration.fields` schema may omit `password`. When it does:
 # Passwordless registration via AUTH_CONFIG
 AUTH_CONFIG = {
     "registration": {
+        "methods": [],
         "fields": [
             {"name": "first_name", "required": True},
             {"name": "last_name",  "required": True},
@@ -242,32 +244,24 @@ AUTH_CONFIG = {
 }
 ```
 
-The hosted `/register` page renders no password input when `password` is absent from the schema — the form is schema-driven. After registration the user signs in via SMS code (or a passkey if enrolled).
-
-The default schema (email + password) and all existing password-based registration are unchanged. `password`, when present in the schema, is always required — there is no "optional password" state.
+When the resolved methods omit `password`, the hosted SMS form omits even a
+legacy password field and the server ignores any submitted password. With the
+`password` method enabled, the schema determines whether the form requires
+a password. OAuth providers can be enabled independently alongside SMS.
 
 ---
 
 ## Login Method Soft-Gating
 
-When a `group_uuid` resolves a group on a login or registration request, the
-auth config's `login.methods` / `registration.methods` lists are consulted.
-Disabled methods return a 403 with a human-readable message. This is a **UX
-guardrail only** — it is not enforced when `group_uuid` is absent. Callers
-that omit `group_uuid` are not restricted.
-
-Endpoints that enforce this:
-- `POST /api/auth/login` (password, SMS, passkey, magic, Google, Apple, GitHub)
-- `POST /api/auth/register` (password, Google, Apple, GitHub)
-
-Sign-up is stricter. `POST /api/auth/register` is the `password` registration
-method, and it refuses a **new** account when the resolved config leaves
-`password` out of `registration.methods` — with or without a group, using the
-deployment's `AUTH_CONFIG` when no group is named, exactly like
-`registration.enabled`. Both refusals are the same 403 ("Registration is not
-enabled"). A returning phone that proves its number still signs in. Invites,
-admin-created accounts and OAuth sign-up do not use this endpoint (OAuth has its
-own check when the group is named).
+Group-scoped login requests use `login.methods`. A disabled method returns
+403 when the request identifies a group. Native sign-up through
+`POST /api/auth/register` always checks the resolved registration config,
+including the deployment default when `group_uuid` is absent. Closing
+registration or submitting a new email/password sign-up with the `password`
+method disabled returns 403 with "Registration is not enabled". While
+registration is open, a returning SMS-verified phone can still sign in.
+Invites, admin-created accounts and OAuth sign-up use separate flows.
+Hosted OAuth checks each provider against the group's registration methods.
 
 ---
 

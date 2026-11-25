@@ -707,7 +707,10 @@ If the account has TOTP or SMS MFA enabled, the login response is different — 
 
 Creates a new user account. No authentication required. Rate-limited to 5 requests per IP per 5 minutes.
 
-**Prerequisite:** The server setting `ALLOW_USER_REGISTRATION` must be `True` (default is `False`). If disabled, this endpoint returns 403.
+Both `ALLOW_USER_REGISTRATION` (default `False`) and the resolved
+`registration.enabled` must allow sign-up. With the `password` registration
+method disabled, new email/password sign-up returns 403. A phone identity
+with `verify: "sms"` can still register with `registration.methods: []`.
 
 ### Request
 
@@ -727,7 +730,7 @@ Creates a new user account. No authentication required. Rate-limited to 5 reques
 |-------|----------|-------------|
 | `email` | conditional | Required when `email` is in the server's `AUTH_REGISTER_FIELDS` schema (default config). Unique across all accounts. |
 | `phone` | conditional | Required when `phone` is in the server's `AUTH_REGISTER_FIELDS` schema. Normalized to E.164 server-side. Unique across all accounts. |
-| `password` | yes | Must meet password strength requirements |
+| `password` | conditional | Required when the password method and field are enabled. Omit for passwordless sign-up. The server ignores any submitted password in that flow. |
 | `first_name` | conditional | Required when configured as such in `AUTH_REGISTER_FIELDS` |
 | `last_name` | conditional | Required when configured as such in `AUTH_REGISTER_FIELDS` |
 | `dob` | conditional | ISO `yyyy-mm-dd`. Required when configured. Age-gated against `AUTH_MIN_AGE_YEARS` if that setting is set. |
@@ -815,15 +818,14 @@ The returned `verified_phone_token` is single-use on a successful registration. 
 
 **Dev bypass** — when the server has `AUTH_PHONE_VERIFY_DEV_BYPASS_CODE` set (development environments only), that fixed code is accepted in place of the real SMS code. This setting must never be set in production. It is file-only: it can only be armed from the server's static config, never through the settings API.
 
-From JavaScript:
+For a passwordless phone form with required first and last names:
 
 ```javascript
 const { session_token } = await MojoAuth.startPhoneRegister(phone);
 // user enters the 6-digit code from SMS
 const { verified_phone_token } = await MojoAuth.verifyPhoneRegister(session_token, code);
 await MojoAuth.register({
-  first_name, last_name, phone, dob, password,
-  verified_phone_token,
+  first_name, last_name, phone, verified_phone_token,
 });
 ```
 

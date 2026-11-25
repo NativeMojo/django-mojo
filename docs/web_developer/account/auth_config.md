@@ -79,15 +79,18 @@ methods.
 }
 ```
 
-Use `login.methods` and `registration.methods` to decide which buttons to
-render. Available login tokens: `password`, `sms`, `passkey`, `magic`,
-`google`, `apple`, `github`; registration tokens: `password`, `google`,
-`apple`, `github`. Use `theme` to apply branding.
+Use `theme` for branding and `login.methods` for sign-in options (password,
+SMS, passkey, magic link and the supported OAuth providers). When
+`registration.enabled` is true, use these rules for the sign-up UI.
 
-The `password` registration token covers every `POST /api/auth/register`
-sign-up: the email + password form, phone sign-up and passwordless schemas.
-Without it the server refuses a new account (the same 403 as registration
-closed), so hide your sign-up form too.
+- Show the default email/password form only when `registration.methods` includes
+  `password`. Otherwise `POST /api/auth/register` refuses email/password sign-up with 403.
+- Show the SMS form when the resolved identity is `phone` and the phone field
+  has `verify: "sms"`, even with `registration.methods: []`. Complete SMS
+  verification and submit the token for that phone.
+- Show an OAuth sign-up button for each provider in both `registration.methods`
+  and `login.methods` (Google, Apple, GitHub or Microsoft). Each provider works
+  independently of password and SMS sign-up.
 
 Hosted pages offer four layout presets: `minimal`, `compact`,
 `branded-panel`, and `editorial`. Appearance is independent: `light`, `dark`,
@@ -160,15 +163,16 @@ in effect. A non-null `fields` list may omit `password` — when it does,
 registration is **passwordless**: the account is created without a usable
 password and the user signs in afterward via SMS code. In that case the
 `fields` list always contains a `phone` entry with `verify: "sms"` (the server
-rejects a passwordless config without it). Custom front-ends building a
-registration form should check whether `password` appears in `fields` and
-render (or omit) the password input accordingly.
+rejects a passwordless config without it). Render a password input only when
+both the schema and `registration.methods` include `password`. If a stale
+phone schema still declares that field after the method was disabled, omit it
+from the SMS form and request. The server ignores a submitted password.
 
 ---
 
 ## Login Method Soft-Gating
 
-When you call a login or registration endpoint with a `group_uuid` and the
+When you call a login endpoint with a `group_uuid` and the
 resolved auth config does not include the method you are using, the server
 returns 403:
 
@@ -183,11 +187,14 @@ always send their group, including on OAuth `begin`, so a new Google, Apple,
 GitHub or Microsoft account made there is checked against the group's
 `registration.enabled` and `registration.methods`.
 
-Affected endpoints:
+Native sign-up through `POST /api/auth/register` applies the resolved
+registration rules even when `group_uuid` is omitted. In that case it uses
+the deployment's config.
+
+Group-scoped login method checks include:
+
 - `POST /api/auth/login`
-- `POST /api/auth/register`
-- `POST /api/auth/phone/register/start`
-- `GET /api/auth/oauth/<provider>/begin` (`google`, `apple`, `github`, `microsoft`)
+- `GET /api/auth/oauth/<provider>/begin` (Google, Apple, GitHub or Microsoft)
 - `POST /api/account/passkeys/authenticate/begin`
 
 ---

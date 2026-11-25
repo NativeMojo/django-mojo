@@ -715,25 +715,22 @@ to the inline "Completing sign-in…" message.
 ### Registration page (`/register`)
 
 - Fields and identity field driven by `registration.fields` / `registration.identity_field`
-- Methods rendered from `registration.methods`: `password`, `google`, `apple`, `github`, `microsoft`.
-  A provider's sign-up button also needs the provider in `login.methods`,
-  because OAuth `begin` is gated by `login.methods` once the page names its group.
-  The form is the `password` method (email + password, SMS-verified phone and
-  passwordless schemas alike): without `password` the page shows no form, and
-  `POST /api/auth/register` refuses a new account. A returning phone still
-  signs in through that endpoint.
-- When there is nothing to sign up with (no `password` and no provider, or
-  `registration.enabled` false) the page says "Sign-up isn't available here."
+- The default email/password form requires `password` in `registration.methods`.
+  A phone identity with `verify: "sms"` also enables a form when the methods list is empty.
+- OAuth sign-up buttons appear independently for providers in both
+  `registration.methods` and `login.methods`. The supported providers are
+  Google, Apple, GitHub and Microsoft.
+- With registration closed, or with no available form or provider, the page
+  says "Sign-up isn't available here."
 - Terms & conditions checkbox (when `theme.terms_url` is set)
 - When `registration.passkey_prompt` is `"optional"` or `"required"`, redirects
   to `/passkey` after signup
 - Phone-first flow when `phone` field has `verify: "sms"` in the schema
   (3-step state machine: phone → SMS code → profile)
-- **Passwordless registration** — when `password` is absent from
-  `registration.fields`, the form renders no password input and the account is
-  created with `set_unusable_password()`. The user logs in afterward via the
-  SMS-code flow. Requires a `phone` field with `verify: "sms"` in the same
-  schema. See [Auth Config — Passwordless Registration](auth_config.md#passwordless-registration).
+- **Passwordless registration** — the form omits the password input when
+  the schema omits that field, or when a verified-phone identity permits SMS
+  sign-up with the password method disabled. The server ignores a submitted
+  password in either case. [Passwordless registration](auth_config.md#passwordless-registration).
 - **Existing-phone login via register** — when the schema marks `phone` with
   `verify: "sms"` and the submitted phone already belongs to an account, the
   SMS-verified token proves phone ownership and the requester is signed into
@@ -789,11 +786,9 @@ Methods absent from `login.methods` / `registration.methods` are excluded from
 the rendered HTML server-side. When all OAuth providers and passkeys are
 absent, the "or continue with" divider is excluded entirely.
 
-When there is nothing to sign up with (`registration.enabled` is `false`, or
-`registration.methods` has neither `password` nor a provider), the hosted login
-page also omits every registration link, including the main switcher and the SMS view's "Create an
-account" escape path. This keeps invite-only and externally provisioned groups
-from advertising a registration flow they do not allow.
+The hosted login page offers registration links when registration is enabled
+and a password form, verified SMS form or provider is available. Otherwise it
+omits the main switcher and the SMS view's "Create an account" link.
 
 The hosted pages pass their group to OAuth `begin` too, so the same switch
 closes sign-up through Google, Apple, GitHub and Microsoft: a new account is

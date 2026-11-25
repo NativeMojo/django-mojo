@@ -168,9 +168,11 @@ Profile fields submitted alongside the token are ignored for an existing account
 | `"sms"` | No | New account created (JWT tokens or `requires_verification`) |
 | absent | Yes | 400 — duplicate account error |
 
-**Passwordless registration** — when `password` is absent from
-`registration.fields`, the form has no password input. The account is created
-without a usable password. The user signs in afterward using the SMS-code flow:
+**Passwordless registration** — an SMS-verified phone identity supports this
+three-step flow even with an empty `registration.methods` list. If the password
+method is disabled or the schema omits the field, the hosted form skips the
+password input. The server ignores any submitted password and creates the
+account without a usable one. The user can sign in afterward using SMS:
 
 1. `POST /api/auth/sms/login` with `{"phone_number": "<phone>"}` — sends a 6-digit code and returns `{"status": true}`.
 2. `POST /api/auth/sms/verify` with `{"phone_number": "<phone>", "code": "<code>"}` — returns JWT tokens on success.

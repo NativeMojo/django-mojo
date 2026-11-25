@@ -1105,13 +1105,16 @@ ALLOW_USER_REGISTRATION = True
 
 **Endpoint:** `POST /api/auth/register`
 
-Fields and which identity channel is required depend on the server's `AUTH_REGISTER_FIELDS` setting. Default config requires `email` + `password`. Phone-as-identity projects configure `phone` (with optional `verify: "sms"` pre-verification) as the identity field instead.
+The default schema requires email and password. With password sign-up disabled,
+a new account can register here only when the resolved identity is phone and
+`registration.fields` requires SMS verification for that phone. This works
+with an empty methods list. [Registration configuration](auth_config.md#passwordless-registration).
 
 | Param | Required | Description |
 |---|---|---|
 | `email` | Conditional | Required when `email` is the configured identity field |
 | `phone` | Conditional | Required when `phone` is the configured identity field |
-| `password` | Yes | Password (strength validated) |
+| `password` | Conditional | Required and strength-checked when both the method and field are enabled. Ignored for passwordless sign-up. |
 | `first_name` | Conditional | Required when configured as such |
 | `last_name` | Conditional | Required when configured as such |
 | `dob` | Conditional | ISO `yyyy-mm-dd`. Required when configured; age-gated by `AUTH_MIN_AGE_YEARS` |
@@ -1119,7 +1122,7 @@ Fields and which identity channel is required depend on the server's `AUTH_REGIS
 
 **Behavior depends on `REQUIRE_VERIFIED_EMAIL`:**
 
-- **`REQUIRE_VERIFIED_EMAIL = True`** — Account is created, response includes `requires_verification: true`. No JWT is issued. Email users must verify before logging in.
+- **`REQUIRE_VERIFIED_EMAIL = True`** — A new account registered with an email receives `requires_verification: true` and must verify the email before login. A phone-only registration receives the normal login response.
 - **`REQUIRE_VERIFIED_EMAIL = False`** (default) — User is logged in immediately with a JWT. A verification email is sent as a nudge when the user has an email on file.
 
 The registration page is served by the bouncer at `/auth/register` and uses `MojoAuth.register()` on the frontend.
