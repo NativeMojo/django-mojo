@@ -131,21 +131,30 @@ def test_verified_sms_without_password_method(opts):
             (["google"], PHONE_FIELDS + ["password"], {"password": "Pmg##99unused"})):
         group = _group("sms", {"methods": methods, "fields": fields})
         phone = _phone()
+        capture_id = _capture.new_capture_id()
+        headers = {"X-Mojo-Test-Capture-Id": capture_id,
+                   "X-Mojo-Test-User-Registered-Handler": CAPTURE_REGISTER,
+                   "X-Mojo-Test-User-Login-Handler": "tests.test_register._capture.capture_login"}
         try:
             body = dict(first_name="Pat", last_name="Gate", phone=phone, **supplied)
             _clear_limits()
             token = _phone_token(opts, phone)
-            resp = _register(opts, dict(body, verified_phone_token=token), group)
+            resp = _register(opts, dict(body, verified_phone_token=token), group, headers)
             assert_eq(resp.status_code, 200, f"verified SMS must register for {methods}: {resp.response}")
             user = User.objects.get(phone_number=phone)
             assert_true(user.is_phone_verified, "the registered phone must be verified")
             assert_true(not user.has_usable_password(), "an SMS-only account must have no usable password")
             assert_true(not phone_register.consume(token, phone), "signup must consume the single-use token")
+            captured = _capture.read_capture(capture_id)
+            for hook in ("register", "login"):
+                assert_eq([call["source"] for call in captured.get(hook, [])], ["sms"],
+                          f"the {hook} hook must report SMS as the credential")
             fresh_phone = _phone()
             denied = _register(opts, dict(body, phone=fresh_phone), group)
             assert_eq(denied.status_code, 400, "SMS registration must require proof of phone ownership")
             assert_true(not User.objects.filter(phone_number=fresh_phone).exists(), "unverified signup created a user")
         finally:
+            _capture.clear_capture(capture_id)
             User.objects.filter(phone_number=phone).delete()
             group.delete()
 

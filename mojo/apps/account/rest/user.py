@@ -709,6 +709,7 @@ def on_register(request):
     email = sanitized.get("email", "")
     phone = sanitized.get("phone", "")
     password = sanitized.get("password")
+    signup_source = "password" if password else "sms"
     first_name = sanitized.get("first_name", "")
     last_name = sanitized.get("last_name", "")
     dob = sanitized.get("dob")
@@ -805,7 +806,7 @@ def on_register(request):
 
             account_extensions.fire_user_registered(
                 user=user, request=request, group=group,
-                source="password", extra=extra)
+                source=signup_source, extra=extra)
     except Exception:
         # The single-use token was consumed at line ~453, before this block. If
         # user creation / the register handler failed, the user row rolled back —
@@ -846,7 +847,7 @@ def on_register(request):
             requires_verification=True,
             message="Account created. Please check your email to verify your account before logging in."
         ))
-    return jwt_login(request, user, source="password", is_new_user=True)
+    return jwt_login(request, user, source=signup_source, is_new_user=True)
 
 
 def get_mfa_methods(user):
