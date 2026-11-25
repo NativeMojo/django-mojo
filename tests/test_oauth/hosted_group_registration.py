@@ -213,7 +213,7 @@ def test_invited_email_signs_in(opts):
 @th.django_unit_test("hosted oauth: an open group creates the account, adds it to the group and reports the group")
 def test_open_group_creates_member(opts):
     from mojo.apps.account.models.member import GroupMember
-    group = _make_group("open", registration={"methods": REG_ON})
+    group = _make_group("open", registration={"methods": list(PROVIDERS)})
     emails = []
     try:
         for provider in PROVIDERS:

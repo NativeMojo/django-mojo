@@ -239,16 +239,10 @@ def _auth_context(request, group=None, include_registration_extras=False):
     login_methods = list(cfg.login.methods or [])
     registration_methods = list(cfg.registration.methods or [])
     registration_enabled = bool(cfg.registration.enabled)
-    # The register page follows /api/auth/register and OAuth begin (#11790):
-    # the form is the `password` method, and a provider button needs the
-    # provider in both lists, because begin is gated by login.methods once the
-    # page names its group. With registration closed there are none.
-    register_form_enabled = registration_enabled and 'password' in registration_methods
     register_providers = [
         p for p in ('google', 'apple', 'github', 'microsoft')
         if p in registration_methods and p in login_methods
     ] if registration_enabled else []
-    registration_open = register_form_enabled or bool(register_providers)
     request_data = request.DATA if hasattr(request, 'DATA') else request.GET
     configured_layout = auth_config.normalize_layout(theme.layout or 'minimal')
     configured_appearance = auth_config.normalize_appearance(
@@ -284,7 +278,6 @@ def _auth_context(request, group=None, include_registration_extras=False):
     # Schema-driven register form. The same schema drives the server-side
     # validator, so what the form collects matches what the API will accept.
     register_fields = register_schema.resolve_fields(group=group, request=request)
-    register_field_rows = register_schema.field_rows(register_fields)
     # Per-group extra (non-canonical) fields — promo/ref/tracking/etc. Default
     # empty: no extra inputs, no behavior change. Rendered after the canonical
     # fields; the template's JS captures a matching URL query param silently or
@@ -304,6 +297,10 @@ def _auth_context(request, group=None, include_registration_extras=False):
         identity_field = register_schema.resolve_identity_field(register_fields, group=group)
     except Exception:
         identity_field = 'email'
+    register_fields = register_schema.signup_form_fields(register_fields, identity_field, registration_methods)
+    register_form_enabled = registration_enabled and bool(register_fields)
+    registration_open = register_form_enabled or bool(register_providers)
+    register_field_rows = register_schema.field_rows(register_fields)
     # When phone is the identity, the forgot-password subview must collect
     # phone (not email) and use the SMS channel.
     forgot_channel = 'sms' if identity_field == 'phone' else 'email'

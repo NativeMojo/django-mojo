@@ -171,6 +171,16 @@ def resolve_fields(group=None, request=None):
     return _normalize_field_list(raw)
 
 
+def signup_form_fields(fields, identity_field, methods):
+    """Fields the hosted form can collect and the register API can accept."""
+    if "password" in (methods or []):
+        return fields
+    if identity_field == "phone" and any(
+            f["name"] == "phone" and f.get("verify") == "sms" for f in fields):
+        return [f for f in fields if f["name"] != "password"]
+    return []
+
+
 def validate_fields_config(raw):
     """Validate an auth-config `registration.fields` list. Raises ValueException on
     bad config. Unknown field names are dropped (existing lenient contract);

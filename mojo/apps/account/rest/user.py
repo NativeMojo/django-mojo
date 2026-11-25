@@ -536,8 +536,8 @@ def on_register(request):
 
     Gated by the ALLOW_USER_REGISTRATION setting (default False), then by the
     resolved auth config (the group's, or the deployment's with no group):
-    registration.enabled, and for a NEW account "password" in
-    registration.methods. Both refusals are the same 403.
+    registration.enabled. A new verified-phone account can register by SMS
+    with password sign-up disabled. Other forms require the password method.
 
     Field set is driven by AUTH_REGISTER_FIELDS (group-scoped); see
     `mojo.apps.account.services.register_schema`. Default config (when the
@@ -614,8 +614,7 @@ def on_register(request):
     # has a working login path. validate_fields_config enforces this when a
     # group's auth config is saved, but the deployment-wide AUTH_CONFIG setting
     # and the X-Mojo-Test-Register-Fields header bypass that — re-check here.
-    has_password = "password" in by_name
-    if not has_password:
+    if "password" not in by_name:
         phone_field = by_name.get("phone")
         if not phone_field or phone_field.get("verify") != "sms":
             raise merrors.ValueException(
@@ -698,16 +697,9 @@ def on_register(request):
             # into the existing account — submitted profile fields are ignored.
             return jwt_login(request, existing, source="sms", is_new_user=False)
 
-    # ---- Password sign-up method gate (new accounts only) ------------------
-    # This endpoint IS the `password` registration method: email + password,
-    # SMS-verified phone and passwordless schemas alike (see
-    # auth_config.REGISTRATION_METHODS). A config that leaves `password` out of
-    # registration.methods refuses a new account here, with or without a group,
-    # like registration.enabled above and with the same answer. It sits after
-    # the returning-phone sign-in, so that path still works, and before any
-    # duplicate check or phone-token consume, so a refused new phone keeps its
-    # token and an existing email gets no "already exists" hint.
-    if "password" not in (reg_cfg.methods or []):
+    # Apply the same fields as the hosted form after the returning-member path.
+    fields = register_schema.signup_form_fields(fields, identity_field, reg_cfg.methods)
+    if not fields:
         raise merrors.PermissionDeniedException("Registration is not enabled", 403, 403)
 
     # ---- Validate the payload for a NEW registration ----------------------
@@ -741,7 +733,7 @@ def on_register(request):
 
     # Strength check (still framework-side; outside atomic for clarity).
     # Skipped for passwordless registration — there is no password.
-    if has_password:
+    if password:
         User(email=email or None).check_password_strength(password)
 
     # ---- Phone-verify consumption (BEFORE atomic block) --------------------
@@ -782,7 +774,7 @@ def on_register(request):
                 # Falls back to the normalized phone when no names are supplied
                 # or every candidate collides.
                 user.username = user.generate_username_from_names(fallback=phone)
-            if has_password:
+            if password:
                 user.set_password(password)
             else:
                 # Passwordless account — no usable password; the user logs in by

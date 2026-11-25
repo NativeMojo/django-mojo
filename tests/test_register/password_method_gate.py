@@ -1,20 +1,4 @@
-"""
-The "password" sign-up method is enforced (maestro #11790).
-
-/api/auth/register is the `password` registration method: email + password,
-SMS-verified phone and passwordless schemas alike. A resolved auth config that
-leaves `password` out of registration.methods refuses a NEW account there, with
-or without a group (Ian, 2026-11-20), with the same 403 as registration closed.
-A returning phone still signs in, a refused phone token stays unspent, and
-invites, admin-created accounts and OAuth sign-up never reach this endpoint.
-
-The hosted register page follows the same rules: no form without `password`,
-"Sign-up isn't available here." when nothing is left, and the login page then
-drops its register links.
-
-Each case makes its own groups, emails and phones, so the module is
-parallel-safe.
-"""
+"""Registration method contracts for native forms, verified SMS, and hosted pages."""
 import json
 import uuid as _uuid
 from pathlib import Path
@@ -117,7 +101,7 @@ def test_group_without_password_refuses(opts):
 @th.django_unit_test("register: a refused new phone keeps its verification token unspent")
 def test_new_phone_refused_token_unspent(opts):
     from mojo.apps.account.models import User
-    closed = _group("phone", {"methods": ["google"]})
+    closed = _group("phone", {"enabled": False, "methods": []})
     open_group = _group("phone-open")
     phone = _phone()
     fields = {"X-Mojo-Test-Register-Fields": json.dumps(PHONE_FIELDS)}
@@ -127,7 +111,7 @@ def test_new_phone_refused_token_unspent(opts):
         body = {"first_name": "Pat", "last_name": "Gate", "phone": phone, "verified_phone_token": token}
         _assert_refused(_register(opts, body, closed, fields), "a new phone sign-up")
         assert_true(not User.objects.filter(phone_number=phone).exists(), "no user may be created")
-        # The same token still works where password sign-up is allowed.
+        # Explicitly closing registration must preserve the token for a permitted signup.
         resp = _register(opts, body, open_group, fields)
         assert_eq(resp.status_code, 200, f"the unspent token must still register, got {resp.status_code}: {resp.response}")
         assert_true(User.objects.filter(phone_number=phone).exists(), "the open group must create the account")
@@ -135,6 +119,45 @@ def test_new_phone_refused_token_unspent(opts):
         User.objects.filter(phone_number=phone).delete()
         closed.delete()
         open_group.delete()
+
+
+@th.django_unit_test("register: verified phone signs up without a password regardless of stale fields")
+def test_verified_sms_without_password_method(opts):
+    from mojo.apps.account.models import User
+    from mojo.apps.account.services import phone_register
+    for methods, fields, supplied in (
+            ([], PHONE_FIELDS, {}),
+            ([], PHONE_FIELDS + ["password"], {}),
+            (["google"], PHONE_FIELDS + ["password"], {"password": "Pmg##99unused"})):
+        group = _group("sms", {"methods": methods, "fields": fields})
+        phone = _phone()
+        try:
+            body = dict(first_name="Pat", last_name="Gate", phone=phone, **supplied)
+            _clear_limits()
+            token = _phone_token(opts, phone)
+            resp = _register(opts, dict(body, verified_phone_token=token), group)
+            assert_eq(resp.status_code, 200, f"verified SMS must register for {methods}: {resp.response}")
+            user = User.objects.get(phone_number=phone)
+            assert_true(user.is_phone_verified, "the registered phone must be verified")
+            assert_true(not user.has_usable_password(), "an SMS-only account must have no usable password")
+            assert_true(not phone_register.consume(token, phone), "signup must consume the single-use token")
+            fresh_phone = _phone()
+            denied = _register(opts, dict(body, phone=fresh_phone), group)
+            assert_eq(denied.status_code, 400, "SMS registration must require proof of phone ownership")
+            assert_true(not User.objects.filter(phone_number=fresh_phone).exists(), "unverified signup created a user")
+        finally:
+            User.objects.filter(phone_number=phone).delete()
+            group.delete()
+
+
+@th.django_unit_test("register: an unverified phone schema cannot sign up with password disabled")
+def test_phone_without_sms_refused(opts):
+    group = _group("phone-unverified", {"methods": [], "fields": ["phone", "password"]})
+    try:
+        _assert_refused(_register(opts, {"phone": _phone(), "password": "Pmg##99pass"}, group),
+                        "unverified phone and password")
+    finally:
+        group.delete()
 
 
 @th.django_unit_test("register: an existing phone still signs in and joins a group without password sign-up")
@@ -282,6 +305,17 @@ def test_register_page_password_off(opts):
     assert_true('id="btn-google"' in html, "the Google button must still render")
     assert_true("Or register with" not in html, "the divider must not render without the form")
     assert_true(UNAVAILABLE not in html, "sign-up is still available through Google")
+
+
+@th.django_unit_test("register page: verified SMS signup shows phone steps and hides a stale password field")
+def test_sms_form_without_password(opts):
+    config = {"registration": {"methods": [], "fields": PHONE_FIELDS + ["password"]}}
+    html = _render("account/register.html", config)
+    assert_true('data-mat-steps="3"' in html and 'id="reg-phone"' in html, "SMS steps must render")
+    assert_true('id="reg-password"' not in html, "disabled password input must be omitted")
+    assert_true(UNAVAILABLE not in html, "SMS registration must be available")
+    login = _render("account/login.html", config)
+    assert_true('href="/register' in login, "the login page must link to SMS signup")
 
 
 @th.django_unit_test("register page: nothing to sign up with, or registration closed, says so")

@@ -40,7 +40,7 @@ from mojo.helpers.settings import settings
 LOGIN_METHODS = ("password", "sms", "passkey", "magic", "google", "apple", "github",
                  "microsoft")
 # Registration methods. Passkey-at-signup is `passkey_prompt`, not a method;
-# SMS-verified phone signup is the `password` method with a phone identity.
+# The phone-identity schema enables verified SMS sign-up independently.
 REGISTRATION_METHODS = ("password", "google", "apple", "github", "microsoft")
 # The methods on when nothing is configured. A method added later (microsoft)
 # stays off until a site switches it on, so no site shows a dead button.
