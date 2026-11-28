@@ -3,6 +3,7 @@
 import hashlib
 import json
 import re
+import time
 import zlib
 import datetime
 
@@ -890,25 +891,56 @@ def receipt_retention_days():
     return retention_days
 
 
+RECEIPT_PRUNE_BATCH_SIZE = 500
+RECEIPT_PRUNE_MAX_BATCHES = 500
+
+
+def _prune_receipt_batches(eligible, age_field):
+    # Lock only eligible receipts on the writer. The collector needs their
+    # primary keys to clear feedback and transition FKs, never the replay JSON.
+    lock_query = eligible.order_by(age_field).select_for_update(skip_locked=True)
+    writer = lock_query.db
+    candidates = lock_query.using(writer)
+    deleted = 0
+    for _ in range(RECEIPT_PRUNE_MAX_BATCHES):
+        with transaction.atomic(using=writer):
+            rows = list(candidates.values_list("pk", age_field)[:RECEIPT_PRUNE_BATCH_SIZE])
+            if not rows:
+                break
+            ids = [pk for pk, _age in rows]
+            count, _details = eligible.using(writer).filter(pk__in=ids).only("pk").delete()
+        deleted += count
+        if len(rows) < RECEIPT_PRUNE_BATCH_SIZE:
+            break
+        # Keep the boundary inclusive: more receipts can have the same timestamp.
+        candidates = lock_query.using(writer).filter(**{f"{age_field}__gte": rows[-1][1]})
+        time.sleep(0.15)
+    return deleted
+
+
 def prune_receipts(job=None, now=None):
     from mojo.apps.incident.models import MojoSecReceipt
 
     retention_days = receipt_retention_days()
     cutoff = (now or dates.utcnow()) - dates.timedelta(days=retention_days)
-    deleted, _ = MojoSecReceipt.objects.filter(
+    published = MojoSecReceipt.objects.filter(
         publish_state=MojoSecReceipt.PUBLISH_PUBLISHED,
         handler_state__in=(
             MojoSecReceipt.HANDLER_NONE, MojoSecReceipt.HANDLER_DISPATCHED,
             MojoSecReceipt.HANDLER_DEAD),
         published_at__lt=cutoff,
-    ).delete()
-    dead_deleted, _ = MojoSecReceipt.objects.filter(
+    )
+    dead = MojoSecReceipt.objects.filter(
         publish_state=MojoSecReceipt.PUBLISH_DEAD,
         modified__lt=cutoff,
-    ).delete()
+    )
+    deleted = _prune_receipt_batches(published, "published_at")
+    dead_deleted = _prune_receipt_batches(dead, "modified")
     if job is not None and hasattr(job, "add_log"):
-        job.add_log(f"Pruned {deleted} expired and {dead_deleted} dead "
-                    "MojoSec receipt rows")
+        message = f"Pruned {deleted} expired and {dead_deleted} dead MojoSec receipt rows"
+        if max(deleted, dead_deleted) == RECEIPT_PRUNE_BATCH_SIZE * RECEIPT_PRUNE_MAX_BATCHES:
+            message += " (daily batch limit reached)"
+        job.add_log(message)
     return deleted + dead_deleted
 
 
