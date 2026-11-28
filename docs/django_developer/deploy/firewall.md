@@ -93,6 +93,15 @@ wrong account or malformed/missing broker fail terminally; transient timeouts
 and host contention use durable retry. A later readiness recovery queues a
 fresh repair.
 
+During a host sync, the broker reads the kernel's filter table to check the
+planned direct IP rules in bulk. It also checks each managed set's membership
+and rule counts. A matching host performs zero firewall writes and still
+publishes a fresh observation. If a chain is missing one managed rule or has
+one duplicate, the broker inserts or removes that one rule. A compatible
+IPv4 set that differs by one member gets one add or delete. Larger membership
+differences use set replacement. The broker reads back repaired state before
+the runner reports success.
+
 Public firewall truth APIs accept only `channel="firewall"`; passing another
 channel, including the former `"default"`, explicitly fails with
 `invalid_firewall_channel` before dispatch. Omit the argument for the default.
@@ -167,6 +176,12 @@ Upgrading changes enforcement in two ways:
   dropped by the country set.
 
 ## Deployment and rollback
+
+During a rolling update, upgrade each enrolled host's system-Python broker
+before starting the updated job engine on that host. The engine uses the new
+`ips.status` broker operation during sync. An older broker cannot verify
+that request. Check the host's next reconciliation and the fresh observation
+for its current runner before continuing the rollout.
 
 Deployment retains the stdlib-only `firewall_deploy.py` alongside its previous
 activation body. Candidate and previous activation reconverge enrollment

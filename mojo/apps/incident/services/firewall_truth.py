@@ -6,6 +6,7 @@ Network dispatch imports stay inside the reconciliation functions.
 """
 
 import hashlib
+import math
 import ipaddress
 import json
 import re
@@ -330,6 +331,10 @@ def permanent_snapshot():
         "unsafe": unsafe,
     }
     value["fingerprint"] = state_fingerprint(value)
+    # Keep the existing fingerprint format. All rows in this snapshot share
+    # the same canonical membership, so calculate its wire digest once.
+    value["desired"] = {"name": value["name"], "present": True, "count": len(cidrs),
+                        "digest": hashlib.sha256("\n".join(cidrs).encode("ascii")).hexdigest()}
     return value
 
 
@@ -356,11 +361,7 @@ def geolocated_snapshot_from_row(row, permanent=None):
     permanent = permanent or permanent_snapshot()
     desired = {
         "ip": {"ip": canonical, "present": temporary},
-        "permanent": {
-            "name": permanent["name"], "present": True,
-            "count": len(permanent["cidrs"]),
-            "digest": network_digest(permanent["cidrs"]),
-        },
+        "permanent": permanent["desired"],
     }
     source = {
         "pk": row.pk, "generation": row.firewall_generation,
@@ -458,7 +459,7 @@ def current_host_incarnation():
 
 
 def record_host_observation(kind, identity, fence, fingerprint, desired,
-                            incarnation=None):
+                            incarnation=None, observed_at=None):
     if not isinstance(fingerprint, str) or not re.fullmatch(
             r"[0-9a-f]{64}", fingerprint):
         raise FirewallTruthError(
@@ -482,9 +483,14 @@ def record_host_observation(kind, identity, fence, fingerprint, desired,
                          allow_nan=False)
     if len(payload.encode()) > 65536:
         raise FirewallTruthError("observation_overflow", "host observation is too large")
+    ttl = FIREWALL_OBSERVATION_TTL
+    if observed_at is not None:
+        ttl -= math.ceil(time.monotonic() - observed_at)
+        if ttl <= 0:
+            raise FirewallTruthError("observation_unavailable", "host observation expired")
     if not _redis_client().set(
             observation_key(kind, identity, fence, host), payload,
-            ex=FIREWALL_OBSERVATION_TTL):
+            ex=ttl):
         raise FirewallTruthError(
             "observation_unavailable", "host observation could not be recorded")
     return value

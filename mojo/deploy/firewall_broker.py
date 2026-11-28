@@ -80,6 +80,7 @@ _OP_FIELDS = {
     "set.remove": {"set_name", "expected_permanent_set"},
     "set.rule_ensure": {"set_name", "expected_permanent_set"},
     "ip.status": {"source"},
+    "ips.status": {"sources"},
     "ip.normalize": {"source", "present"},
     "set.status": {"set_name", "expected_permanent_set"},
     "set.normalize": {
@@ -98,7 +99,7 @@ _FUNCTION_OPERATIONS = {
     "mojo.apps.incident.asyncjobs.broadcast_ipset_del_blocked": {
         "permanent.delete"},
     "mojo.apps.incident.asyncjobs.sync_firewall": {
-        "permanent.normalize", "set.normalize", "ip.normalize"},
+        "permanent.normalize", "set.normalize", "ip.normalize", "ips.status"},
     "mojo.apps.incident.asyncjobs.broadcast_sync_ipset": {
         "set.replace", "set.rule_ensure", "set.status", "set.normalize"},
     "mojo.apps.incident.asyncjobs.broadcast_remove_ipset": {
@@ -332,6 +333,19 @@ def build_operation(request, function=None):
         argv = [IPTABLES, "-C", "INPUT", "-m", "set", "--match-set", name,
                 "src", "-j", "DROP"]
         built.update(set_name=name, argv=argv, semantic="ensure INPUT set DROP")
+    elif operation == "ips.status":
+        from mojo.apps.incident.services.firewall_truth import canonical_ipv4_address
+        sources = request.get("sources")
+        if not isinstance(sources, list) or not 1 <= len(sources) <= 10000:
+            raise BrokerError("invalid number of IP status targets")
+        try:
+            sources = [canonical_ipv4_address(ip) for ip in sources]
+        except FirewallTruthError as err:
+            raise BrokerError(str(err), code=err.code) from err
+        if len(set(sources)) != len(sources):
+            raise BrokerError("duplicate IP status target")
+        built.update(sources=sources, argv=[IPTABLES_SAVE, "-t", "filter"],
+                     semantic="observe exact host rule counts")
     elif operation in ("ip.status", "ip.normalize"):
         source = _network(request.get("source"))
         if not isinstance(request.get("present", False), bool):
@@ -375,7 +389,7 @@ def build_operation(request, function=None):
     built["argv_digest"] = _digest_argv(built["argv"])
     built["stdin_digest"] = hashlib.sha256(built["stdin"].encode()).hexdigest()
     built["stdin_length"] = len(built["stdin"].encode())
-    built["count"] = len(built["cidrs"])
+    built["count"] = len(built.get("sources", built["cidrs"]))
     return built
 
 
@@ -550,59 +564,77 @@ def _rules_contain_source(payload, source):
 def _forwarding_required():
     try:
         with open("/proc/sys/net/ipv4/ip_forward", encoding="ascii") as value:
-            return value.read(8).strip() == "1"
+            raw = value.read(8).strip()
+            if raw not in ("0", "1"):
+                raise BrokerError("invalid IPv4 forwarding state", code="status_malformed")
+            return raw == "1"
     except (OSError, UnicodeError):
         raise BrokerError("cannot read IPv4 forwarding state", code="status_unavailable")
 
 
-def _rule_counts(payload, source=None, set_name=None):
-    counts = {"INPUT": 0, "FORWARD": 0}
+def _rule_index(payload):
+    """Index only the exact filter-table DROP rules managed by this broker."""
+    index = {}
+    table = "filter"
+    barrier = set()
     for line in payload.splitlines():
-        if not line.startswith("-A "):
+        if line.startswith("*"):
+            table = line[1:]
+            continue
+        if table != "filter" or not line.startswith("-A "):
             continue
         try:
             parts = shlex.split(line, posix=True)
         except ValueError as err:
-            raise BrokerError(
-                "iptables-save returned malformed syntax",
-                code="status_malformed") from err
-        if len(parts) < 3 or parts[1] not in counts:
+            raise BrokerError("iptables-save returned malformed syntax",
+                              code="status_malformed") from err
+        if len(parts) == 2:
+            # A counter-only rule has no match or verdict.
             continue
-        if "-j" not in parts:
+        if parts[1] not in ("INPUT", "FORWARD"):
             continue
-        try:
-            target = parts[parts.index("-j") + 1]
-        except IndexError:
+        if parts[-1] in ("-j", "-g", "-s", "-d", "-p", "-i", "-o", "-m", "--match-set") and parts[-2] != "--comment":
             raise BrokerError("firewall rule is malformed", code="status_malformed")
-        if target != "DROP":
+        chain = parts[1]
+        if parts[-2:] != ["-j", "DROP"]:
+            barrier.add(chain)
             continue
-        matched = False
-        if source is not None and "-s" in parts:
+        if len(parts) == 6 and parts[2] == "-s":
             try:
-                found = _network(parts[parts.index("-s") + 1])
-                matched = parts == [
-                    "-A", parts[1], "-s", found, "-j", "DROP"] and found == source
-            except (IndexError, BrokerError):
-                matched = False
-        if set_name is not None and "--match-set" in parts:
-            try:
-                index = parts.index("--match-set")
-                matched = (
-                    parts[index + 1:index + 3] == [set_name, "src"] and
-                    parts == ["-A", parts[1], "-m", "set", "--match-set",
-                              set_name, "src", "-j", "DROP"])
-            except IndexError:
-                matched = False
-        if matched:
-            counts[parts[1]] += 1
-    return counts
+                network = _network(parts[3])
+            except BrokerError as err:
+                raise BrokerError("invalid source in filter table", code="status_malformed") from err
+            key = ("ip", network)
+        elif (len(parts) == 9 and parts[2:5] == ["-m", "set", "--match-set"]
+              and parts[6] == "src"):
+            key = ("set", parts[5])
+        else:
+            barrier.add(chain)
+            continue
+        counts = index.setdefault(key, {"INPUT": 0, "FORWARD": 0, "shadowed": set()})
+        counts[chain] += 1
+        if chain in barrier:
+            counts["shadowed"].add(chain)
+    return index
+
+
+def _rule_counts(payload, source=None, set_name=None):
+    key = ("ip", source) if source is not None else ("set", set_name)
+    return _rule_index(payload).get(key, {"INPUT": 0, "FORWARD": 0, "shadowed": set()})
 
 
 def _read_rules():
     child, stdout, unused = _run_child(
-        [IPTABLES_SAVE], stdout_limit=MAX_RULES_OUTPUT_BYTES)
+        [IPTABLES_SAVE, "-t", "filter"], stdout_limit=MAX_RULES_OUTPUT_BYTES)
     if not child["ok"]:
         raise BrokerError("cannot read firewall rules", code="status_unavailable")
+    records = [line for line in stdout.splitlines() if line and not line.startswith("#")]
+    if (not records or records[0] != "*filter" or records[-1] != "COMMIT"
+            or records.count("*filter") != 1 or records.count("COMMIT") != 1
+            or not all(line.startswith((":", "-A ")) for line in records[1:-1])
+            or not all(any(line.startswith(":" + chain + " ") for line in records)
+                       for chain in ("INPUT", "FORWARD"))):
+        raise BrokerError("incomplete filter table", code="status_malformed")
     return child, stdout
 
 
@@ -613,7 +645,8 @@ def _ip_status(source):
     desired_forward = 1 if forwarding else 0
     return child, {
         "ip": source.split("/", 1)[0],
-        "present": counts["INPUT"] == 1 and counts["FORWARD"] == desired_forward,
+        "present": (counts["INPUT"] == 1 and counts["FORWARD"] == desired_forward
+                    and not counts["shadowed"]),
         "input_count": counts["INPUT"],
         "forward_count": counts["FORWARD"],
         "forwarding_required": forwarding,
@@ -629,9 +662,12 @@ def _parse_set_save(payload, set_name):
             parts = shlex.split(line, posix=True)
         except ValueError as err:
             raise BrokerError("ipset returned malformed syntax", code="status_malformed") from err
-        if not parts:
+        if not parts or line.lstrip().startswith("#"):
             continue
         if parts[0] == "create" and len(parts) >= 3 and parts[1] == set_name:
+            if set_type is not None or any(option in parts[3:] for option in (
+                    "timeout", "forceadd", "netmask", "bitmask")):
+                raise BrokerError("unsupported ipset definition", code="status_malformed")
             set_type = parts[2]
             family = "inet"
             if "family" in parts:
@@ -640,12 +676,16 @@ def _parse_set_save(payload, set_name):
                 except IndexError as err:
                     raise BrokerError(
                         "ipset family is malformed", code="status_malformed") from err
-        elif parts[0] == "add" and len(parts) == 3 and parts[1] == set_name:
+        elif parts[:2] == ["add", set_name]:
+            if len(parts) != 3:
+                raise BrokerError("unsupported ipset member options", code="status_malformed")
             if len(members) >= MAX_CIDRS:
                 raise BrokerError("ipset member bound exceeded", code="status_overflow")
             if len(parts[2].encode("utf-8")) > 128:
                 raise BrokerError("ipset member is too long", code="status_malformed")
             members.append(parts[2])
+        else:
+            raise BrokerError("unexpected ipset record", code="status_malformed")
     if set_type is None:
         raise BrokerError("ipset definition is missing", code="status_malformed")
     if set_type == "hash:net" and family == "inet":
@@ -664,7 +704,7 @@ def _parse_set_save(payload, set_name):
     return set_type, family, canonical, digest
 
 
-def _set_status(set_name):
+def _set_status(set_name, members_out=None):
     child, stdout, stderr = _run_child(
         [IPSET, "save", set_name], stdout_limit=MAX_RULES_OUTPUT_BYTES)
     if child["returncode"] == 1 and _expected_absence(stderr, "ipset"):
@@ -677,13 +717,15 @@ def _set_status(set_name):
     else:
         exists = True
         set_type, family, members, digest = _parse_set_save(stdout, set_name)
+    if members_out is not None:
+        members_out.extend(members)
     rule_child, rules = _read_rules()
     counts = _rule_counts(rules, set_name=set_name)
     forwarding = _forwarding_required()
     desired_forward = 1 if forwarding else 0
     present = bool(
         exists and set_type == "hash:net" and family == "inet" and
-        counts["INPUT"] == 1 and counts["FORWARD"] == desired_forward)
+        counts["INPUT"] == 1 and counts["FORWARD"] == desired_forward and not counts["shadowed"])
     return [child, rule_child], {
         "name": set_name, "present": present, "exists": exists,
         "type": set_type, "family": family, "count": len(members),
@@ -700,22 +742,17 @@ def _normalize_rules(source=None, set_name=None, present=True):
     counts = _rule_counts(rules, source=source, set_name=set_name)
     matcher = (["-s", source] if source is not None else
                ["-m", "set", "--match-set", set_name, "src"])
-    for chain in ("INPUT", "FORWARD"):
-        for unused_count in range(counts[chain]):
-            child, stdout, stderr = _run_child(
-                [IPTABLES, "-D", chain] + matcher + ["-j", "DROP"])
-            children.append(child)
-            if not child["ok"]:
-                raise BrokerError("cannot remove duplicate rule", code="normalize_failed")
     forwarding = _forwarding_required()
-    if present:
-        chains = ["INPUT"] + (["FORWARD"] if forwarding else [])
-        for chain in chains:
-            child, stdout, stderr = _run_child(
-                [IPTABLES, "-I", chain] + matcher + ["-j", "DROP"])
-            children.append(child)
-            if not child["ok"]:
-                raise BrokerError("cannot establish firewall rule", code="normalize_failed")
+    for chain in ("INPUT", "FORWARD"):
+        wanted = int(present and (chain == "INPUT" or forwarding))
+        keep = min(wanted, counts[chain]) if chain not in counts["shadowed"] else 0
+        for action, repetitions in (("-D", counts[chain] - keep), ("-I", wanted - keep)):
+            for _ in range(repetitions):
+                child, stdout, stderr = _run_child(
+                    [IPTABLES, action, chain] + matcher + ["-j", "DROP"])
+                children.append(child)
+                if not child["ok"]:
+                    raise BrokerError("cannot reconcile firewall rule", code="normalize_failed")
     return children
 
 
@@ -742,42 +779,60 @@ def _normalize_ip(source, present):
     children.append(child)
     expected_forward = 1 if observed["forwarding_required"] and present else 0
     ok = (observed["input_count"] == (1 if present else 0) and
-          observed["forward_count"] == expected_forward)
+          observed["forward_count"] == expected_forward and observed["present"] is present)
     return children, observed, ok
 
 
 def _normalize_set(set_name, cidrs, present):
-    children, before = _set_status(set_name)
+    members = []
+    children, before = _set_status(set_name, members_out=members)
+    compatible = before["type"] == "hash:net" and before["family"] == "inet"
+    wanted = set(cidrs) if present else set()
+    actual = set(members)
+
+    def rules_match(status):
+        return (status["input_count"] == int(present) and
+                status["forward_count"] == int(present and status["forwarding_required"])
+                and (not present or status["present"]))
+
+    if (before["exists"] is present and rules_match(before) and
+            (not present or (compatible and wanted == actual))):
+        return children, before, True
+
     if present:
-        if (before["exists"] and
-                (before["type"] != "hash:net" or before["family"] != "inet")):
+        if before["exists"] and not compatible:
             children.extend(_normalize_rules(set_name=set_name, present=False))
-            child, stdout, stderr = _run_child([IPSET, "destroy", set_name])
+            child, _, _ = _run_child([IPSET, "destroy", set_name])
             children.append(child)
             if not child["ok"]:
-                raise BrokerError(
-                    "cannot replace incompatible ipset", code="normalize_failed")
-        children.append(_replace_set(set_name, cidrs))
-        children.extend(_normalize_rules(set_name=set_name, present=True))
+                raise BrokerError("cannot replace incompatible ipset", code="normalize_failed")
+        if compatible and len(wanted ^ actual) == 1:
+            member, = wanted ^ actual
+            verb = "add" if member in wanted else "del"
+            child, _, _ = _run_child([IPSET, verb, set_name, member])
+            children.append(child)
+            if not child["ok"]:
+                raise BrokerError("cannot reconcile set member", code="normalize_failed")
+        elif not compatible or wanted != actual:
+            children.append(_replace_set(set_name, cidrs))
+        if not compatible or not rules_match(before):
+            children.extend(_normalize_rules(set_name=set_name, present=True))
     else:
-        children.extend(_normalize_rules(set_name=set_name, present=False))
-        child, stdout, stderr = _run_child([IPSET, "destroy", set_name])
-        children.append(child)
-        if child["returncode"] == 1 and _expected_absence(stderr, "ipset"):
-            child["ok"] = True
-        elif not child["ok"]:
-            raise BrokerError("cannot remove ipset", code="normalize_failed")
+        if not rules_match(before):
+            children.extend(_normalize_rules(set_name=set_name, present=False))
+        if before["exists"]:
+            child, _, stderr = _run_child([IPSET, "destroy", set_name])
+            children.append(child)
+            if child["returncode"] == 1 and _expected_absence(stderr, "ipset"):
+                child["ok"] = True
+            elif not child["ok"]:
+                raise BrokerError("cannot remove ipset", code="normalize_failed")
     status_children, observed = _set_status(set_name)
     children.extend(status_children)
-    expected_forward = 1 if observed["forwarding_required"] and present else 0
-    ok = (observed["exists"] is present and
-          observed["input_count"] == (1 if present else 0) and
-          observed["forward_count"] == expected_forward)
+    ok = observed["exists"] is present and rules_match(observed)
     if present:
-        ok = (ok and observed["type"] == "hash:net" and
-              observed["family"] == "inet" and
-              observed["count"] == len(cidrs) and
-              observed["digest"] == network_digest(cidrs))
+        ok = (ok and observed["type"] == "hash:net" and observed["family"] == "inet"
+              and observed["count"] == len(cidrs) and observed["digest"] == network_digest(cidrs))
     return children, observed, ok
 
 
@@ -800,6 +855,15 @@ def execute(request):
             child, observed = _ip_status(built["source"])
             children.append(child)
             result = {"ok": True, "observed": observed}
+        elif built["operation"] == "ips.status":
+            child, rules = _read_rules()
+            children.append(child)
+            index = _rule_index(rules)
+            counts = {}
+            for ip in built["sources"]:
+                count = index.get(("ip", ip + "/32"), {})
+                counts[ip] = [count.get("INPUT", 0), count.get("FORWARD", 0), bool(count.get("shadowed"))]
+            result = {"ok": True, "counts": counts, "forwarding": _forwarding_required()}
         elif built["operation"] == "ip.normalize":
             children, observed, ok = _normalize_ip(
                 built["source"], built["present"])
@@ -844,7 +908,7 @@ def execute(request):
             elif not child["ok"]:
                 raise BrokerError("cannot flush set")
         if built["operation"] not in (
-                "ip.status", "ip.normalize", "set.status", "set.normalize",
+                "ip.status", "ips.status", "ip.normalize", "set.status", "set.normalize",
                 "permanent.normalize", "geolocated.normalize"):
             stdout_limit = (MAX_RULES_OUTPUT_BYTES if built["operation"] == "rules.contains"
                             else MAX_OUTPUT_BYTES)

@@ -100,7 +100,7 @@ def _observation(kind, identity, fence, fingerprint, host, desired,
     }, sort_keys=True, separators=(",", ":"))
 
 
-def _run_sync(job):
+def _run_sync(job, matched=()):
     from mojo.apps.incident.asyncjobs import _firewall_host, sync_firewall
     # These tests exercise post-admission kernel/fence behavior on an enrolled
     # host. Readiness rejection itself is covered by firewall_readiness tests.
@@ -111,7 +111,9 @@ def _run_sync(job):
             return_value=[_firewall_host()]), mock.patch(
             "mojo.apps.incident.services.firewall_truth.current_host_runner_target",
             return_value=job.payload["target"]):
-        return sync_firewall(job)
+        with mock.patch("mojo.apps.incident.firewall.matching_ip_rules",
+                        return_value={"ok": True, "matched": set(matched)}):
+            return sync_firewall(job)
 
 
 @th.django_unit_setup()
@@ -872,3 +874,22 @@ def test_cron_fallback_without_hostname_channels(opts):
                 lambda call: call.get("func") == cronjobs.FIREWALL_SYNC_JOB) as calls:
         result = cronjobs.sync_firewall()
     assert result == "failed" and calls == [], calls
+
+
+@th.django_unit_test("a matching host skips every scalar IP broker operation")
+def test_matching_ip_snapshot_skips_normalization(opts):
+    from mojo.apps.incident.asyncjobs import _sync_firewall_keys
+    from mojo.apps.account.models import GeoLocatedIP
+    from django.db.models import Q
+
+    redis = _Redis()
+    matched = GeoLocatedIP.objects.filter(Q(is_blocked=True) | Q(firewall_pending=True) |
+                                         Q(is_whitelisted=True)).values_list("ip_address", flat=True)
+    with mock.patch("mojo.apps.jobs.adapters.get_adapter", return_value=redis), \
+            mock.patch("mojo.apps.jobs.publish"), \
+            mock.patch("mojo.apps.incident.firewall.normalize_permanent_ipset", side_effect=_permanent_result), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ipset", side_effect=_set_result), \
+            mock.patch("mojo.apps.incident.firewall.normalize_ip") as scalar:
+        assert _run_sync(_job(), matched=matched)
+    scalar.assert_not_called()
+    assert redis.get(_sync_firewall_keys()[0])

@@ -235,6 +235,29 @@ def ip_status(ip):
         "ok": False, "error": {"code": "broker_unavailable"}}
 
 
+def matching_ip_rules(desired):
+    """One read of the filter table, including exact absence and duplicates."""
+    if not desired:
+        return {"ok": True, "matched": set()}
+    result = _broker_request("ips.status", sources=list(desired))
+    if not result.get("ok"):
+        return result
+    counts = result.get("counts")
+    forwarding = result.get("forwarding")
+    if (type(forwarding) is not bool or not isinstance(counts, dict)
+            or counts.keys() != desired.keys()):
+        return _broker_error("broker_invalid_response")
+    matched = set()
+    for ip, present in desired.items():
+        pair = counts[ip]
+        if (not isinstance(pair, list) or len(pair) != 3 or type(pair[2]) is not bool
+                or any(type(n) is not int or n < 0 for n in pair[:2])):
+            return _broker_error("broker_invalid_response")
+        if pair == [int(present), int(present and forwarding), False]:
+            matched.add(ip)
+    return {"ok": True, "matched": matched}
+
+
 def normalize_ip(ip, present):
     ip = _validate_ip(ip)
     if not ip:
