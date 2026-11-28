@@ -545,6 +545,7 @@ def _sync_firewall_keys(host=None):
 
 def sync_firewall(job):
     """Write only this host's bounded observations for exact desired fences."""
+    import time
     import uuid
     from django.db.models import Q
     from mojo.apps import jobs
@@ -670,11 +671,7 @@ def sync_firewall(job):
 
         if not renew():
             _retry_firewall_sync(job, "host_lock_lost")
-        set_desired = permanent["desired"] if "desired" in permanent else {
-            "name": aggregate_name, "present": True,
-            "count": len(permanent["cidrs"]),
-            "digest": firewall_truth.network_digest(permanent["cidrs"]),
-        }
+        set_desired = permanent["desired"]
         result = firewall.normalize_permanent_ipset(permanent["cidrs"])
         _retry_broker_failure(job, result)
         semantic = _semantic("set", set_desired, result)
@@ -735,35 +732,70 @@ def sync_firewall(job):
             finally:
                 firewall_truth.release_desired_state(lease)
 
-        for snapshot, fence in geo_plans:
+        desired_ips = {snapshot["canonical"]: snapshot["desired"]["ip"]["present"]
+                       for snapshot, fence in geo_plans}
+        def inspect_ips(wanted):
+            read_started = time.monotonic()
+            result = firewall.matching_ip_rules(wanted)
+            if not result.get("ok"):
+                _retry_broker_failure(job, result)
+                _retry_firewall_sync(job, "ip_status_unavailable")
+            return read_started, result["matched"]
+
+        observed_at, matched = inspect_ips(desired_ips)
+
+        # Recheck database rows and fences after observing the kernel. Keep
+        # shared leases short; never hold one while calling the broker.
+        for offset in range(0, len(geo_plans), 64):
+            batch = geo_plans[offset:offset + 64]
+            verified = set()
             if not renew():
                 _retry_firewall_sync(job, "host_lock_lost")
-            desired = snapshot["desired"]
-            ip_desired = desired["ip"]
-            result = firewall.normalize_ip(
-                ip_desired["ip"], ip_desired["present"])
-            _retry_broker_failure(job, result)
-            current_snapshot = firewall_truth.geolocated_snapshot(
-                ip_desired["ip"], permanent=permanent)
+            for snapshot, fence in batch:
+                ip = snapshot["canonical"]
+                if ip in matched:
+                    verified.add(ip)
+                    continue
+                if not renew():
+                    _retry_firewall_sync(job, "host_lock_lost")
+                ip_desired = snapshot["desired"]["ip"]
+                result = firewall.normalize_ip(ip, ip_desired["present"])
+                _retry_broker_failure(job, result)
+                if _semantic("ip", ip_desired, result)["ok"]:
+                    verified.add(ip)
+
+            # A long repair run must not publish old observations as fresh.
+            batch_observed_at = observed_at
+            if time.monotonic() - observed_at >= 30:
+                batch_observed_at, verified = inspect_ips({
+                    s["canonical"]: desired_ips[s["canonical"]] for s, f in batch})
+
+            rows = GeoLocatedIP.objects.in_bulk([s["row"].pk for s, f in batch])
+            current = {}
+            for snapshot, fence in batch:
+                row = rows.get(snapshot["row"].pk)
+                if row is not None:
+                    current[snapshot["canonical"]] = firewall_truth.geolocated_snapshot_from_row(
+                        row, permanent=permanent)["fingerprint"]
             lease = None
             try:
                 lease = firewall_truth.acquire_desired_state()
-                target = ("ip", ip_desired["ip"])
-                current_fence = firewall_truth.read_fences(
-                    redis_client, [target])[target]
-                if (_semantic("ip", ip_desired, result)["ok"] and aggregate_ok and
-                        current_snapshot["fingerprint"] == snapshot["fingerprint"] and
-                        current_snapshot["desired"] == desired and
-                        firewall_truth.read_desired_generation(lease.redis) ==
-                        plan_generation and
-                        current_fence == fence and
-                        firewall_truth.desired_state_is_current(lease)):
-                    firewall_truth.record_host_observation(
-                        "geo", ip_desired["ip"], fence,
-                        snapshot["fingerprint"], desired,
-                        incarnation=incarnation)
-                else:
-                    failures += 1
+                batch_fences = firewall_truth.read_fences(
+                    lease.redis, [("ip", s["canonical"]) for s, f in batch])
+                if firewall_truth.read_desired_generation(lease.redis) != plan_generation:
+                    _retry_firewall_sync(job, "desired_generation_changed")
+                for snapshot, fence in batch:
+                    ip = snapshot["canonical"]
+                    if not firewall_truth.desired_state_is_current(lease):
+                        _retry_firewall_sync(job, "desired_state_busy")
+                    if (aggregate_ok and ip in verified and
+                            current.get(ip) == snapshot["fingerprint"] and
+                            batch_fences[("ip", ip)] == fence):
+                        firewall_truth.record_host_observation(
+                            "geo", ip, fence, snapshot["fingerprint"], snapshot["desired"],
+                            incarnation=incarnation, observed_at=batch_observed_at)
+                    else:
+                        failures += 1
             except firewall_truth.FirewallTruthError as err:
                 _retry_firewall_sync(job, err.code)
             finally:

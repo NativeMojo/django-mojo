@@ -526,11 +526,11 @@ success use their detailed checked companions.
 
 ### Startup recovery and fleet reconciliation
 
-`sync_firewall` rebuilds ipsets from DB truth on **the node that runs it**. Because that work is node-local, it is reached two ways:
+`sync_firewall` compares the kernel firewall on **the node that runs it** with the database's desired state and repairs differences. The hourly job and the startup hook both run this check.
 
 ```
-sync_firewall (hourly, minute 0) — checked roster on "default"
-  → selects the same one compatible runner per hostname as checked execution
+sync_firewall (hourly, minute 0)
+  → selects a capable runner per hostname and queues work on its direct channel
   → one per-host lock winner, for that host's shared kernel:
       → briefly lease and capture the constant-size desired generation
       → outside the lease, bound/snapshot rows and quarantine invalid objects
@@ -538,8 +538,8 @@ sync_firewall (hourly, minute 0) — checked roster on "default"
       → release the global lease before broker I/O
       → observe/repair/re-observe complete mojo_blocked membership, including empty
       → reconcile every valid IPSet row (enabled presence; disabled/cache absence tombstone)
-      → reconcile valid active TTL presence and pending direct-rule absence
-      → after each broker call, briefly reacquire the lease and reject stale truth
+      → check direct-rule counts in bulk, then repair mismatches
+      → recheck desired state and fences before recording host observations
       → write matching host observations bound to fences, fingerprints, and heartbeat start
       → advance mojo:sync_firewall:last_sync:<host> for the observed valid generation
       → queue aggregate_firewall_truth; invalid siblings stay quarantined/pending
@@ -586,7 +586,7 @@ without raw argv, stdout, stderr, environment, or restore text.
 | `ipset_load(name, cidrs)` | Creates/replaces a kernel ipset with the given CIDRs and adds an iptables DROP rule for it |
 | `ipset_remove(name)` | Removes a kernel ipset and its associated iptables rule |
 | `normalize_ip(ip, present)` | Observe, repair, and re-observe exact direct-rule multiplicity |
-| `normalize_ipset(name, cidrs, present)` | Observe, atomically replace/remove, and re-observe exact type/family/membership digest/rule counts |
+| `normalize_ipset(name, cidrs, present)` | Verify set type, family, membership and rule counts. Repair a single missing or extra member in place. Replace membership for larger differences and verify the result. |
 | `normalize_geolocated_ip(...)` | Normalize direct and permanent-set truth while one broker host lock is held |
 
 Firewall targets are canonical IPv4 only. IPv6 is refused with

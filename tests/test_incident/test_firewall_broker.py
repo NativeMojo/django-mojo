@@ -110,7 +110,7 @@ def test_ip_normalize_repairs_duplicate_rules(opts):
         unused, observed, ok = broker._normalize_ip("192.0.2.8/32", True)
     deletes = [argv for argv in commands if argv[1] == "-D"]
     inserts = [argv for argv in commands if argv[1] == "-I"]
-    th.assert_eq((len(deletes), len(inserts)), (2, 1),
+    th.assert_eq((len(deletes), len(inserts)), (1, 0),
                  "normalization did not repair exact duplicate multiplicity")
     th.assert_true(ok and observed["present"],
                    "repair did not re-observe exact desired truth")
@@ -474,3 +474,83 @@ def test_multistep_child_receipts(opts):
                    "the expected rule-miss step and successful insert are both semantic success")
     th.assert_eq([item["argv_digest"] for item in recorded], ["a" * 64, "b" * 64],
                  "each child must retain its own exact argv digest")
+
+
+@th.unit_test("matching 1605-member firewall and single drift produce minimal writes")
+def test_differential_set_and_rule_repair(opts):
+    from mojo.deploy import firewall_broker as broker
+
+    name = "test_blocks"
+    cidrs = sorted(f"198.18.{i // 256}.{i % 256}/32" for i in range(1605))
+    rule = ["-m", "set", "--match-set", name, "src", "-j", "DROP"]
+    for drift in ("none", "rule", "member"):
+        members = set(cidrs)
+        rules = [] if drift == "rule" else ["-A INPUT " + " ".join(rule)]
+        if drift == "member":
+            members.remove(cidrs[0])
+        writes = []
+
+        def run(argv, *args, **kwargs):
+            out = ""
+            if argv == [broker.IPTABLES_SAVE, "-t", "filter"]:
+                out = "\n".join(["*filter", ":INPUT ACCEPT [0:0]", ":FORWARD ACCEPT [0:0]", *rules, "COMMIT"])
+            elif argv == [broker.IPSET, "save", name]:
+                out = "\n".join([f"create {name} hash:net family inet",
+                                 *(f"add {name} {ip}" for ip in members)])
+            else:
+                writes.append(argv)
+                if argv == [broker.IPTABLES, "-I", "INPUT", *rule]:
+                    rules.append("-A INPUT " + " ".join(rule))
+                if argv == [broker.IPSET, "add", name, cidrs[0]]:
+                    members.add(cidrs[0])
+            return {"ok": True, "returncode": 0}, out, ""
+
+        with mock.patch.object(broker, "_run_child", side_effect=run), \
+                mock.patch.object(broker, "_forwarding_required", return_value=False):
+            _, observed, ok = broker._normalize_set(name, cidrs, True)
+        expected = {"none": [], "rule": [[broker.IPTABLES, "-I", "INPUT", *rule]],
+                    "member": [[broker.IPSET, "add", name, cidrs[0]]]}
+        assert writes == expected[drift], (drift, writes)
+        assert ok and observed["count"] == 1605 and observed["input_count"] == 1
+
+
+@th.unit_test("batch status rejects incomplete kernel evidence and shadowed rules")
+def test_bulk_proof_requires_exact_kernel_evidence(opts):
+    from mojo.apps.incident import firewall
+    from mojo.deploy import firewall_broker as broker
+
+    ip = "11.192.0.1"
+    request = {"operation": "ips.status", "sources": [ip]}
+    sync = "mojo.apps.incident.asyncjobs.sync_firewall"
+    built = broker.build_operation(request, function=sync)
+    assert built["count"] == 1
+    with th.assert_raises(broker.BrokerError):
+        broker.build_operation(request, function="mojo.apps.incident.asyncjobs.broadcast_block_ip")
+    for sources in ([], [ip] * 2, [ip] * 10001, ["not-an-address"]):
+        with th.assert_raises(broker.BrokerError):
+            broker.build_operation(dict(request, sources=sources), function=sync)
+
+    for payload in ("", "*filter\n:INPUT ACCEPT [0:0]\n", "*nat\nCOMMIT\n"):
+        with mock.patch.object(broker, "_run_child", return_value=({"ok": True}, payload, "")), \
+                th.assert_raises(broker.BrokerError):
+            broker._read_rules()
+    assert broker._rule_index("-A INPUT") == {}
+    for malformed in ("-A INPUT -s", "-A INPUT -s invalid -j DROP"):
+        with th.assert_raises(broker.BrokerError):
+            broker._rule_index(malformed)
+    with th.assert_raises(broker.BrokerError):
+        broker._parse_set_save("create blocked hash:net family inet\nunknown blocked", "blocked")
+    for suffix in (" nomatch", " timeout 300"):
+        with th.assert_raises(broker.BrokerError):
+            broker._parse_set_save(f"create blocked hash:net family inet\nadd blocked {ip}{suffix}", "blocked")
+    rules = f"-A INPUT -j ACCEPT\n-A INPUT -s {ip}/32 -j DROP"
+    counts = broker._rule_counts(rules, source=ip + "/32")
+    assert counts["INPUT"] == 1 and counts["shadowed"] == {"INPUT"}
+    for pair, matched in (([1, 0, True], set()), ([1, 0, False], {ip}), ([2, 0, False], set())):
+        result = {"ok": True, "counts": {ip: pair}, "forwarding": False}
+        with mock.patch.object(firewall, "_broker_request", return_value=result):
+            assert firewall.matching_ip_rules({ip: True})["matched"] == matched
+    for partial in ({}, {ip: [False, 0, False]}, {ip: [0, 0]}):
+        result = {"ok": True, "counts": partial, "forwarding": False}
+        with mock.patch.object(firewall, "_broker_request", return_value=result):
+            assert not firewall.matching_ip_rules({ip: False})["ok"]
