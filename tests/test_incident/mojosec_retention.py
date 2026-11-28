@@ -343,6 +343,123 @@ def _locks_or_writes(sql):
         sql.startswith("SELECT ") and " FOR UPDATE" in sql)
 
 
+@th.django_unit_test("receipt cleanup commits bounded batches and resumes without loading replay JSON")
+def test_receipt_batches_resume(opts):
+    from django.db import connection
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+
+    _clear()
+    now = _now() - datetime.timedelta(days=500)
+    cutoff = now - datetime.timedelta(days=45)
+    old = cutoff - datetime.timedelta(seconds=1)
+    receipts = MojoSecReceipt.objects.bulk_create([
+        MojoSecReceipt(api_key_id=opts.retention_key_id, sensor_id=SENSOR,
+                       wire_event_id=f"prune-batch-{i}", publish_state="published",
+                       published_at=old, replay_features={"payload": "x" * 4096})
+        for i in range(503)
+    ])
+    fresh = _receipt(opts, _event(1))
+    MojoSecReceipt.objects.filter(pk=fresh.pk).update(published_at=cutoff)
+    pending = _receipt(opts, _event(1), handler_state="queued")
+    MojoSecReceipt.objects.filter(pk=pending.pk).update(published_at=old)
+    dead = _receipt(opts, _event(1), publish_state="dead")
+    MojoSecReceipt.objects.filter(pk=dead.pk).update(modified=old)
+
+    table = MojoSecReceipt._meta.db_table
+    locks = 0
+
+    def interrupt_second_batch(execute, sql, params, many, context):
+        nonlocal locks
+        if sql.startswith("SELECT") and table in sql:
+            th.assert_true("replay_features" not in sql, "prune fetched the replay JSON")
+            if "FOR UPDATE" in sql:
+                locks += 1
+                if locks == 2:
+                    raise InterruptedError("stop between receipt batches")
+        return execute(sql, params, many, context)
+
+    with connection.execute_wrapper(interrupt_second_batch), th.assert_raises(InterruptedError):
+        mojosec.prune_receipts(now=now)
+
+    remaining = MojoSecReceipt.objects.filter(pk__in=[row.pk for row in receipts]).count()
+    th.assert_eq(remaining, 3, "the first 500-row transaction must survive interruption")
+    job = _Job()
+    th.assert_eq(mojosec.prune_receipts(job=job, now=now), 4, "retry lost or duplicated work")
+    th.assert_eq(job.logs, ["Pruned 3 expired and 1 dead MojoSec receipt rows"], "wrong counts")
+    th.assert_eq(mojosec.prune_receipts(now=now), 0, "a completed prune must be idempotent")
+    th.assert_eq(MojoSecReceipt.objects.filter(pk__in=[fresh.pk, pending.pk]).count(), 2,
+                 "the cutoff boundary and the unfinished handler must survive")
+    _clear()
+
+
+@th.django_unit_test("receipt cleanup preserves feedback, transition snapshots and the linked Event")
+def test_receipt_prune_preserves_audit_rows(opts):
+    from django.db import transaction
+    from mojo.apps.incident.models import (
+        Event, MojoSecCase, MojoSecCaseTransition, MojoSecDetectorFeedback, MojoSecReceipt)
+    from mojo.apps.incident.services import mojosec
+
+    now = _now() - datetime.timedelta(days=500)
+    old = now - datetime.timedelta(days=46)
+    with transaction.atomic():
+        event = _event(1)
+        receipt = _receipt(opts, event)
+        MojoSecReceipt.objects.filter(pk=receipt.pk).update(published_at=old)
+        feedback = MojoSecDetectorFeedback.objects.create(
+            receipt=receipt, subject_type="receipt", subject_key="prune-test",
+            subject_id_snapshot=str(receipt.pk), author_id_snapshot=1,
+            disposition=MojoSecDetectorFeedback.BENIGN_NOISE)
+        case = MojoSecCase.objects.create(
+            installation_key_id=opts.retention_key_id, sensor_id=SENSOR,
+            first_seen=old, last_seen=old, window_start=old, window_end=now,
+            correlation_key="prune-test", window_key="prune-test")
+        transition = MojoSecCaseTransition.objects.create(
+            case=case, receipt=receipt, receipt_id_snapshot=receipt.pk,
+            transition="open", reason="test", to_state="observing",
+            occurrence_count=1, receipt_count=1, projected_event_count=0,
+            distinct_count=1, sample_count=0, overflow_count=0,
+            policy_version=1, evaluator_version=1)
+
+        th.assert_eq(mojosec.prune_receipts(now=now), 1, "expected one expired receipt")
+        for audit in (feedback, transition):
+            audit.refresh_from_db()
+            th.assert_eq(audit.receipt_id, None, "the audit pointer must be cleared")
+            audit.assert_integrity()
+        th.assert_true(Event.objects.filter(pk=event.pk).exists(), "receipt prune removed an Event")
+        transaction.set_rollback(True)  # The immutable audit fixtures belong to this test only.
+
+
+@th.django_unit_test("receipt cleanup skips a locked row and checks its state on retry")
+def test_receipt_prune_skips_active_writer(opts):
+    from django.db import connection, transaction
+    from mojo.apps.incident.models import MojoSecReceipt
+    from mojo.apps.incident.services import mojosec
+
+    _clear()
+    now = _now() - datetime.timedelta(days=500)
+    locked = _receipt(opts, _event(1))
+    other = _receipt(opts, _event(1))
+    MojoSecReceipt.objects.filter(pk__in=[locked.pk, other.pk]).update(
+        published_at=now - datetime.timedelta(days=46))
+    writer = connection.copy()
+    try:
+        writer.set_autocommit(False)
+        with writer.cursor() as cursor:
+            cursor.execute("UPDATE incident_mojosecreceipt SET handler_state = %s WHERE id = %s",
+                           ["queued", locked.pk])
+        with transaction.atomic(), connection.cursor() as cursor:
+            cursor.execute("SET LOCAL lock_timeout = '2s'")
+            th.assert_eq(mojosec.prune_receipts(now=now), 1, "prune must skip the active writer")
+        writer.commit()
+    finally:
+        writer.close()
+    th.assert_eq(mojosec.prune_receipts(now=now), 0, "retry must keep the now-queued receipt")
+    locked.refresh_from_db()
+    th.assert_eq(locked.handler_state, "queued", "prune lost the concurrent handler change")
+    _clear()
+
+
 @th.django_unit_test("an Incident linked by another connection after the candidate read is kept")
 def test_retention_keeps_event_linked_during_prune(opts):
     import threading

@@ -1141,10 +1141,17 @@ day old) to `publish_state=dead`. Dead-lettering an extreme outage is
 recoverable by deliberate bulk surgery — reset `handler_state` to `failed`
 for the affected rows and the cron resumes them.
 
-Published receipt rows are retained for `MOJOSEC_RECEIPT_RETENTION_DAYS`
-(default 45, minimum 7) and pruned daily; `dead` receipt rows age out on the
-same retention clock. Live pending publication and incomplete handler-outbox
-receipts are never removed by that retention job.
+The daily receipt cleanup uses `MOJOSEC_RECEIPT_RETENTION_DAYS` (default 45,
+minimum 7). Finished published receipts age from `published_at`, and dead
+publications age from `modified`. Pending publications and published receipts
+with unfinished handlers remain eligible for replay.
+
+The worker deletes up to 500 receipts per transaction and pauses briefly
+between batches. One run processes at most 250,000 published receipts and
+250,000 dead receipts. Locked receipts and any remaining backlog can be
+processed on the next run. The job log reports both counts and flags a run
+that reaches the limit. Feedback and case-transition records retain their
+historical snapshots when their receipt references are cleared.
 
 The per-receipt Events (`model_name="mojosec_sensor"`) follow the same
 retention. Once `MOJOSEC_EVENT_PRUNE_ENABLED` is on in the deployment's
